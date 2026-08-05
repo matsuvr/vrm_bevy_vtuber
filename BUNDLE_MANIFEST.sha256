@@ -1,0 +1,17 @@
+87b52d653d3bff198780c6ba8069b0df0c45c86e9ce5354d7d504f73efe6e1af  ./AGENTS.md
+e88fa7bfc9358e2545ef8a3ce5b74c7ebdeab7ce49b2459454a4ddf0225e0be3  ./CODEX_BOOTSTRAP_PROMPT.md
+37f37d6a2b174dac7d0bcb50c92f2fa9d89a14d6251b5a321ba5cb908b975d1f  ./CODEX_TASKS.md
+c385912aba9c5b1ac7303e5d8dfde379bb298a0a8538b5fd07cb02c1bcf31c2a  ./DESIGN.md
+32fffe1dcdcffb3b23b065fc243dca4f5cd5c3ee041529d28e8b7e19d5888271  ./README.md
+a8cb9b0df8564e08d56b297706bddbbda5a4988f2ef49615f0225fb15be221cf  ./REFERENCES.md
+ae16f63c8380833fc607cf4e0e96841690829e27ab4ad185ee1278d280a2bb94  ./REVISION_NOTES.md
+6727379326572d1fd1b2a8628bca28c67fa3a799f2d21c944e4868abf337591d  ./docs/MODEL_COMPATIBILITY_TEMPLATE.md
+954ea6bbbed066e3cab1e17615ba18f747dc863994a1f52332cad96177319553  ./docs/PERFORMANCE_TEST_PLAN.md
+922d07176f6b31f8002205cfabd282a343627cfd40dc21cf4d10f9791444f45f  ./docs/adr/ADR-001-face-inference-runtime-and-model.md
+4fe1eedf770499c27ddd1d80a0c1522f536bd2d3d1d62636293b2ca9efb6afd3  ./docs/adr/ADR-002-bevy-vrm1-runtime.md
+49df8a9234197b356bea79fca0a70ead8f7c0304a0b60ecd42ac3003692e49b9  ./docs/adr/ADR-003-desktop-platforms-and-camera.md
+98908ee11a407ca7f2b8391ca57776e84f284747befd51022512fbfad5e898dd  ./docs/adr/ADR-004-avatar-control-order.md
+68c40ff72a572867a0b84e68068beebd21df046d672afc830f1fe83a26ae672d  ./docs/adr/ADR-005-latest-value-concurrency.md
+2ff7b786fb1ea38883c076ba0b33729c81cb906ec55da8ef582b0cba6587f60a  ./docs/adr/ADR-006-user-vrm-import.md
+4173faa939358bb28d16c64cce7ee3544a39835860174ec66ee6e268c2d5001b  ./docs/adr/ADR-007-desktop-packaging.md
+4ce24d3ec5e78e23b3d962e3bdd65e1bba3aa20ffc8bd9743ca7d3458e567fad  ./docs/adr/README.md

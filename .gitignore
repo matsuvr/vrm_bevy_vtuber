@@ -1,0 +1,44 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# Cargo lock is intentionally committed for this workspace.
+# If you need to ignore it temporarily, comment out the line below.
+# /Cargo.lock
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment / secrets
+.env
+.env.local
+
+# Face inference model binaries are large and reproducible from the manifest.
+# Keep manifest.toml and LICENSE.mediapipe.txt; ignore downloaded artifacts.
+/assets/models/*.tflite
+/assets/models/*.onnx
+/assets/models/*.task
+/assets/models/*.binarypb
+
+# User-provided VRM models and runtime outputs
+*.vrm
+!/assets/**/*.vrm
+/assets/screenshots/
+/assets/recordings/
+
+# Application runtime / logs
+*.log
+/logs/
+/run/
+
+# Bevy / wgpu cached pipeline data (if generated locally)
+*.cached_pipeline

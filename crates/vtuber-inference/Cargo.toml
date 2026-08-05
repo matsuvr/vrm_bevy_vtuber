@@ -1,0 +1,26 @@
+[package]
+name = "vtuber-inference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Face model loading, preprocessing, and pure-Rust inference for vrm-bevy-vtuber."
+
+[dependencies]
+vtuber-core = { path = "../vtuber-core" }
+tract-tflite = "=0.23.4"
+tract-onnx = { version = "=0.23.4", optional = true }
+sha2 = "=0.10.8"
+hex = "=0.4.3"
+anyhow = "=1.0.103"
+
+[features]
+default = []
+onnx = ["dep:tract-onnx"]
+
+[dev-dependencies]
+
+[lints]
+workspace = true

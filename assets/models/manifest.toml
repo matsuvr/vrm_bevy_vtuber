@@ -1,0 +1,76 @@
+# Face inference model manifest for vrm_bevy_vtuber G0-05.
+
+[metadata]
+name = "vrm-bevy-vtuber face inference models"
+version = "0.1.0"
+downloaded_at = "2026-08-05"
+notes = [
+    "MediaPipe Face Landmarker TFLite artifacts were evaluated but cannot be loaded by tract-tflite 0.23.4 due to unsupported F16 ADD operator.",
+    "Production ONNX fallback: Peppa_Pig_Face_Landmark student 256x256.",
+]
+
+[[artifacts]]
+file = "face_landmarker.task"
+sha256 = "64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF"
+purpose = "Official MediaPipe Face Landmarker task bundle (ZIP-like archive)"
+source = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+upstream = "https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker"
+license = "Apache-2.0"
+license_url = "https://www.apache.org/licenses/LICENSE-2.0.html"
+redistribution = "allowed under Apache-2.0; prefer original upstream URL for updates"
+notes = ["Evaluated only; blocked by tract-tflite F16 ADD operator."]
+
+[[artifacts]]
+file = "face_detector.tflite"
+sha256 = "B4578F35940BF5A1A655214A1CCE5CAB13EBA73C1297CD78E1A04C2380B0152F"
+purpose = "BlazeFace short-range face detector"
+input = { shape = [1, 128, 128, 3], dtype = "float32", layout = "NHWC", mean = 127.5, scale = 127.5 }
+output = { names = ["detections"], description = "face detection boxes and keypoints" }
+
+[[artifacts]]
+file = "face_landmarks_detector.tflite"
+sha256 = "C7D54204CE0448474C7F3FA9AF494787C0965CBDD6F20FC72867E43046BD43D5"
+purpose = "FaceMesh-V2 478 3D landmarks"
+input = { shape = [1, 192, 192, 3], dtype = "float32", layout = "NHWC", mean = 0.0, scale = 1.0 }
+output = { names = ["face_landmarks", "face_flag", "lip_countour"], description = "478 3D landmarks plus face presence and lip contour" }
+
+[[artifacts]]
+file = "face_blendshapes.tflite"
+sha256 = "4F36DDED049DB18D76048567439B2A7F58F1DAABC00D78BFE8F3AD396A2D2082"
+purpose = "52 blendshape coefficients"
+input = { shape = [1, 146, 2], dtype = "float32", layout = "N?C", description = "146 selected landmarks (x, y)" }
+output = { names = ["blendshapes"], description = "52 blendshape scores in [0, 1]" }
+
+[[artifacts]]
+file = "geometry_pipeline_metadata_landmarks.binarypb"
+sha256 = "BDBCDA96DFCB7DA883DA124AAA2C55DEE49770D934F0FCC71747F8C21BDC75B4"
+purpose = "MediaPipe internal geometry pipeline metadata"
+
+[[artifacts]]
+file = "face_landmark.tflite"
+sha256 = "1055CB9D4A9CA8B8C688902A3A5194311138BA256BCC94E336D8373A5F30C814"
+purpose = "Legacy MediaPipe Face Mesh (float32)"
+source = "https://storage.googleapis.com/mediapipe-assets/face_landmark.tflite"
+license = "Apache-2.0"
+input = { shape = [1, 192, 192, 3], dtype = "float32", layout = "NHWC", mean = 0.0, scale = 1.0 }
+output = { names = ["face_landmarks"], description = "468 3D landmarks" }
+notes = ["Legacy float32 model evaluated as TFLite fallback; also blocked by tract-tflite F16 ADD operator."]
+
+[[models]]
+name = "Peppa_Pig_Face_Landmark student 256x256"
+runtime = "tract-onnx 0.23.4"
+source = "https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/436_Peppa_Pig_Face_Landmark/resources.tar.gz"
+upstream = "https://github.com/610265158/Peppa_Pig_Face_Landmark"
+upstream_license = "Apache-2.0"
+upstream_license_url = "https://github.com/610265158/Peppa_Pig_Face_Landmark/blob/master/LICENSE"
+converted_by = "PINTO0309/PINTO_model_zoo (MIT scripts; model license follows upstream Apache-2.0)"
+redistribution = "allowed under Apache-2.0; prefer upstream for updates"
+file = "peppapig_student_1x3x256x256.onnx"
+sha256 = "73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A"
+purpose = "ONNX face landmark detector fallback validated against tract-onnx 0.23.4"
+input = { shape = [1, 3, 256, 256], dtype = "float32", layout = "NCHW", mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225], description = "ImageNet normalization, RGB" }
+output = { names = ["/Concat_1"], shape = [1, 98, 3], dtype = "float32", description = "98 facial landmarks with visibility/confidence in third channel" }
+notes = [
+    "Selected as production ONNX fallback after MediaPipe TFLite models failed to load in tract-tflite 0.23.4 due to unsupported float16 ADD operator.",
+    "Output landmarks are image-space (x, y, confidence); full pose solving will require an additional face detector crop stage.",
+]

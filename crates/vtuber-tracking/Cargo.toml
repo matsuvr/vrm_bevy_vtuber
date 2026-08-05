@@ -1,0 +1,20 @@
+[package]
+name = "vtuber-tracking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Calibration, pose solving, filtering, and tracking state for vrm-bevy-vtuber."
+
+[dependencies]
+vtuber-core = { path = "../vtuber-core" }
+nalgebra = "=0.35.0"
+thiserror = "2"
+
+[dev-dependencies]
+approx = "=0.5.1"
+
+[lints]
+workspace = true

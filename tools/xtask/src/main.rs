@@ -1,0 +1,87 @@
+//! Repository automation entry point.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+use std::env;
+use std::path::PathBuf;
+use std::process;
+
+mod vrm_compatibility;
+
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if args.is_empty() {
+        println!("usage: cargo xtask <task>");
+        println!("tasks:");
+        println!("  vrm-compat [fixture-dir]  run bevy_vrm1 compatibility gate");
+        return;
+    }
+
+    match args[0].as_str() {
+        "vrm-compat" => {
+            let fixture_dir = args
+                .get(1)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("tests/fixtures/vrm"));
+            match vrm_compatibility::run(&fixture_dir) {
+                Ok(results) => {
+                    let mut failed = 0;
+                    for result in &results {
+                        print_result(result);
+                        if result.preflight.is_err()
+                            || result.runtime.as_ref().is_some_and(|r| !r.is_mvp_capable())
+                        {
+                            failed += 1;
+                        }
+                    }
+                    if failed > 0 {
+                        eprintln!("{failed} fixture(s) failed the compatibility gate");
+                        process::exit(vrm_compatibility::EXIT_COMPAT_FAIL);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("compatibility runner failed: {e}");
+                    process::exit(1);
+                }
+            }
+        }
+        other => {
+            eprintln!("unknown task: {other}");
+            process::exit(1);
+        }
+    }
+}
+
+fn print_result(result: &vrm_compatibility::CompatibilityResult) {
+    let name = result
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    println!("=== {name} ===");
+    match &result.preflight {
+        Ok(summary) => {
+            println!("  preflight: ok");
+            println!("    name: {}", summary.name);
+            println!("    specVersion: {}", summary.spec_version);
+            println!("    expressions: {:?}", summary.expression_presets);
+            println!("    lookAt type: {:?}", summary.look_at_type);
+            println!("    springBone: {}", summary.has_spring_bone);
+        }
+        Err(e) => println!("  preflight: FAIL ({e})"),
+    }
+    if let Some(report) = &result.runtime {
+        println!("  runtime:");
+        println!("    initialized: {}", report.initialized);
+        println!("    head: {}", report.has_head);
+        println!("    neck: {}", report.has_neck);
+        println!("    leftEye: {}", report.has_left_eye);
+        println!("    rightEye: {}", report.has_right_eye);
+        println!("    expressions: {:?}", report.expressions);
+        println!("    mvp capable: {}", report.is_mvp_capable());
+    } else {
+        println!("  runtime: skipped");
+    }
+}
+
