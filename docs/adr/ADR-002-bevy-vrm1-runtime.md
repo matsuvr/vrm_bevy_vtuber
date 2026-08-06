@@ -1,6 +1,6 @@
 # ADR-002: VRM 1.0 runtimeとしてbevy_vrm1を採用する
 
-Status: Accepted  
+Status: Accepted
 Date: 2026-08-04
 
 ## Context
