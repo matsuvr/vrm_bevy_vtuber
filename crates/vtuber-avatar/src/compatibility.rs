@@ -14,7 +14,9 @@ pub struct VrmCompatibilityPlugin;
 
 impl Plugin for VrmCompatibilityPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, inspect_initialized_vrm);
+        app.init_resource::<VrmCompatibilityReport>()
+            .add_systems(Update, inspect_initialized_vrm)
+            .add_systems(Update, log_compatibility_report);
     }
 }
 
@@ -76,7 +78,9 @@ impl VrmCompatibilityReport {
     /// Returns `true` if the named expression preset is available.
     #[must_use]
     pub fn has_expression(&self, name: &str) -> bool {
-        self.expressions.iter().any(|e| e.eq_ignore_ascii_case(name))
+        self.expressions
+            .iter()
+            .any(|e| e.eq_ignore_ascii_case(name))
     }
 }
 
@@ -85,16 +89,8 @@ fn inspect_initialized_vrm(
     vrms: Query<InitializedVrmBones, (With<Vrm>, Added<Initialized>)>,
     spring_roots: Query<&SpringRoot>,
 ) {
-    for (
-        _entity,
-        head,
-        neck,
-        left_eye,
-        right_eye,
-        expression_map,
-        look_at,
-        body_tracking,
-    ) in vrms.iter()
+    for (_entity, head, neck, left_eye, right_eye, expression_map, look_at, body_tracking) in
+        vrms.iter()
     {
         report.vrm_loaded = true;
         report.initialized = true;
@@ -114,6 +110,12 @@ fn inspect_initialized_vrm(
                 .collect::<Vec<_>>();
             report.expressions.sort();
         }
+    }
+}
+
+fn log_compatibility_report(report: Res<VrmCompatibilityReport>) {
+    if report.is_changed() && report.initialized {
+        info!("VRM compatibility report: {:?}", report);
     }
 }
 

@@ -54,6 +54,14 @@ product pathでは使用しない:
 - forkが必要ならGit commit SHAへ固定し、app repositoryへsource断片をcopyしない。
 - dependency更新は機能実装と別PRにする。
 
-## Consequences
+## G0-08 findings
 
-VRM runtimeの実装量と仕様準拠負担を減らせる。一方、early-stage upstreamへ依存するため、revision pinning、adapter境界、model compatibility matrixがrelease gateになる。
+G0-08 compatibility gate（`cargo xtask vrm-compat`）を実施した結果、ピン留めした `bevy_vrm1` revision は以下の制約を持つことが確定した。
+
+- `LookAtType::Expression` は `src/vrm/look_at.rs` で `todo!("Expression look at is not supported yet")` に到達する。したがって product path では `LookAt` component を挿入しない方針を維持する。
+- `inore-vrm1.vrm`（実利用予定モデル）は head/neck/leftEye/rightEye と `blink`/`blinkLeft`/`blinkRight`、`aa`/`ih`/`ou`/`ee`/`oh` を含み、MVP capability をすべて満たす。
+- 同モデルは `lookAt.type = bone` かつ look-direction Expression preset（`lookLeft`/`lookRight`/`lookUp`/`lookDown`）を持たないため、MVP gaze は eye bone 直接制御に依存する。
+- VRM 0.x モデル（`tsukuyomi-chan.vrm`）は `VRMC_vrm` を持たないため、`MODEL_NOT_VRM1` で正しく拒否される。
+- fixture に含まれる `alicia-solid.vrm` と `seed-san.vrm` は HTML ファイルであり `MODEL_FILE_INVALID` で正しく拒否される。
+
+これらの所見を受け、fork は現時点では不要と判断する。

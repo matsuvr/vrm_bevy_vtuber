@@ -84,4 +84,3 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
         println!("  runtime: skipped");
     }
 }
-

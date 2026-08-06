@@ -18,6 +18,7 @@ pub struct VtuberAvatarPlugin;
 impl Plugin for VtuberAvatarPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(VrmPlugin)
+            .add_plugins(compatibility::VrmCompatibilityPlugin)
             .add_systems(Startup, setup_scene)
             .add_systems(Update, log_loaded_vrm)
             .add_systems(Update, log_head_bone);
@@ -25,8 +26,8 @@ impl Plugin for VtuberAvatarPlugin {
 }
 
 /// Command-line / environment path to the VRM model to load.
-#[derive(Resource, Debug, Clone)]
-pub struct StartupModelPath(pub String);
+#[derive(Resource, Debug, Clone, Default)]
+pub struct StartupModelPath(pub Option<String>);
 
 fn setup_scene(
     mut commands: Commands,
@@ -62,8 +63,8 @@ fn setup_scene(
     ));
 
     // Load the requested model, or nothing if no path was supplied.
-    if let Some(path) = startup {
-        commands.spawn((VrmHandle(asset_server.load(path.0.clone())),));
+    if let Some(path) = startup.and_then(|p| p.0.clone()) {
+        commands.spawn((VrmHandle(asset_server.load(path)),));
     }
 }
 

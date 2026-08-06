@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use bevy::app::{App, PluginGroup, Startup, Update};
 use bevy::asset::AssetPlugin;
 use bevy::prelude::{AssetServer, Commands, DefaultPlugins, Handle, Res, ResMut, Resource};
-use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::render::RenderPlugin;
+use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::utils::default;
 use bevy::window::{ExitCondition, WindowPlugin};
 use bevy_vrm1::prelude::*;
@@ -84,9 +84,7 @@ fn load_and_inspect(path: &Path) -> Result<VrmCompatibilityReport, String> {
                 exit_condition: ExitCondition::DontExit,
                 ..default()
             })
-            .set(RenderPlugin {
-                ..default()
-            })
+            .set(RenderPlugin { ..default() })
             .disable::<PipelinedRenderingPlugin>()
             .set(AssetPlugin {
                 file_path: std::env::current_dir()
