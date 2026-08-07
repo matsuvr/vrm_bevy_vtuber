@@ -7,6 +7,8 @@
 
 /// Calibration: neutral reference collection and session state.
 pub mod calibration;
+/// Neutral-relative head pose generation and tracking pipeline stages.
+pub mod pipeline;
 /// Placeholder for tracking subsystem.
 pub mod placeholder;
 /// Head pose estimation from landmark sets.
@@ -15,5 +17,8 @@ pub mod pose;
 pub use calibration::{
     CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralContext,
     NeutralProfile, NeutralReference, NeutralValidationSettings, RejectionReason, SampleDecision,
+};
+pub use pipeline::{
+    HeadPoseFailure, HeadPoseFrame, PoseFailureReason, compute_neutral_relative_pose,
 };
 pub use pose::{LandmarkSet, PoseAlignment, PoseError, WeightedPoint, solve_relative_pose};

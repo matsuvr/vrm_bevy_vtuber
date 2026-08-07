@@ -4085,7 +4085,7 @@ cargo test -p vtuber-tracking neutral_reference
 
 #### M1-03-004: neutral-relative head pose生成を接続する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-03-003`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
