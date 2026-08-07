@@ -12,5 +12,8 @@ pub mod placeholder;
 /// Head pose estimation from landmark sets.
 pub mod pose;
 
-pub use calibration::{CalibrationInput, CalibrationSession, NeutralProfile};
+pub use calibration::{
+    CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralProfile,
+    RejectionReason, SampleDecision,
+};
 pub use pose::{LandmarkSet, PoseAlignment, PoseError, WeightedPoint, solve_relative_pose};

@@ -4,6 +4,8 @@
 //! validated neutral profile, and for tracking the lifecycle of a calibration
 //! session. It must not depend on Bevy or camera backends.
 
+pub mod collector;
 pub mod types;
 
+pub use collector::{CalibrationCollector, CollectorMetrics, RejectionReason, SampleDecision};
 pub use types::{CalibrationInput, CalibrationSession, NeutralProfile};

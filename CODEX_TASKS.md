@@ -4007,7 +4007,7 @@ cargo clippy -p vtuber-tracking --all-targets -- -D warnings
 
 #### M1-03-002: calibration sample collectorを実装する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-03-001`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
