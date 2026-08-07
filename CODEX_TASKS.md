@@ -4163,7 +4163,7 @@ cargo test -p vtuber-tracking head_filter
 
 #### M1-03-006: blink／mouth normalizationを実装する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-03-005`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 

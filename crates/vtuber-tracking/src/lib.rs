@@ -20,7 +20,11 @@ pub use calibration::{
     CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralContext,
     NeutralProfile, NeutralReference, NeutralValidationSettings, RejectionReason, SampleDecision,
 };
-pub use filter::{HeadFilterParams, HeadRotationFilter};
+pub use filter::{
+    ExpressionCalibration, ExpressionCalibrationError, ExpressionChannel, ExpressionFilter,
+    ExpressionFilterParams, ExpressionRange, HeadFilterParams, HeadRotationFilter,
+    MissingChannelFallback, MissingChannelPolicy,
+};
 pub use pipeline::{
     HeadPoseFailure, HeadPoseFrame, PoseFailureReason, compute_neutral_relative_pose,
 };
