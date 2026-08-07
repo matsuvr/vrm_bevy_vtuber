@@ -3892,7 +3892,7 @@ cargo test -p vtuber-inference worker_failure
 
 #### M1-02-010: production inference workerを総合検証する
 
-状態: `LEGACY_PROGRESS_CURRENT`  
+状態: `DONE`  
 依存: `M1-02-009`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 

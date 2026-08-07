@@ -353,7 +353,9 @@ mod tests {
     };
     use vtuber_core::{LatestSlot, ReadResult};
 
-    use super::{InferenceContext, MAX_CONSECUTIVE_RECOVERABLE_ERRORS, update_status};
+    use super::{
+        InferenceContext, MAX_CONSECUTIVE_RECOVERABLE_ERRORS, update_status, validate_observation,
+    };
     use crate::controller::{InferenceController, InferenceWorkerResult};
     use crate::descriptor::{
         ChannelOrder, ModelDescriptor, ModelFormat, Normalization, RuntimeSettings,
@@ -552,6 +554,7 @@ mod tests {
                 std: [0.229, 0.224, 0.225],
             },
             schema: LandmarkSchemaId("peppapig-98"),
+            expression_mapping: None,
         };
 
         let (mut controller, _frame_slot, _output_slot) = new_controller();
@@ -647,6 +650,19 @@ mod tests {
                             let infer_start = Instant::now();
                             match runtime.infer(tensor, &params.input_shape) {
                                 Ok(observation) => {
+                                    if let Err(err) = validate_observation(&observation) {
+                                        let halt = update_status(&status, |s| {
+                                            s.record_frame_error(
+                                                FailureStage::Decode,
+                                                err,
+                                                MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                                            )
+                                        });
+                                        if halt {
+                                            break;
+                                        }
+                                        continue;
+                                    }
                                     let infer_duration = infer_start.elapsed();
                                     let elapsed = start.elapsed();
                                     let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
@@ -1301,6 +1317,200 @@ mod tests {
         assert_eq!(
             status_final.frames_processed, 0,
             "no frame should be published"
+        );
+    }
+
+    fn default_observation(schema: LandmarkSchemaId) -> RawFaceObservation {
+        RawFaceObservation {
+            source_seq: FrameSeq(0),
+            captured_at: MonoTimeNs(0),
+            inference_started_at: MonoTimeNs(0),
+            inference_finished_at: MonoTimeNs(0),
+            face_confidence: 1.0,
+            landmarks: Vec::new(),
+            blendshapes: None,
+            expressions: vtuber_core::types::RawExpressionObservation::default(),
+            roi: NormalizedRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                rotation_rad: 0.0,
+            },
+            schema,
+        }
+    }
+
+    #[test]
+    fn decode_failure_transitions_to_failed() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let status: SharedStatus = Arc::new(std::sync::Mutex::new(InferenceWorkerStatus::new()));
+        let params = PreprocessParams {
+            input_shape: [1, 64, 64, 3],
+            channel_order: ChannelOrder::Rgb,
+            normalization: Normalization::ZeroToOne,
+        };
+        let buffers = PreprocessBuffers::for_shape(&params.input_shape).unwrap();
+
+        struct NanConfidenceRuntime {
+            schema: LandmarkSchemaId,
+        }
+
+        impl FaceInference for NanConfidenceRuntime {
+            fn infer(
+                &self,
+                _tensor: &[f32],
+                _input_shape: &[usize; 4],
+            ) -> crate::error::Result<RawFaceObservation> {
+                Ok(RawFaceObservation {
+                    face_confidence: f32::NAN,
+                    ..default_observation(self.schema)
+                })
+            }
+
+            fn schema_id(&self) -> LandmarkSchemaId {
+                self.schema
+            }
+        }
+
+        let handle = WorkerHandle::spawn("inference-decode-failure", {
+            let frame_slot = Arc::clone(&frame_slot);
+            let output_slot = Arc::clone(&output_slot);
+            let status = Arc::clone(&status);
+            move |stop| {
+                run_inference_worker_with_runtime(
+                    stop,
+                    status,
+                    frame_slot,
+                    output_slot,
+                    Box::new(NanConfidenceRuntime {
+                        schema: LandmarkSchemaId("fake"),
+                    }),
+                    params,
+                    buffers,
+                )
+            }
+        });
+
+        const ERROR_THRESHOLD: u32 = MAX_CONSECUTIVE_RECOVERABLE_ERRORS;
+        for seq in 1..=ERROR_THRESHOLD + 5 {
+            frame_slot.publish(VideoFrame {
+                seq: FrameSeq(u64::from(seq)),
+                captured_at: MonoTimeNs(u64::from(seq) * 1_000_000),
+                width: 64,
+                height: 64,
+                stride_bytes: 64 * 3,
+                format: PixelFormat::Rgb8,
+                data: vec![(seq % 256) as u8; 64 * 64 * 3].into(),
+            });
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+        handle.stop();
+        let result = handle.join();
+        assert!(
+            matches!(result, WorkerResult::Completed(_)),
+            "worker should complete cleanly after halting, got {result:?}"
+        );
+
+        let status_final = status.lock().unwrap();
+        assert_eq!(
+            status_final.state,
+            InferenceWorkerState::Failed,
+            "worker should transition to Failed after consecutive decode errors"
+        );
+        assert_eq!(
+            status_final.last_failure.as_ref().map(|f| f.stage),
+            Some(FailureStage::Decode),
+            "last failure should be a decode failure"
+        );
+        assert!(
+            status_final.consecutive_errors > ERROR_THRESHOLD,
+            "consecutive error counter should exceed the threshold"
+        );
+        assert_eq!(
+            output_slot.generation(),
+            0,
+            "no observation should be published when decode fails"
+        );
+        assert_eq!(
+            status_final.frames_processed, 0,
+            "no frame should be recorded as processed"
+        );
+    }
+
+    #[test]
+    fn inference_context_reuses_buffers_and_single_runtime() {
+        let params = PreprocessParams {
+            input_shape: [1, 64, 64, 3],
+            channel_order: ChannelOrder::Rgb,
+            normalization: Normalization::ZeroToOne,
+        };
+        let buffers = PreprocessBuffers::for_shape(&params.input_shape).unwrap();
+        let initial_capacity = buffers.capacity();
+        let infer_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        struct CountingRuntime {
+            schema: LandmarkSchemaId,
+            count: Arc<std::sync::atomic::AtomicU64>,
+        }
+
+        impl FaceInference for CountingRuntime {
+            fn infer(
+                &self,
+                _tensor: &[f32],
+                _input_shape: &[usize; 4],
+            ) -> crate::error::Result<RawFaceObservation> {
+                self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(default_observation(self.schema))
+            }
+
+            fn schema_id(&self) -> LandmarkSchemaId {
+                self.schema
+            }
+        }
+
+        let mut context = InferenceContext {
+            runtime: Box::new(CountingRuntime {
+                schema: LandmarkSchemaId("fake"),
+                count: Arc::clone(&infer_count),
+            }),
+            params,
+            buffers,
+            pipeline: Pipeline::new(&RuntimeSettings {
+                frame_wait_timeout_ms: 50,
+                detector_interval_frames: 1,
+            }),
+        };
+
+        for seq in 1..=5 {
+            let frame = VideoFrame {
+                seq: FrameSeq(seq),
+                captured_at: MonoTimeNs(seq * 1_000_000),
+                width: 64,
+                height: 64,
+                stride_bytes: 64 * 3,
+                format: PixelFormat::Rgb8,
+                data: vec![(seq % 256) as u8; 64 * 64 * 3].into(),
+            };
+            let tensor = preprocess_frame(&mut context.buffers, &frame, &context.params).unwrap();
+            let _ = context
+                .runtime
+                .infer(tensor, &context.params.input_shape)
+                .unwrap();
+        }
+
+        assert_eq!(
+            context.buffers.capacity(),
+            initial_capacity,
+            "buffer capacity must not grow for same-size frames"
+        );
+        assert_eq!(
+            infer_count.load(std::sync::atomic::Ordering::SeqCst),
+            5,
+            "runtime must be invoked exactly once per frame"
         );
     }
 }

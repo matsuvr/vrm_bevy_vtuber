@@ -55,7 +55,7 @@ impl OnnxRuntime {
 impl FaceInference for OnnxRuntime {
     fn infer(&self, tensor: &[f32], input_shape: &[usize; 4]) -> Result<RawFaceObservation> {
         use tract_onnx::prelude::*;
-        use vtuber_core::types::{FrameSeq, MonoTimeNs, NormalizedRect, RawExpressionObservation};
+        use vtuber_core::types::{FrameSeq, MonoTimeNs, NormalizedRect};
 
         let input_array = tensors_to_tract(tensor, input_shape)
             .map_err(|e| InferenceError::ExecutionFailed(format!("invalid tensor shape: {e:?}")))?;
