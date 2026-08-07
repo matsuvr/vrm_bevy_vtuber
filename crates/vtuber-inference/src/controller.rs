@@ -61,6 +61,8 @@ pub struct InferenceMetrics {
     pub frames_dropped: u64,
     /// Frames overwritten in the input slot before being read.
     pub frames_overwritten: u64,
+    /// Frames suppressed because their source sequence was already processed.
+    pub duplicate_frames_suppressed: u64,
 }
 
 impl InferenceController {
@@ -209,6 +211,7 @@ impl InferenceController {
             frames_processed: status.frames_processed,
             frames_dropped: status.frames_dropped,
             frames_overwritten: status.frames_overwritten,
+            duplicate_frames_suppressed: status.duplicate_frames_suppressed,
         }
     }
 }

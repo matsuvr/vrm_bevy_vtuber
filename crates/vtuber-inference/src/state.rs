@@ -44,6 +44,8 @@ pub struct InferenceWorkerStatus {
     pub frames_dropped: u64,
     /// Frames overwritten in the input slot before being read.
     pub frames_overwritten: u64,
+    /// Frames suppressed because their source sequence was already processed.
+    pub duplicate_frames_suppressed: u64,
     /// Last failure, separated by lifecycle stage.
     pub last_failure: Option<WorkerFailure>,
 }
@@ -101,6 +103,11 @@ impl InferenceWorkerStatus {
     /// Records an input slot overwrite.
     pub fn record_overwritten(&mut self, count: u64) {
         self.frames_overwritten += count;
+    }
+
+    /// Records a frame that was suppressed because its sequence was a duplicate.
+    pub fn record_duplicate_suppressed(&mut self) {
+        self.duplicate_frames_suppressed += 1;
     }
 
     /// Records a failure and transitions to [`InferenceWorkerState::Failed`].

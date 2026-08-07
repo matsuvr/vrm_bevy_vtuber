@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use vtuber_core::types::{MonoTimeNs, RawFaceObservation, VideoFrame};
+use vtuber_core::types::{FrameSeq, MonoTimeNs, RawFaceObservation, VideoFrame};
 use vtuber_core::{LatestSlot, ReadResult, StopToken};
 
 use crate::controller::{ControlCommand, InferenceMetrics, InferenceWorkerResult};
@@ -38,6 +38,7 @@ pub fn run_inference_worker(
     let mut context: Option<InferenceContext> = None;
     let mut last_gen = 0u64;
     let mut last_overwritten = 0u64;
+    let mut last_processed_seq: Option<FrameSeq> = None;
     let mut paused = false;
 
     update_status(&status, |s| {
@@ -79,6 +80,7 @@ pub fn run_inference_worker(
                 Ok(ControlCommand::Reset) => {
                     context = None;
                     last_gen = 0;
+                    last_processed_seq = None;
                     update_status(&status, |s| {
                         s.transition_to(InferenceWorkerState::Idle);
                     });
@@ -97,12 +99,21 @@ pub fn run_inference_worker(
             continue;
         }
 
-        match frame_slot.wait_read_after(last_gen, Duration::from_millis(100)) {
+        match frame_slot.wait_read_after(last_gen, Duration::from_millis(50)) {
             Some(ReadResult::New(frame)) => {
                 last_gen = frame_slot.generation();
                 let overwritten = frame_slot.overwritten_count();
-                metrics.frames_overwritten += overwritten.saturating_sub(last_overwritten);
+                let overwrite_delta = overwritten.saturating_sub(last_overwritten);
+                metrics.frames_overwritten += overwrite_delta;
+                update_status(&status, |s| s.record_overwritten(overwrite_delta));
                 last_overwritten = overwritten;
+
+                if let Some(last_seq) = last_processed_seq && frame.seq <= last_seq {
+                    metrics.duplicate_frames_suppressed += 1;
+                    update_status(&status, |s| s.record_duplicate_suppressed());
+                    continue;
+                }
+                last_processed_seq = Some(frame.seq);
 
                 let start = Instant::now();
                 let started_at = MonoTimeNs(start.elapsed().as_nanos() as u64);
@@ -148,7 +159,13 @@ pub fn run_inference_worker(
                 }
             }
             Some(ReadResult::Closed) => break,
-            None => {}
+            None => {
+                // The wait timed out; check the stop token before looping so
+                // shutdown completes promptly even when no frames are arriving.
+                if stop.is_stopped() {
+                    break;
+                }
+            }
         }
     }
 
@@ -193,12 +210,17 @@ mod tests {
     };
     use vtuber_core::{LatestSlot, ReadResult};
 
-    use crate::controller::InferenceController;
+    use crate::controller::{InferenceController, InferenceMetrics, InferenceWorkerResult};
     use crate::descriptor::{
         ChannelOrder, ModelDescriptor, ModelFormat, Normalization, RuntimeSettings,
     };
     use crate::error::InferenceError;
-    use crate::state::{FailureStage, InferenceWorkerState};
+    use crate::preprocess::{preprocess_frame, PreprocessBuffers, PreprocessParams};
+    use crate::runtime::FaceInference;
+    use crate::state::{FailureStage, InferenceWorkerState, InferenceWorkerStatus, SharedStatus};
+    use vtuber_core::types::NormalizedRect;
+    use vtuber_core::{StopToken, WorkerHandle, WorkerResult};
+    use super::{InferenceContext, update_status};
 
     fn sha256_hex(data: &[u8]) -> String {
         use sha2::{Digest, Sha256};
@@ -413,5 +435,379 @@ mod tests {
         );
 
         controller.shutdown();
+    }
+
+    #[cfg(test)]
+    fn run_inference_worker_with_runtime(
+        stop: StopToken,
+        status: SharedStatus,
+        frame_slot: Arc<LatestSlot<VideoFrame>>,
+        output_slot: Arc<LatestSlot<RawFaceObservation>>,
+        runtime: Box<dyn FaceInference>,
+        params: PreprocessParams,
+        buffers: PreprocessBuffers,
+    ) -> InferenceWorkerResult {
+        use std::time::Instant;
+
+        let mut metrics = InferenceMetrics::default();
+        let mut context = InferenceContext {
+            runtime,
+            params,
+            buffers,
+        };
+        let mut last_gen = 0u64;
+        let mut last_overwritten = 0u64;
+        let mut last_processed_seq: Option<FrameSeq> = None;
+
+        update_status(&status, |s| {
+            s.transition_to(InferenceWorkerState::Running);
+        });
+
+        while !stop.is_stopped() {
+            match frame_slot.wait_read_after(last_gen, Duration::from_millis(50)) {
+                Some(ReadResult::New(frame)) => {
+                    last_gen = frame_slot.generation();
+                    let overwritten = frame_slot.overwritten_count();
+                    let overwrite_delta = overwritten.saturating_sub(last_overwritten);
+                    metrics.frames_overwritten += overwrite_delta;
+                    update_status(&status, |s| s.record_overwritten(overwrite_delta));
+                    last_overwritten = overwritten;
+
+                    if let Some(last_seq) = last_processed_seq && frame.seq <= last_seq {
+                        metrics.duplicate_frames_suppressed += 1;
+                        update_status(&status, |s| s.record_duplicate_suppressed());
+                        continue;
+                    }
+                    last_processed_seq = Some(frame.seq);
+
+                    let start = Instant::now();
+                    let started_at = MonoTimeNs(start.elapsed().as_nanos() as u64);
+
+                    let InferenceContext {
+                        runtime,
+                        params,
+                        buffers,
+                    } = &mut context;
+
+                    match preprocess_frame(buffers, &frame, params) {
+                        Ok(tensor) => match runtime.infer(tensor, &params.input_shape) {
+                            Ok(observation) => {
+                                let elapsed = start.elapsed();
+                                let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
+                                let observation = RawFaceObservation {
+                                    source_seq: frame.seq,
+                                    captured_at: frame.captured_at,
+                                    inference_started_at: started_at,
+                                    inference_finished_at: finished_at,
+                                    ..observation
+                                };
+                                if !output_slot.publish(observation) {
+                                    metrics.frames_dropped += 1;
+                                }
+                                metrics.frames_processed += 1;
+
+                                update_status(&status, |s| {
+                                    s.record_processed(frame.seq, finished_at, elapsed);
+                                });
+                            }
+                            Err(err) => {
+                                update_status(&status, |s| {
+                                    s.record_failure(FailureStage::FrameInference, err);
+                                });
+                            }
+                        },
+                        Err(err) => {
+                            update_status(&status, |s| {
+                                s.record_failure(FailureStage::FrameInference, err);
+                            });
+                        }
+                    }
+                }
+                Some(ReadResult::Closed) => break,
+                None => {
+                    if stop.is_stopped() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        update_status(&status, |s| {
+            s.transition_to(InferenceWorkerState::Stopping);
+        });
+
+        InferenceWorkerResult {
+            final_metrics: metrics,
+        }
+    }
+
+    #[test]
+    fn latest_frame_consumption() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let status: SharedStatus = Arc::new(std::sync::Mutex::new(InferenceWorkerStatus::new()));
+        let params = PreprocessParams {
+            input_shape: [1, 64, 64, 3],
+            channel_order: ChannelOrder::Rgb,
+            normalization: Normalization::ZeroToOne,
+        };
+        let buffers = PreprocessBuffers::for_shape(&params.input_shape).unwrap();
+
+        let last_seen_seq = Arc::new(std::sync::Mutex::new(None::<u64>));
+
+        struct FakeRuntime {
+            delay: Duration,
+            schema: LandmarkSchemaId,
+            last_seen_seq: Arc<std::sync::Mutex<Option<u64>>>,
+        }
+
+        impl FaceInference for FakeRuntime {
+            fn infer(
+                &self,
+                tensor: &[f32],
+                _input_shape: &[usize; 4],
+            ) -> crate::error::Result<RawFaceObservation> {
+                std::thread::sleep(self.delay);
+
+                // Test frames are filled with the sequence number as the pixel
+                // value, so the first normalized tensor value is seq/255.
+                let seq = (tensor[0] * 255.0).round() as u64;
+                let mut last = self.last_seen_seq.lock().unwrap();
+                if let Some(prev) = *last {
+                    assert!(
+                        seq > prev,
+                        "processed seq {seq} after {prev}; sequences must be strictly increasing"
+                    );
+                }
+                *last = Some(seq);
+
+                Ok(RawFaceObservation {
+                    source_seq: FrameSeq(0),
+                    captured_at: MonoTimeNs(0),
+                    inference_started_at: MonoTimeNs(0),
+                    inference_finished_at: MonoTimeNs(0),
+                    face_confidence: 1.0,
+                    landmarks: Vec::new(),
+                    blendshapes: None,
+                    roi: NormalizedRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                        rotation_rad: 0.0,
+                    },
+                    schema: self.schema,
+                })
+            }
+
+            fn schema_id(&self) -> LandmarkSchemaId {
+                self.schema
+            }
+        }
+
+        let handle = WorkerHandle::spawn("inference-latest-frame", {
+            let frame_slot = Arc::clone(&frame_slot);
+            let output_slot = Arc::clone(&output_slot);
+            let status = Arc::clone(&status);
+            let last_seen_seq = Arc::clone(&last_seen_seq);
+            move |stop| {
+                run_inference_worker_with_runtime(
+                    stop,
+                    status,
+                    frame_slot,
+                    output_slot,
+                    Box::new(FakeRuntime {
+                        delay: Duration::from_millis(66),
+                        schema: LandmarkSchemaId("fake"),
+                        last_seen_seq,
+                    }),
+                    params,
+                    buffers,
+                )
+            }
+        });
+
+        const FRAME_COUNT: u64 = 20;
+        let producer_slot = Arc::clone(&frame_slot);
+        let producer = std::thread::spawn(move || {
+            for seq in 1..=FRAME_COUNT {
+                producer_slot.publish(VideoFrame {
+                    seq: FrameSeq(seq),
+                    captured_at: MonoTimeNs(seq * 1_000_000),
+                    width: 64,
+                    height: 64,
+                    stride_bytes: 64 * 3,
+                    format: PixelFormat::Rgb8,
+                    data: vec![seq as u8; 64 * 64 * 3].into(),
+                });
+                std::thread::sleep(Duration::from_millis(33));
+            }
+        });
+
+        producer.join().expect("producer panicked");
+
+        // Give the worker time to drain the backlog, then request shutdown.
+        std::thread::sleep(Duration::from_millis(200));
+        handle.stop();
+        let result = handle.join();
+        assert!(
+            matches!(result, WorkerResult::Completed(_)),
+            "worker should complete cleanly, got {result:?}"
+        );
+
+        let metrics = match result {
+            WorkerResult::Completed(m) => m.final_metrics,
+            _ => unreachable!(),
+        };
+        let status_final = status.lock().unwrap();
+
+        println!(
+            "latest_frame_consumption: produced={FRAME_COUNT}, processed={}, overwritten={}, suppressed={}",
+            status_final.frames_processed,
+            status_final.frames_overwritten,
+            status_final.duplicate_frames_suppressed
+        );
+
+        assert!(
+            status_final.frames_processed > 0,
+            "worker should process at least one frame"
+        );
+        assert!(
+            status_final.frames_processed < FRAME_COUNT,
+            "worker should skip frames when inference is slower than the camera"
+        );
+        assert!(
+            status_final.frames_overwritten > 0,
+            "input slot should overwrite unread frames"
+        );
+        assert_eq!(
+            status_final.duplicate_frames_suppressed, 0,
+            "no duplicate sequence should be inferred"
+        );
+        assert_eq!(
+            metrics.duplicate_frames_suppressed, 0,
+            "metrics should report zero duplicates"
+        );
+        assert_eq!(
+            output_slot.generation(),
+            status_final.frames_processed,
+            "output slot generation should match processed count"
+        );
+    }
+
+    #[test]
+    fn duplicate_frame_sequence_is_suppressed() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let status: SharedStatus = Arc::new(std::sync::Mutex::new(InferenceWorkerStatus::new()));
+        let params = PreprocessParams {
+            input_shape: [1, 64, 64, 3],
+            channel_order: ChannelOrder::Rgb,
+            normalization: Normalization::ZeroToOne,
+        };
+        let buffers = PreprocessBuffers::for_shape(&params.input_shape).unwrap();
+
+        let infer_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        struct CountingRuntime {
+            schema: LandmarkSchemaId,
+            count: Arc<std::sync::atomic::AtomicU64>,
+        }
+
+        impl FaceInference for CountingRuntime {
+            fn infer(
+                &self,
+                _tensor: &[f32],
+                _input_shape: &[usize; 4],
+            ) -> crate::error::Result<RawFaceObservation> {
+                self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(20));
+                Ok(RawFaceObservation {
+                    source_seq: FrameSeq(0),
+                    captured_at: MonoTimeNs(0),
+                    inference_started_at: MonoTimeNs(0),
+                    inference_finished_at: MonoTimeNs(0),
+                    face_confidence: 1.0,
+                    landmarks: Vec::new(),
+                    blendshapes: None,
+                    roi: NormalizedRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                        rotation_rad: 0.0,
+                    },
+                    schema: self.schema,
+                })
+            }
+
+            fn schema_id(&self) -> LandmarkSchemaId {
+                self.schema
+            }
+        }
+
+        let handle = WorkerHandle::spawn("inference-duplicate-suppression", {
+            let frame_slot = Arc::clone(&frame_slot);
+            let output_slot = Arc::clone(&output_slot);
+            let status = Arc::clone(&status);
+            let count = Arc::clone(&infer_count);
+            move |stop| {
+                run_inference_worker_with_runtime(
+                    stop,
+                    status,
+                    frame_slot,
+                    output_slot,
+                    Box::new(CountingRuntime {
+                        schema: LandmarkSchemaId("fake"),
+                        count,
+                    }),
+                    params,
+                    buffers,
+                )
+            }
+        });
+
+        // Publish seq 1, wait for it to be processed, then publish seq 1 again.
+        frame_slot.publish(VideoFrame {
+            seq: FrameSeq(1),
+            captured_at: MonoTimeNs(1_000_000),
+            width: 64,
+            height: 64,
+            stride_bytes: 64 * 3,
+            format: PixelFormat::Rgb8,
+            data: vec![1u8; 64 * 64 * 3].into(),
+        });
+
+        std::thread::sleep(Duration::from_millis(60));
+
+        frame_slot.publish(VideoFrame {
+            seq: FrameSeq(1),
+            captured_at: MonoTimeNs(2_000_000),
+            width: 64,
+            height: 64,
+            stride_bytes: 64 * 3,
+            format: PixelFormat::Rgb8,
+            data: vec![1u8; 64 * 64 * 3].into(),
+        });
+
+        std::thread::sleep(Duration::from_millis(60));
+        handle.stop();
+        let result = handle.join();
+        assert!(matches!(result, WorkerResult::Completed(_)));
+
+        let status_final = status.lock().unwrap();
+        assert_eq!(
+            status_final.frames_processed, 1,
+            "only one frame should be inferred"
+        );
+        assert_eq!(
+            status_final.duplicate_frames_suppressed, 1,
+            "duplicate sequence should be counted once"
+        );
+        assert_eq!(
+            infer_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "runtime should only be invoked once for seq 1"
+        );
     }
 }
