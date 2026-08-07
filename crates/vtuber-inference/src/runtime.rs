@@ -1,12 +1,18 @@
 //! Face inference runtime traits and implementations.
 
+#[cfg(feature = "onnx")]
+use crate::error::InferenceError;
 use crate::error::Result;
 use vtuber_core::types::{LandmarkSchemaId, RawFaceObservation};
 
 /// Trait for a face inference runtime.
 pub trait FaceInference: Send + Sync {
-    /// Performs inference on the given RGB frame.
-    fn infer(&self, frame: &[u8], width: u32, height: u32) -> Result<RawFaceObservation>;
+    /// Performs inference on a preprocessed input tensor.
+    ///
+    /// `tensor` contains normalized float values in the layout described by
+    /// `input_shape`. The shape is passed explicitly because the trait object
+    /// may be created from descriptors with varying input layouts.
+    fn infer(&self, tensor: &[f32], input_shape: &[usize; 4]) -> Result<RawFaceObservation>;
     /// Returns the schema ID used by this runtime.
     fn schema_id(&self) -> LandmarkSchemaId;
 }
@@ -15,9 +21,6 @@ pub trait FaceInference: Send + Sync {
 #[cfg(feature = "onnx")]
 pub struct OnnxRuntime {
     model: std::sync::Arc<tract_core::prelude::TypedRunnableModel>,
-    input_shape: [usize; 4],
-    mean: [f32; 3],
-    std: [f32; 3],
     schema: LandmarkSchemaId,
 }
 
@@ -30,11 +33,8 @@ impl OnnxRuntime {
     /// Returns an error if the model cannot be read, optimized, or made runnable.
     pub fn new(
         path: impl AsRef<std::path::Path>,
-        mean: [f32; 3],
-        std: [f32; 3],
         schema: LandmarkSchemaId,
     ) -> crate::error::Result<Self> {
-        use crate::error::InferenceError;
         use tract_onnx::prelude::*;
 
         let mut file = std::fs::File::open(path.as_ref())
@@ -47,38 +47,23 @@ impl OnnxRuntime {
             .into_runnable()
             .map_err(|e| InferenceError::OptimizationFailed(format!("{e:?}")))?;
 
-        let input_shape = [1, 3, 256, 256];
-
-        Ok(Self {
-            model,
-            input_shape,
-            mean,
-            std,
-            schema,
-        })
+        Ok(Self { model, schema })
     }
 }
 
 #[cfg(feature = "onnx")]
 impl FaceInference for OnnxRuntime {
-    fn infer(&self, frame: &[u8], width: u32, height: u32) -> Result<RawFaceObservation> {
-        use crate::error::InferenceError;
+    fn infer(&self, tensor: &[f32], input_shape: &[usize; 4]) -> Result<RawFaceObservation> {
         use crate::schema::BasicObservation;
         use tract_onnx::prelude::*;
         use vtuber_core::types::{FrameSeq, MonoTimeNs, NamedCoefficient, NormalizedRect};
 
-        let input_tensor = preprocess(
-            frame,
-            width,
-            height,
-            &self.input_shape,
-            &self.mean,
-            &self.std,
-        );
+        let input_array = tensors_to_tract(tensor, input_shape)
+            .map_err(|e| InferenceError::ExecutionFailed(format!("invalid tensor shape: {e:?}")))?;
 
         let result = self
             .model
-            .run(tvec!(tensors_to_tract(&input_tensor).into_tvalue()))
+            .run(tvec!(input_array.into_tvalue()))
             .map_err(|e| InferenceError::ExecutionFailed(format!("{e:?}")))?;
 
         let output = result[0]
@@ -126,43 +111,19 @@ impl FaceInference for OnnxRuntime {
 }
 
 #[cfg(feature = "onnx")]
-fn preprocess(
-    frame: &[u8],
-    width: u32,
-    height: u32,
-    shape: &[usize; 4],
-    mean: &[f32; 3],
-    std: &[f32; 3],
-) -> Vec<f32> {
-    let target_w = shape[2];
-    let target_h = shape[3];
-    let mut output = vec![0.0f32; 3 * target_w * target_h];
-
-    let crop_size = width.min(height);
-    let offset_x = (width - crop_size) / 2;
-    let offset_y = (height - crop_size) / 2;
-
-    for y in 0..target_h {
-        for x in 0..target_w {
-            let src_x = offset_x + (x as u32 * crop_size / target_w as u32);
-            let src_y = offset_y + (y as u32 * crop_size / target_h as u32);
-            let src_idx = (src_y * width + src_x) as usize * 3;
-
-            if src_idx + 2 < frame.len() {
-                for c in 0..3 {
-                    let val = frame[src_idx + c] as f32 / 255.0;
-                    output[c * target_w * target_h + y * target_w + x] = (val - mean[c]) / std[c];
-                }
-            }
-        }
-    }
-    output
-}
-
-#[cfg(feature = "onnx")]
-fn tensors_to_tract(data: &[f32]) -> tract_core::ndarray::Array4<f32> {
-    tract_core::ndarray::Array::from_shape_vec((1, 3, 256, 256), data.to_vec())
-        .expect("shape matches the fixed ONNX input")
+fn tensors_to_tract(
+    data: &[f32],
+    input_shape: &[usize; 4],
+) -> std::result::Result<tract_core::ndarray::Array4<f32>, tract_core::ndarray::ShapeError> {
+    tract_core::ndarray::Array::from_shape_vec(
+        (
+            input_shape[0],
+            input_shape[1],
+            input_shape[2],
+            input_shape[3],
+        ),
+        data.to_vec(),
+    )
 }
 
 #[cfg(feature = "onnx")]

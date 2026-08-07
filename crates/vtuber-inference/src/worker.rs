@@ -8,9 +8,20 @@ use vtuber_core::{LatestSlot, ReadResult, StopToken};
 
 use crate::controller::{ControlCommand, InferenceMetrics, InferenceWorkerResult};
 use crate::descriptor::ModelDescriptor;
-use crate::error::InferenceError;
+use crate::error::Result;
+use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
 use crate::runtime::FaceInference;
 use crate::state::{FailureStage, InferenceWorkerState, SharedStatus};
+
+/// Owned inference context held by the worker thread.
+///
+/// The runtime, preprocess parameters, and reusable preprocess buffers are
+/// constructed together during model load and dropped in the worker thread.
+struct InferenceContext {
+    runtime: Box<dyn FaceInference>,
+    params: PreprocessParams,
+    buffers: PreprocessBuffers,
+}
 
 /// Runs the inference worker loop.
 ///
@@ -24,7 +35,7 @@ pub fn run_inference_worker(
     output_slot: Arc<LatestSlot<RawFaceObservation>>,
 ) -> InferenceWorkerResult {
     let mut metrics = InferenceMetrics::default();
-    let mut runtime: Option<Box<dyn FaceInference>> = None;
+    let mut context: Option<InferenceContext> = None;
     let mut last_gen = 0u64;
     let mut last_overwritten = 0u64;
     let mut paused = false;
@@ -45,9 +56,9 @@ pub fn run_inference_worker(
                         s.transition_to(InferenceWorkerState::LoadingModel);
                     });
 
-                    match load_runtime(&descriptor) {
-                        Ok(loaded) => {
-                            runtime = Some(loaded);
+                    match load_inference_context(&descriptor) {
+                        Ok(ctx) => {
+                            context = Some(ctx);
                             update_status(&status, |s| {
                                 s.transition_to(InferenceWorkerState::Running);
                             });
@@ -66,7 +77,7 @@ pub fn run_inference_worker(
                     paused = false;
                 }
                 Ok(ControlCommand::Reset) => {
-                    runtime = None;
+                    context = None;
                     last_gen = 0;
                     update_status(&status, |s| {
                         s.transition_to(InferenceWorkerState::Idle);
@@ -80,7 +91,7 @@ pub fn run_inference_worker(
             }
         }
 
-        if paused || runtime.is_none() {
+        if paused || context.is_none() {
             // Wait briefly before polling again so the loop remains responsive.
             std::thread::sleep(Duration::from_millis(10));
             continue;
@@ -96,30 +107,39 @@ pub fn run_inference_worker(
                 let start = Instant::now();
                 let started_at = MonoTimeNs(start.elapsed().as_nanos() as u64);
 
-                match runtime
-                    .as_ref()
-                    .expect("runtime present when not paused")
-                    .infer(&frame.data, frame.width, frame.height)
-                {
-                    Ok(observation) => {
-                        let elapsed = start.elapsed();
-                        let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
-                        let observation = RawFaceObservation {
-                            source_seq: frame.seq,
-                            captured_at: frame.captured_at,
-                            inference_started_at: started_at,
-                            inference_finished_at: finished_at,
-                            ..observation
-                        };
-                        if !output_slot.publish(observation) {
-                            metrics.frames_dropped += 1;
-                        }
-                        metrics.frames_processed += 1;
+                let InferenceContext {
+                    runtime,
+                    params,
+                    buffers,
+                } = context.as_mut().expect("context present when not paused");
 
-                        update_status(&status, |s| {
-                            s.record_processed(frame.seq, finished_at, elapsed);
-                        });
-                    }
+                match preprocess_frame(buffers, &frame, params) {
+                    Ok(tensor) => match runtime.infer(tensor, &params.input_shape) {
+                        Ok(observation) => {
+                            let elapsed = start.elapsed();
+                            let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
+                            let observation = RawFaceObservation {
+                                source_seq: frame.seq,
+                                captured_at: frame.captured_at,
+                                inference_started_at: started_at,
+                                inference_finished_at: finished_at,
+                                ..observation
+                            };
+                            if !output_slot.publish(observation) {
+                                metrics.frames_dropped += 1;
+                            }
+                            metrics.frames_processed += 1;
+
+                            update_status(&status, |s| {
+                                s.record_processed(frame.seq, finished_at, elapsed);
+                            });
+                        }
+                        Err(err) => {
+                            update_status(&status, |s| {
+                                s.record_failure(FailureStage::FrameInference, err);
+                            });
+                        }
+                    },
                     Err(err) => {
                         update_status(&status, |s| {
                             s.record_failure(FailureStage::FrameInference, err);
@@ -141,8 +161,15 @@ pub fn run_inference_worker(
     }
 }
 
-fn load_runtime(descriptor: &ModelDescriptor) -> Result<Box<dyn FaceInference>, InferenceError> {
-    crate::backend::tract::load_model_runtime(descriptor)
+fn load_inference_context(descriptor: &ModelDescriptor) -> Result<InferenceContext> {
+    let runtime = crate::backend::tract::load_model_runtime(descriptor)?;
+    let params = PreprocessParams::from_descriptor(descriptor)?;
+    let buffers = PreprocessBuffers::for_shape(&params.input_shape)?;
+    Ok(InferenceContext {
+        runtime,
+        params,
+        buffers,
+    })
 }
 
 fn update_status<F>(status: &SharedStatus, f: F)
@@ -219,10 +246,8 @@ mod tests {
     ) {
         let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
         let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
-        let controller = InferenceController::new(
-            Arc::clone(&frame_slot),
-            Arc::clone(&output_slot),
-        );
+        let controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
         (controller, frame_slot, output_slot)
     }
 
@@ -262,7 +287,10 @@ mod tests {
         let failure = status.last_failure.expect("failure recorded");
         match failure.error {
             InferenceError::HashMismatch { expected, actual } => {
-                assert_eq!(expected, "0000000000000000000000000000000000000000000000000000000000000000");
+                assert_eq!(
+                    expected,
+                    "0000000000000000000000000000000000000000000000000000000000000000"
+                );
                 assert_eq!(actual, actual_sha256);
             }
             other => panic!("expected HashMismatch, got {other:?}"),

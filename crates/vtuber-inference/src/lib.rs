@@ -15,6 +15,8 @@ pub mod descriptor;
 pub mod error;
 /// Placeholder for inference subsystem.
 pub mod placeholder;
+/// Video frame preprocessing for model input.
+pub mod preprocess;
 /// Model provenance probing.
 pub mod probe;
 /// Face inference runtime traits and implementations.

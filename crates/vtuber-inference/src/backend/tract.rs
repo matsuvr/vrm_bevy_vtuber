@@ -11,8 +11,6 @@ use tract_tflite::prelude::{Framework, IntoRunnable, TypedRunnableModel};
 use vtuber_core::types::{LandmarkSchemaId, RawFaceObservation};
 
 use crate::descriptor::{ModelDescriptor, ModelFormat};
-#[cfg(feature = "onnx")]
-use crate::descriptor::Normalization;
 use crate::error::{InferenceError, Result};
 use crate::runtime::FaceInference;
 
@@ -54,17 +52,7 @@ fn sha256_hex(data: &[u8]) -> String {
 
 #[cfg(feature = "onnx")]
 fn load_onnx(descriptor: &ModelDescriptor) -> Result<crate::runtime::OnnxRuntime> {
-    let (mean, std) = normalization_params(descriptor.normalization);
-    crate::runtime::OnnxRuntime::new(&descriptor.path, mean, std, descriptor.schema)
-}
-
-#[cfg(feature = "onnx")]
-const fn normalization_params(normalization: Normalization) -> ([f32; 3], [f32; 3]) {
-    match normalization {
-        Normalization::ZeroToOne => ([0.0; 3], [1.0; 3]),
-        Normalization::MinusOneToOne => ([0.5; 3], [0.5; 3]),
-        Normalization::MeanStd { mean, std } => (mean, std),
-    }
+    crate::runtime::OnnxRuntime::new(&descriptor.path, descriptor.schema)
 }
 
 /// TFLite face inference runtime owned by the worker thread.
@@ -96,7 +84,7 @@ impl TfliteRuntime {
 }
 
 impl FaceInference for TfliteRuntime {
-    fn infer(&self, _frame: &[u8], _width: u32, _height: u32) -> Result<RawFaceObservation> {
+    fn infer(&self, _tensor: &[f32], _input_shape: &[usize; 4]) -> Result<RawFaceObservation> {
         Err(InferenceError::ExecutionFailed(
             "TFLite inference not yet implemented".into(),
         ))
