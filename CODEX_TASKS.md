@@ -3967,7 +3967,7 @@ raw observationを安定した`AvatarControlFrame`へ変換する。
 
 #### M1-03-001: calibration settingsとsession stateを定義する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-02、G0-06`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 

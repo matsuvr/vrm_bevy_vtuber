@@ -5,9 +5,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Calibration: neutral reference collection and session state.
+pub mod calibration;
 /// Placeholder for tracking subsystem.
 pub mod placeholder;
 /// Head pose estimation from landmark sets.
 pub mod pose;
 
+pub use calibration::{CalibrationInput, CalibrationSession, NeutralProfile};
 pub use pose::{LandmarkSet, PoseAlignment, PoseError, WeightedPoint, solve_relative_pose};

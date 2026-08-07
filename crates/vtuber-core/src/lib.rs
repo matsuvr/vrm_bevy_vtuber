@@ -8,6 +8,9 @@
 /// Re-export core types used across worker boundaries.
 pub mod types;
 
+/// Control settings and commands for the tracking pipeline.
+pub mod control;
+
 /// Raw observation contract between inference and tracking.
 pub mod observation;
 /// Latest-value slot for single-producer / single-consumer communication.
@@ -17,6 +20,7 @@ pub mod stop;
 /// Deterministic worker supervision helpers.
 pub mod worker;
 
+pub use control::{CalibrationError, CalibrationSettings};
 pub use observation::RawExpressionObservation;
 pub use slot::{LatestSlot, ReadResult};
 pub use stop::StopToken;
