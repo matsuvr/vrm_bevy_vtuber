@@ -98,6 +98,8 @@ pub struct InferenceOutput {
     pub observation: Option<RawFaceObservation>,
 }
 
+pub use crate::observation::RawExpressionObservation;
+
 /// A single face observation produced by inference.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawFaceObservation {
@@ -115,6 +117,8 @@ pub struct RawFaceObservation {
     pub landmarks: Vec<Landmark3>,
     /// Optional blendshape coefficients.
     pub blendshapes: Option<Vec<NamedCoefficient>>,
+    /// Raw expression coefficients before calibration.
+    pub expressions: RawExpressionObservation,
     /// Face region of interest.
     pub roi: NormalizedRect,
     /// Landmark schema used by `landmarks`.

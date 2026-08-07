@@ -54,9 +54,8 @@ impl OnnxRuntime {
 #[cfg(feature = "onnx")]
 impl FaceInference for OnnxRuntime {
     fn infer(&self, tensor: &[f32], input_shape: &[usize; 4]) -> Result<RawFaceObservation> {
-        use crate::schema::BasicObservation;
         use tract_onnx::prelude::*;
-        use vtuber_core::types::{FrameSeq, MonoTimeNs, NamedCoefficient, NormalizedRect};
+        use vtuber_core::types::{FrameSeq, MonoTimeNs, NormalizedRect, RawExpressionObservation};
 
         let input_array = tensors_to_tract(tensor, input_shape)
             .map_err(|e| InferenceError::ExecutionFailed(format!("invalid tensor shape: {e:?}")))?;
@@ -71,7 +70,16 @@ impl FaceInference for OnnxRuntime {
             .map_err(|e| InferenceError::ExecutionFailed(format!("{e:?}")))?;
 
         let landmarks = decode_landmarks(output);
-        let obs = BasicObservation::from_landmarks(&landmarks);
+        let expressions = crate::decode::expressions::decode_expressions(
+            None,
+            None,
+            Some(&landmarks),
+            self.schema,
+            1.0,
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_default();
 
         Ok(RawFaceObservation {
             source_seq: FrameSeq(0),
@@ -80,20 +88,8 @@ impl FaceInference for OnnxRuntime {
             inference_finished_at: MonoTimeNs(0),
             face_confidence: 1.0,
             landmarks,
-            blendshapes: Some(vec![
-                NamedCoefficient {
-                    name: "blinkLeft".into(),
-                    value: obs.blink_left,
-                },
-                NamedCoefficient {
-                    name: "blinkRight".into(),
-                    value: obs.blink_right,
-                },
-                NamedCoefficient {
-                    name: "aa".into(),
-                    value: obs.mouth_open,
-                },
-            ]),
+            blendshapes: None,
+            expressions,
             roi: NormalizedRect {
                 x: 0.0,
                 y: 0.0,

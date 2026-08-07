@@ -10,11 +10,14 @@ pub mod types;
 
 /// Latest-value slot for single-producer / single-consumer communication.
 pub mod slot;
+/// Raw observation contract between inference and tracking.
+pub mod observation;
 /// Worker stop token.
 pub mod stop;
 /// Deterministic worker supervision helpers.
 pub mod worker;
 
+pub use observation::RawExpressionObservation;
 pub use slot::{LatestSlot, ReadResult};
 pub use stop::StopToken;
 pub use types::*;

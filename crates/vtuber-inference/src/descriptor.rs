@@ -9,6 +9,21 @@ use std::path::PathBuf;
 
 use vtuber_core::types::LandmarkSchemaId;
 
+/// Manifest mapping from backend blendshape names to canonical expressions.
+///
+/// A model may export coefficients under different naming conventions.  Each
+/// canonical expression stores a list of candidate names; the decoder uses
+/// the first match it finds in the runtime output.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExpressionMapping {
+    /// Candidate names for the left eye blink coefficient.
+    pub blink_left: Vec<String>,
+    /// Candidate names for the right eye blink coefficient.
+    pub blink_right: Vec<String>,
+    /// Candidate names for the mouth openness coefficient.
+    pub mouth_open: Vec<String>,
+}
+
 /// Supported model file formats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ModelFormat {
@@ -42,6 +57,9 @@ pub struct ModelDescriptor {
     pub normalization: Normalization,
     /// Landmark schema produced by this model.
     pub schema: LandmarkSchemaId,
+    /// Optional blendshape-to-expression mapping for models that export
+    /// expression coefficients as named blendshape output.
+    pub expression_mapping: Option<ExpressionMapping>,
 }
 
 /// Channel order of the input image.
@@ -125,6 +143,7 @@ mod tests {
             channel_order: ChannelOrder::Rgb,
             normalization: Normalization::ZeroToOne,
             schema: LandmarkSchemaId("test-schema"),
+            expression_mapping: None,
         };
         assert_eq!(desc.display_name(), "test-model");
     }

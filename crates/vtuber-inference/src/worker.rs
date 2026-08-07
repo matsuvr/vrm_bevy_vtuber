@@ -283,6 +283,7 @@ mod tests {
             channel_order: ChannelOrder::Rgb,
             normalization,
             schema: LandmarkSchemaId("test-schema"),
+            expression_mapping: None,
         }
     }
 
@@ -621,6 +622,7 @@ mod tests {
                     face_confidence: 1.0,
                     landmarks: Vec::new(),
                     blendshapes: None,
+                    expressions: vtuber_core::types::RawExpressionObservation::default(),
                     roi: NormalizedRect {
                         x: 0.0,
                         y: 0.0,
@@ -762,6 +764,7 @@ mod tests {
                     face_confidence: 1.0,
                     landmarks: Vec::new(),
                     blendshapes: None,
+                    expressions: vtuber_core::types::RawExpressionObservation::default(),
                     roi: NormalizedRect {
                         x: 0.0,
                         y: 0.0,

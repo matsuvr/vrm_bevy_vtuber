@@ -132,6 +132,7 @@ mod tests {
     use super::*;
     use vtuber_core::types::{
         FrameSeq, LandmarkSchemaId, MonoTimeNs, NamedCoefficient, NormalizedRect,
+        RawExpressionObservation,
     };
 
     fn settings(interval: u32) -> RuntimeSettings {
@@ -163,6 +164,7 @@ mod tests {
                 name: "blinkLeft".into(),
                 value: 0.0,
             }]),
+            expressions: RawExpressionObservation::default(),
             roi: NormalizedRect {
                 x,
                 y,

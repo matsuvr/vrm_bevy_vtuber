@@ -240,6 +240,7 @@ mod tests {
             channel_order: ChannelOrder::Rgb,
             normalization: Normalization::ZeroToOne,
             schema: vtuber_core::types::LandmarkSchemaId("dummy"),
+            expression_mapping: None,
         }
     }
 
