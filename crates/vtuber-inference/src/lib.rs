@@ -9,6 +9,8 @@
 pub mod backend;
 /// Inference worker controller and command protocol.
 pub mod controller;
+/// Output decoding from runtime tensors to engine-independent observations.
+pub mod decode;
 /// Model descriptor and runtime settings.
 pub mod descriptor;
 /// Typed errors for the inference subsystem.

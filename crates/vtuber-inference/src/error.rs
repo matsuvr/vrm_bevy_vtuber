@@ -50,6 +50,38 @@ pub enum InferenceError {
         /// Input shape that could not be interpreted.
         shape: Vec<usize>,
     },
+    /// The model output tensor shape does not match the manifest contract.
+    #[error("output shape mismatch: expected {expected:?}, got {actual:?}")]
+    OutputShapeMismatch {
+        /// Expected shape from the manifest contract.
+        expected: Vec<usize>,
+        /// Actual shape of the runtime output tensor.
+        actual: Vec<usize>,
+    },
+    /// The model output tensor element count does not match its declared shape.
+    #[error("output element count mismatch: expected {expected}, got {actual}")]
+    OutputElementCountMismatch {
+        /// Expected element count.
+        expected: usize,
+        /// Actual element count.
+        actual: usize,
+    },
+    /// The model output tensor data type does not match the manifest contract.
+    #[error("output dtype mismatch: expected {expected}, got {actual}")]
+    OutputDtypeMismatch {
+        /// Expected data type.
+        expected: String,
+        /// Actual data type.
+        actual: String,
+    },
+    /// The model output tensor contains an invalid numeric value.
+    #[error("invalid output value at index {index}: {value}")]
+    InvalidOutputValue {
+        /// Index of the offending element.
+        index: usize,
+        /// The invalid value.
+        value: f32,
+    },
     /// Runtime-specific internal error.
     #[error("internal runtime error: {0}")]
     Internal(String),

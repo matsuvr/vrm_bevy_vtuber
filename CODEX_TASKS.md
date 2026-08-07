@@ -3733,7 +3733,7 @@ cargo test -p vtuber-inference roi_state
 
 #### M1-02-006: landmark output decodeを実装する
 
-状態: `LEGACY_PROGRESS_CURRENT`  
+状態: `DONE`  
 依存: `M1-02-005`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
