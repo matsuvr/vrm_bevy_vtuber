@@ -15,6 +15,9 @@ use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
 use crate::runtime::FaceInference;
 use crate::state::{FailureStage, InferenceWorkerState, SharedStatus};
 
+/// Maximum consecutive recoverable per-frame errors before the worker halts.
+const MAX_CONSECUTIVE_RECOVERABLE_ERRORS: u32 = 10;
+
 /// Owned inference context held by the worker thread.
 ///
 /// The runtime, preprocess parameters, and reusable preprocess buffers are
@@ -42,12 +45,13 @@ pub fn run_inference_worker(
     let mut last_overwritten = 0u64;
     let mut last_processed_seq: Option<FrameSeq> = None;
     let mut paused = false;
+    let mut failed = false;
 
     update_status(&status, |s| {
         s.transition_to(InferenceWorkerState::Idle);
     });
 
-    while !stop.is_stopped() {
+    'worker: while !stop.is_stopped() {
         // Drain control commands first so state changes take effect immediately.
         loop {
             match command_rx.try_recv() {
@@ -62,11 +66,14 @@ pub fn run_inference_worker(
                     match load_inference_context(&descriptor, &settings) {
                         Ok(ctx) => {
                             context = Some(ctx);
+                            failed = false;
                             update_status(&status, |s| {
                                 s.transition_to(InferenceWorkerState::Running);
+                                s.clear_consecutive_errors();
                             });
                         }
                         Err(err) => {
+                            failed = true;
                             update_status(&status, |s| {
                                 s.record_failure(FailureStage::ModelLoad, err);
                             });
@@ -81,21 +88,30 @@ pub fn run_inference_worker(
                 }
                 Ok(ControlCommand::Reset) => {
                     context = None;
+                    failed = false;
                     last_gen = 0;
                     last_processed_seq = None;
                     update_status(&status, |s| {
                         s.transition_to(InferenceWorkerState::Idle);
+                        s.clear_consecutive_errors();
                     });
+                }
+                #[cfg(test)]
+                Ok(ControlCommand::Panic) => {
+                    panic!("inference worker panic requested by test");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     stop.stop();
-                    break;
+                    update_status(&status, |s| {
+                        s.transition_to(InferenceWorkerState::Stopping);
+                    });
+                    break 'worker;
                 }
             }
         }
 
-        if paused || context.is_none() {
+        if paused || context.is_none() || failed {
             // Wait briefly before polling again so the loop remains responsive.
             std::thread::sleep(Duration::from_millis(10));
             continue;
@@ -143,72 +159,110 @@ pub fn run_inference_worker(
                             Ok(observation) => {
                                 let infer_duration = infer_start.elapsed();
                                 let decode_start = Instant::now();
-                                // A low-confidence result or out-of-bounds ROI moves the pipeline
-                                // back to the lost state so the detector runs again.
-                                let _ = pipeline.update_from_observation(
-                                    &observation,
-                                    frame.width,
-                                    frame.height,
-                                );
-                                let decode_duration = decode_start.elapsed();
 
-                                let elapsed = start.elapsed();
-                                let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
-                                let observation = RawFaceObservation {
-                                    source_seq: frame.seq,
-                                    captured_at: frame.captured_at,
-                                    inference_started_at: started_at,
-                                    inference_finished_at: finished_at,
-                                    ..observation
-                                };
+                                if let Err(err) = validate_observation(&observation) {
+                                    pipeline.mark_lost();
+                                    let halt = update_status(&status, |s| {
+                                        s.record_frame_error(
+                                            FailureStage::Decode,
+                                            err,
+                                            MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                                        )
+                                    });
+                                    if halt {
+                                        failed = true;
+                                    }
+                                } else {
+                                    // A low-confidence result or out-of-bounds ROI moves the pipeline
+                                    // back to the lost state so the detector runs again.
+                                    let _ = pipeline.update_from_observation(
+                                        &observation,
+                                        frame.width,
+                                        frame.height,
+                                    );
+                                    let decode_duration = decode_start.elapsed();
 
-                                let output_overwritten_before = output_slot.overwritten_count();
-                                if !output_slot.publish(observation) {
-                                    update_status(&status, |s| s.record_dropped());
+                                    let elapsed = start.elapsed();
+                                    let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
+                                    let observation = RawFaceObservation {
+                                        source_seq: frame.seq,
+                                        captured_at: frame.captured_at,
+                                        inference_started_at: started_at,
+                                        inference_finished_at: finished_at,
+                                        ..observation
+                                    };
+
+                                    let output_overwritten_before = output_slot.overwritten_count();
+                                    if !output_slot.publish(observation) {
+                                        update_status(&status, |s| s.record_dropped());
+                                    }
+                                    let output_overwritten_delta = output_slot
+                                        .overwritten_count()
+                                        .saturating_sub(output_overwritten_before);
+
+                                    update_status(&status, |s| {
+                                        s.record_stage_duration(
+                                            InferenceStage::Wait,
+                                            wait_duration,
+                                        );
+                                        s.record_stage_duration(
+                                            InferenceStage::Preprocess,
+                                            preprocess_duration,
+                                        );
+                                        // Detector and landmark are combined in the current single-
+                                        // stage runtime. Landmark timing will be split out when the
+                                        // pipeline supports a separate landmark-only path.
+                                        s.record_stage_duration(
+                                            InferenceStage::Detector,
+                                            infer_duration,
+                                        );
+                                        s.record_stage_duration(
+                                            InferenceStage::Decode,
+                                            decode_duration,
+                                        );
+                                        s.record_stage_duration(InferenceStage::Total, elapsed);
+                                        s.record_output_overwritten(output_overwritten_delta);
+                                        s.record_processed(frame.seq, finished_at, elapsed);
+                                    });
+                                    update_status(&status, |s| s.clear_consecutive_errors());
                                 }
-                                let output_overwritten_delta = output_slot
-                                    .overwritten_count()
-                                    .saturating_sub(output_overwritten_before);
-
-                                update_status(&status, |s| {
-                                    s.record_stage_duration(InferenceStage::Wait, wait_duration);
-                                    s.record_stage_duration(
-                                        InferenceStage::Preprocess,
-                                        preprocess_duration,
-                                    );
-                                    // Detector and landmark are combined in the current single-
-                                    // stage runtime. Landmark timing will be split out when the
-                                    // pipeline supports a separate landmark-only path.
-                                    s.record_stage_duration(
-                                        InferenceStage::Detector,
-                                        infer_duration,
-                                    );
-                                    s.record_stage_duration(
-                                        InferenceStage::Decode,
-                                        decode_duration,
-                                    );
-                                    s.record_stage_duration(InferenceStage::Total, elapsed);
-                                    s.record_output_overwritten(output_overwritten_delta);
-                                    s.record_processed(frame.seq, finished_at, elapsed);
-                                });
                             }
                             Err(err) => {
                                 pipeline.mark_lost();
-                                update_status(&status, |s| {
-                                    s.record_failure(FailureStage::FrameInference, err);
+                                let halt = update_status(&status, |s| {
+                                    s.record_frame_error(
+                                        FailureStage::Runtime,
+                                        err,
+                                        MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                                    )
                                 });
+                                if halt {
+                                    failed = true;
+                                }
                             }
                         }
                     }
                     Err(err) => {
                         pipeline.mark_lost();
-                        update_status(&status, |s| {
-                            s.record_failure(FailureStage::FrameInference, err);
+                        let halt = update_status(&status, |s| {
+                            s.record_frame_error(
+                                FailureStage::Preprocess,
+                                err,
+                                MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                            )
                         });
+                        if halt {
+                            failed = true;
+                        }
                     }
                 }
             }
-            Some(ReadResult::Closed) => break,
+            Some(ReadResult::Closed) => {
+                update_status(&status, |s| {
+                    s.transition_to(InferenceWorkerState::Stopping);
+                });
+                break;
+            }
             None => {
                 // The wait timed out; check the stop token before looping so
                 // shutdown completes promptly even when no frames are arriving.
@@ -220,7 +274,9 @@ pub fn run_inference_worker(
     }
 
     update_status(&status, |s| {
-        s.transition_to(InferenceWorkerState::Stopping);
+        if s.state != InferenceWorkerState::Failed {
+            s.transition_to(InferenceWorkerState::Stopping);
+        }
     });
 
     let final_metrics = status
@@ -246,14 +302,44 @@ fn load_inference_context(
     })
 }
 
-fn update_status<F>(status: &SharedStatus, f: F)
+fn update_status<F, R>(status: &SharedStatus, f: F) -> R
 where
-    F: FnOnce(&mut crate::state::InferenceWorkerStatus),
+    F: FnOnce(&mut crate::state::InferenceWorkerStatus) -> R,
 {
     let mut s = status
         .lock()
         .expect("InferenceController status mutex poisoned");
-    f(&mut s);
+    f(&mut s)
+}
+
+/// Validates decoded model outputs before they are used for tracking.
+///
+/// Non-finite values are treated as decode failures because they cannot be
+/// safely consumed downstream.
+fn validate_observation(observation: &RawFaceObservation) -> crate::error::Result<()> {
+    if !observation.face_confidence.is_finite() {
+        return Err(crate::error::InferenceError::InvalidOutputValue {
+            index: 0,
+            value: observation.face_confidence,
+        });
+    }
+
+    for (index, lm) in observation.landmarks.iter().enumerate() {
+        if !lm.x.is_finite() || !lm.y.is_finite() || !lm.z.is_finite() {
+            return Err(crate::error::InferenceError::InvalidOutputValue {
+                index,
+                value: if !lm.x.is_finite() {
+                    lm.x
+                } else if !lm.y.is_finite() {
+                    lm.y
+                } else {
+                    lm.z
+                },
+            });
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -267,7 +353,7 @@ mod tests {
     };
     use vtuber_core::{LatestSlot, ReadResult};
 
-    use super::{InferenceContext, update_status};
+    use super::{InferenceContext, MAX_CONSECUTIVE_RECOVERABLE_ERRORS, update_status};
     use crate::controller::{InferenceController, InferenceWorkerResult};
     use crate::descriptor::{
         ChannelOrder, ModelDescriptor, ModelFormat, Normalization, RuntimeSettings,
@@ -601,18 +687,33 @@ mod tests {
                                         s.record_output_overwritten(output_overwritten_delta);
                                         s.record_processed(frame.seq, finished_at, elapsed);
                                     });
+                                    update_status(&status, |s| s.clear_consecutive_errors());
                                 }
                                 Err(err) => {
-                                    update_status(&status, |s| {
-                                        s.record_failure(FailureStage::FrameInference, err);
+                                    let halt = update_status(&status, |s| {
+                                        s.record_frame_error(
+                                            FailureStage::Runtime,
+                                            err,
+                                            MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                                        )
                                     });
+                                    if halt {
+                                        break;
+                                    }
                                 }
                             }
                         }
                         Err(err) => {
-                            update_status(&status, |s| {
-                                s.record_failure(FailureStage::FrameInference, err);
+                            let halt = update_status(&status, |s| {
+                                s.record_frame_error(
+                                    FailureStage::Preprocess,
+                                    err,
+                                    MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                                )
                             });
+                            if halt {
+                                break;
+                            }
                         }
                     }
                 }
@@ -626,7 +727,9 @@ mod tests {
         }
 
         update_status(&status, |s| {
-            s.transition_to(InferenceWorkerState::Stopping);
+            if s.state != InferenceWorkerState::Failed {
+                s.transition_to(InferenceWorkerState::Stopping);
+            }
         });
 
         let final_metrics = status
@@ -1032,7 +1135,7 @@ mod tests {
         assert!(
             status_final
                 .last_source_seq
-                .map_or(false, |s| s.0 >= FRAME_COUNT - 1),
+                .is_some_and(|s| s.0 >= FRAME_COUNT - 1),
             "worker should catch up to the latest frames, got {:?}",
             status_final.last_source_seq
         );
@@ -1101,6 +1204,103 @@ mod tests {
         assert_eq!(
             metrics.drops.skipped_sequence, 0,
             "no sequence should be skipped in this scenario"
+        );
+    }
+
+    #[test]
+    fn consecutive_frame_errors_transition_to_failed() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let status: SharedStatus = Arc::new(std::sync::Mutex::new(InferenceWorkerStatus::new()));
+        let params = PreprocessParams {
+            input_shape: [1, 64, 64, 3],
+            channel_order: ChannelOrder::Rgb,
+            normalization: Normalization::ZeroToOne,
+        };
+        let buffers = PreprocessBuffers::for_shape(&params.input_shape).unwrap();
+
+        struct FailingRuntime {
+            schema: LandmarkSchemaId,
+        }
+
+        impl FaceInference for FailingRuntime {
+            fn infer(
+                &self,
+                _tensor: &[f32],
+                _input_shape: &[usize; 4],
+            ) -> crate::error::Result<RawFaceObservation> {
+                Err(crate::error::InferenceError::ExecutionFailed(
+                    "always fails".into(),
+                ))
+            }
+
+            fn schema_id(&self) -> LandmarkSchemaId {
+                self.schema
+            }
+        }
+
+        let handle = WorkerHandle::spawn("inference-consecutive-errors", {
+            let frame_slot = Arc::clone(&frame_slot);
+            let output_slot = Arc::clone(&output_slot);
+            let status = Arc::clone(&status);
+            move |stop| {
+                run_inference_worker_with_runtime(
+                    stop,
+                    status,
+                    frame_slot,
+                    output_slot,
+                    Box::new(FailingRuntime {
+                        schema: LandmarkSchemaId("fake"),
+                    }),
+                    params,
+                    buffers,
+                )
+            }
+        });
+
+        // Publish frames one at a time so the worker processes each one.
+        // Enough frames must be sent to exceed the recoverable error threshold.
+        const ERROR_THRESHOLD: u32 = MAX_CONSECUTIVE_RECOVERABLE_ERRORS;
+        for seq in 1..=ERROR_THRESHOLD + 5 {
+            frame_slot.publish(VideoFrame {
+                seq: FrameSeq(seq as u64),
+                captured_at: MonoTimeNs(seq as u64 * 1_000_000),
+                width: 64,
+                height: 64,
+                stride_bytes: 64 * 3,
+                format: PixelFormat::Rgb8,
+                data: vec![seq as u8; 64 * 64 * 3].into(),
+            });
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        // Wait for the worker to process the frames and halt.
+        std::thread::sleep(Duration::from_millis(50));
+        handle.stop();
+        let result = handle.join();
+        assert!(
+            matches!(result, WorkerResult::Completed(_)),
+            "worker should complete after halting, got {result:?}"
+        );
+
+        let status_final = status.lock().unwrap();
+        assert_eq!(
+            status_final.state,
+            InferenceWorkerState::Failed,
+            "worker should transition to Failed after consecutive errors"
+        );
+        assert_eq!(
+            status_final.last_failure.as_ref().map(|f| f.stage),
+            Some(FailureStage::Runtime),
+            "last failure should be a runtime failure"
+        );
+        assert!(
+            status_final.consecutive_errors > ERROR_THRESHOLD,
+            "consecutive error counter should exceed the threshold"
+        );
+        assert_eq!(
+            status_final.frames_processed, 0,
+            "no frame should be published"
         );
     }
 }

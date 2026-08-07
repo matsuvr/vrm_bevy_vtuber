@@ -8,10 +8,10 @@
 /// Re-export core types used across worker boundaries.
 pub mod types;
 
-/// Latest-value slot for single-producer / single-consumer communication.
-pub mod slot;
 /// Raw observation contract between inference and tracking.
 pub mod observation;
+/// Latest-value slot for single-producer / single-consumer communication.
+pub mod slot;
 /// Worker stop token.
 pub mod stop;
 /// Deterministic worker supervision helpers.

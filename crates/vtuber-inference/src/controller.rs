@@ -8,12 +8,12 @@
 use std::sync::Arc;
 
 use vtuber_core::types::{RawFaceObservation, VideoFrame};
-use vtuber_core::{LatestSlot, WorkerHandle};
+use vtuber_core::{LatestSlot, WorkerHandle, WorkerResult};
 
 use crate::descriptor::{ModelDescriptor, RuntimeSettings};
 use crate::error::InferenceError;
 use crate::metrics::InferenceMetrics;
-use crate::state::{InferenceWorkerState, SharedStatus};
+use crate::state::{FailureStage, InferenceWorkerState, SharedStatus};
 use crate::worker::run_inference_worker;
 
 /// Capacity of the control channel between controller and worker.
@@ -35,6 +35,9 @@ pub enum ControlCommand {
     Resume,
     /// Reset the worker to an idle state.
     Reset,
+    /// Test-only: intentionally panic the worker.
+    #[cfg(test)]
+    Panic,
 }
 
 /// Controller for the inference worker.
@@ -44,6 +47,17 @@ pub struct InferenceController {
     pub(crate) frame_slot: Arc<LatestSlot<VideoFrame>>,
     pub(crate) output_slot: Arc<LatestSlot<RawFaceObservation>>,
     pub(crate) worker: Option<WorkerHandle<InferenceWorkerResult>>,
+}
+
+impl Drop for InferenceController {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker.stop();
+            self.frame_slot.close();
+            let _ = worker.join();
+        }
+        self.output_slot.close();
+    }
 }
 
 /// Result returned by the inference worker when it finishes.
@@ -185,17 +199,32 @@ impl InferenceController {
     /// This consumes the controller. After this call returns, no worker thread
     /// is running and the output slot is closed.
     pub fn shutdown(mut self) -> InferenceMetrics {
-        if let Some(worker) = self.worker.take() {
+        let result = if let Some(worker) = self.worker.take() {
             worker.stop();
-            let _ = worker.join();
-        }
-        self.output_slot.close();
+            // Closing the frame slot wakes the worker if it is blocked waiting
+            // for a frame, so shutdown completes promptly.
+            self.frame_slot.close();
+            worker.join()
+        } else {
+            WorkerResult::Completed(InferenceWorkerResult::default())
+        };
 
-        let status = self
-            .status
-            .lock()
-            .expect("InferenceController status mutex poisoned");
-        status.metrics()
+        let final_metrics = match result {
+            WorkerResult::Completed(r) => r.final_metrics,
+            WorkerResult::Panicked => {
+                let mut status = self.status.lock().unwrap_or_else(|e| e.into_inner());
+                status.record_failure(FailureStage::WorkerPanic, InferenceError::WorkerPanicked);
+                status.metrics()
+            }
+            WorkerResult::SpawnFailed => self
+                .status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .metrics(),
+        };
+
+        self.output_slot.close();
+        final_metrics
     }
 }
 
@@ -330,5 +359,60 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(controller.status().state, InferenceWorkerState::Idle);
         controller.shutdown();
+    }
+
+    #[test]
+    fn inference_shutdown() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let mut controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+
+        controller.start_worker().expect("start worker");
+
+        // Leave the worker waiting on an empty frame slot and shut down. The
+        // worker must unblock, join, and leave both slots closed.
+        let metrics = controller.shutdown();
+        assert!(frame_slot.is_closed());
+        assert!(output_slot.is_closed());
+        assert_eq!(metrics.drops.processed, 0);
+    }
+
+    #[test]
+    fn worker_failure() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let mut controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+
+        controller.start_worker().expect("start worker");
+
+        let tx = controller
+            .command_tx
+            .as_ref()
+            .expect("command channel exists after start");
+        tx.send(ControlCommand::Panic)
+            .expect("send panic command to worker");
+
+        // Give the worker a moment to process the command and panic.
+        std::thread::sleep(Duration::from_millis(100));
+
+        let status = Arc::clone(&controller.status);
+        controller.shutdown();
+
+        let status = status.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(status.state, InferenceWorkerState::Failed);
+        assert_eq!(
+            status.last_failure.as_ref().map(|f| f.stage),
+            Some(FailureStage::WorkerPanic)
+        );
+        assert!(
+            matches!(
+                status.last_failure.as_ref().map(|f| &f.error),
+                Some(InferenceError::WorkerPanicked)
+            ),
+            "worker panic should be recorded as WorkerPanicked error, got {:?}",
+            status.last_failure
+        );
     }
 }

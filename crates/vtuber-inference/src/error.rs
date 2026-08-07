@@ -88,6 +88,12 @@ pub enum InferenceError {
     /// Worker is already running and cannot be started again.
     #[error("inference worker already running")]
     AlreadyRunning,
+    /// The worker thread panicked.
+    #[error("inference worker panicked")]
+    WorkerPanicked,
+    /// The input channel or frame slot was closed unexpectedly.
+    #[error("inference input closed")]
+    InputClosed,
 }
 
 /// Result type alias for inference operations.

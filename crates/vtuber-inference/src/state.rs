@@ -49,6 +49,8 @@ pub struct InferenceWorkerStatus {
     pub duplicate_frames_suppressed: u64,
     /// Last failure, separated by lifecycle stage.
     pub last_failure: Option<WorkerFailure>,
+    /// Consecutive recoverable per-frame errors since the last success.
+    pub consecutive_errors: u32,
     metrics_state: InferenceMetricsState,
 }
 
@@ -68,8 +70,18 @@ pub struct WorkerFailure {
 pub enum FailureStage {
     /// Failure during model load or optimization.
     ModelLoad,
-    /// Failure during a single-frame inference.
+    /// Failure during a single-frame inference (legacy aggregate stage).
     FrameInference,
+    /// Failure while preprocessing a video frame.
+    Preprocess,
+    /// Failure during model runtime execution.
+    Runtime,
+    /// Failure while decoding model outputs into an observation.
+    Decode,
+    /// Failure because the input channel or frame slot closed unexpectedly.
+    InputClosed,
+    /// Failure because the worker thread panicked.
+    WorkerPanic,
     /// Failure while shutting down.
     Shutdown,
 }
@@ -144,6 +156,38 @@ impl InferenceWorkerStatus {
             error,
         });
         self.state = InferenceWorkerState::Failed;
+    }
+
+    /// Records a recoverable per-frame error.
+    ///
+    /// The error is stored in [`Self::last_failure`] and the consecutive-error
+    /// counter is incremented. Returns `true` when the counter exceeds the
+    /// configured tolerance and the worker should transition to
+    /// [`InferenceWorkerState::Failed`].
+    pub fn record_frame_error(
+        &mut self,
+        stage: FailureStage,
+        error: InferenceError,
+        max_consecutive: u32,
+    ) -> bool {
+        self.consecutive_errors += 1;
+        self.last_failure = Some(WorkerFailure {
+            observed_at: MonoTimeNs(now_nanos()),
+            stage,
+            error,
+        });
+        if self.consecutive_errors > max_consecutive {
+            self.state = InferenceWorkerState::Failed;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Resets the consecutive error counter, for example after a successful
+    /// frame or a worker reset.
+    pub fn clear_consecutive_errors(&mut self) {
+        self.consecutive_errors = 0;
     }
 }
 

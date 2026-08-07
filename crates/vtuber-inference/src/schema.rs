@@ -167,9 +167,5 @@ fn average_visibility(landmarks: &[Landmark3], indices: &[usize]) -> f32 {
         }
     }
 
-    if count == 0 {
-        0.0
-    } else {
-        sum / count as f32
-    }
+    if count == 0 { 0.0 } else { sum / count as f32 }
 }

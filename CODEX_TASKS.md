@@ -3851,7 +3851,7 @@ cargo test -p vtuber-inference inference_metrics
 
 #### M1-02-009: typed failure、stop、joinを完成させる
 
-状態: `LEGACY_PROGRESS_CURRENT`  
+状態: `DONE`  
 依存: `M1-02-008`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 

@@ -201,9 +201,7 @@ mod tests {
         // Build a synthetic landmark set large enough for the placeholder
         // PeppaPig-98 indices.  The eyes are open and the mouth is slightly
         // open.
-        let mut landmarks: Vec<Landmark3> = (0..400)
-            .map(|_| landmark(0.5, 0.5, 1.0))
-            .collect();
+        let mut landmarks: Vec<Landmark3> = (0..400).map(|_| landmark(0.5, 0.5, 1.0)).collect();
 
         // Left eye: outer (33), inner (133).  Top/bottom separation gives
         // vertical distance 0.1, horizontal distance 0.4 -> openness 0.25.
@@ -239,13 +237,21 @@ mod tests {
         .expect("expected fallback observation");
 
         // blink = 1 - openness.
-        assert!((obs.blink_left - 0.75).abs() < 1e-5, "blink_left = {}", obs.blink_left);
+        assert!(
+            (obs.blink_left - 0.75).abs() < 1e-5,
+            "blink_left = {}",
+            obs.blink_left
+        );
         assert!(
             (obs.blink_right - 0.666_666_7).abs() < 1e-5,
             "blink_right = {}",
             obs.blink_right
         );
-        assert!((obs.mouth_open - 0.4).abs() < 1e-5, "mouth_open = {}", obs.mouth_open);
+        assert!(
+            (obs.mouth_open - 0.4).abs() < 1e-5,
+            "mouth_open = {}",
+            obs.mouth_open
+        );
         assert!((obs.mouth_open_confidence - 0.8).abs() < 1e-6);
         assert!(obs.is_valid());
     }
@@ -268,14 +274,8 @@ mod tests {
 
     #[test]
     fn expression_decode_no_backend_returns_none() {
-        let result = decode_expressions(
-            None,
-            None,
-            None,
-            LandmarkSchemaId("peppapig-98"),
-            1.0,
-        )
-        .unwrap();
+        let result =
+            decode_expressions(None, None, None, LandmarkSchemaId("peppapig-98"), 1.0).unwrap();
 
         assert!(result.is_none());
     }
