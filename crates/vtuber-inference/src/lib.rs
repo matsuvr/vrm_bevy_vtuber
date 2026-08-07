@@ -13,12 +13,16 @@ pub mod controller;
 pub mod descriptor;
 /// Typed errors for the inference subsystem.
 pub mod error;
+/// Face inference pipeline orchestration.
+pub mod pipeline;
 /// Placeholder for inference subsystem.
 pub mod placeholder;
 /// Video frame preprocessing for model input.
 pub mod preprocess;
 /// Model provenance probing.
 pub mod probe;
+/// Typed region-of-interest state for face inference.
+pub mod roi;
 /// Face inference runtime traits and implementations.
 pub mod runtime;
 /// Landmark schema and basic expression heuristics.

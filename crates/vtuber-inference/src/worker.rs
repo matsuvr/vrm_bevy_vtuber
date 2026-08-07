@@ -7,8 +7,9 @@ use vtuber_core::types::{FrameSeq, MonoTimeNs, RawFaceObservation, VideoFrame};
 use vtuber_core::{LatestSlot, ReadResult, StopToken};
 
 use crate::controller::{ControlCommand, InferenceMetrics, InferenceWorkerResult};
-use crate::descriptor::ModelDescriptor;
+use crate::descriptor::{ModelDescriptor, RuntimeSettings};
 use crate::error::Result;
+use crate::pipeline::Pipeline;
 use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
 use crate::runtime::FaceInference;
 use crate::state::{FailureStage, InferenceWorkerState, SharedStatus};
@@ -21,6 +22,7 @@ struct InferenceContext {
     runtime: Box<dyn FaceInference>,
     params: PreprocessParams,
     buffers: PreprocessBuffers,
+    pipeline: Pipeline,
 }
 
 /// Runs the inference worker loop.
@@ -51,13 +53,13 @@ pub fn run_inference_worker(
             match command_rx.try_recv() {
                 Ok(ControlCommand::LoadModel {
                     descriptor,
-                    settings: _,
+                    settings,
                 }) => {
                     update_status(&status, |s| {
                         s.transition_to(InferenceWorkerState::LoadingModel);
                     });
 
-                    match load_inference_context(&descriptor) {
+                    match load_inference_context(&descriptor, &settings) {
                         Ok(ctx) => {
                             context = Some(ctx);
                             update_status(&status, |s| {
@@ -108,25 +110,41 @@ pub fn run_inference_worker(
                 update_status(&status, |s| s.record_overwritten(overwrite_delta));
                 last_overwritten = overwritten;
 
-                if let Some(last_seq) = last_processed_seq && frame.seq <= last_seq {
+                if let Some(last_seq) = last_processed_seq
+                    && frame.seq <= last_seq
+                {
                     metrics.duplicate_frames_suppressed += 1;
                     update_status(&status, |s| s.record_duplicate_suppressed());
                     continue;
                 }
                 last_processed_seq = Some(frame.seq);
 
-                let start = Instant::now();
-                let started_at = MonoTimeNs(start.elapsed().as_nanos() as u64);
-
                 let InferenceContext {
                     runtime,
                     params,
                     buffers,
+                    pipeline,
                 } = context.as_mut().expect("context present when not paused");
+
+                if !pipeline.should_run_detector(frame.seq) {
+                    continue;
+                }
+                pipeline.record_detector_run(frame.seq);
+
+                let start = Instant::now();
+                let started_at = MonoTimeNs(start.elapsed().as_nanos() as u64);
 
                 match preprocess_frame(buffers, &frame, params) {
                     Ok(tensor) => match runtime.infer(tensor, &params.input_shape) {
                         Ok(observation) => {
+                            // A low-confidence result or out-of-bounds ROI moves the pipeline
+                            // back to the lost state so the detector runs again.
+                            let _ = pipeline.update_from_observation(
+                                &observation,
+                                frame.width,
+                                frame.height,
+                            );
+
                             let elapsed = start.elapsed();
                             let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
                             let observation = RawFaceObservation {
@@ -146,12 +164,14 @@ pub fn run_inference_worker(
                             });
                         }
                         Err(err) => {
+                            pipeline.mark_lost();
                             update_status(&status, |s| {
                                 s.record_failure(FailureStage::FrameInference, err);
                             });
                         }
                     },
                     Err(err) => {
+                        pipeline.mark_lost();
                         update_status(&status, |s| {
                             s.record_failure(FailureStage::FrameInference, err);
                         });
@@ -178,7 +198,10 @@ pub fn run_inference_worker(
     }
 }
 
-fn load_inference_context(descriptor: &ModelDescriptor) -> Result<InferenceContext> {
+fn load_inference_context(
+    descriptor: &ModelDescriptor,
+    settings: &RuntimeSettings,
+) -> Result<InferenceContext> {
     let runtime = crate::backend::tract::load_model_runtime(descriptor)?;
     let params = PreprocessParams::from_descriptor(descriptor)?;
     let buffers = PreprocessBuffers::for_shape(&params.input_shape)?;
@@ -186,6 +209,7 @@ fn load_inference_context(descriptor: &ModelDescriptor) -> Result<InferenceConte
         runtime,
         params,
         buffers,
+        pipeline: Pipeline::new(settings),
     })
 }
 
@@ -210,17 +234,18 @@ mod tests {
     };
     use vtuber_core::{LatestSlot, ReadResult};
 
+    use super::{InferenceContext, update_status};
     use crate::controller::{InferenceController, InferenceMetrics, InferenceWorkerResult};
     use crate::descriptor::{
         ChannelOrder, ModelDescriptor, ModelFormat, Normalization, RuntimeSettings,
     };
     use crate::error::InferenceError;
-    use crate::preprocess::{preprocess_frame, PreprocessBuffers, PreprocessParams};
+    use crate::pipeline::Pipeline;
+    use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
     use crate::runtime::FaceInference;
     use crate::state::{FailureStage, InferenceWorkerState, InferenceWorkerStatus, SharedStatus};
     use vtuber_core::types::NormalizedRect;
     use vtuber_core::{StopToken, WorkerHandle, WorkerResult};
-    use super::{InferenceContext, update_status};
 
     fn sha256_hex(data: &[u8]) -> String {
         use sha2::{Digest, Sha256};
@@ -454,6 +479,10 @@ mod tests {
             runtime,
             params,
             buffers,
+            pipeline: Pipeline::new(&RuntimeSettings {
+                frame_wait_timeout_ms: 50,
+                detector_interval_frames: 1,
+            }),
         };
         let mut last_gen = 0u64;
         let mut last_overwritten = 0u64;
@@ -473,7 +502,9 @@ mod tests {
                     update_status(&status, |s| s.record_overwritten(overwrite_delta));
                     last_overwritten = overwritten;
 
-                    if let Some(last_seq) = last_processed_seq && frame.seq <= last_seq {
+                    if let Some(last_seq) = last_processed_seq
+                        && frame.seq <= last_seq
+                    {
                         metrics.duplicate_frames_suppressed += 1;
                         update_status(&status, |s| s.record_duplicate_suppressed());
                         continue;
@@ -487,6 +518,7 @@ mod tests {
                         runtime,
                         params,
                         buffers,
+                        pipeline: _,
                     } = &mut context;
 
                     match preprocess_frame(buffers, &frame, params) {

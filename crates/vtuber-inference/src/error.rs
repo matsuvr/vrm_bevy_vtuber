@@ -25,6 +25,9 @@ pub enum InferenceError {
     /// The provided video frame was incompatible with the model input.
     #[error("input frame incompatible: {0}")]
     InvalidInput(String),
+    /// The tracked face ROI is invalid or out of bounds.
+    #[error("invalid face ROI: {0}")]
+    InvalidRoi(String),
     /// The video frame stride does not match its width and pixel format.
     #[error("frame stride mismatch: expected at least {expected} bytes, got {actual}")]
     FrameStrideMismatch {
