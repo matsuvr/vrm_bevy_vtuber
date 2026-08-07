@@ -10,6 +10,7 @@ use std::time::Duration;
 use vtuber_core::types::{FrameSeq, MonoTimeNs};
 
 use crate::error::InferenceError;
+use crate::metrics::{InferenceMetrics, InferenceMetricsState, InferenceStage};
 
 /// Lifecycle state of the inference worker.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -48,6 +49,7 @@ pub struct InferenceWorkerStatus {
     pub duplicate_frames_suppressed: u64,
     /// Last failure, separated by lifecycle stage.
     pub last_failure: Option<WorkerFailure>,
+    metrics_state: InferenceMetricsState,
 }
 
 /// A failure that occurred at a specific worker lifecycle stage.
@@ -87,12 +89,24 @@ impl InferenceWorkerStatus {
         self.state = state;
     }
 
+    /// Returns a snapshot of the current inference metrics.
+    #[must_use]
+    pub fn metrics(&self) -> InferenceMetrics {
+        self.metrics_state.snapshot()
+    }
+
+    /// Records a duration sample for an inference stage.
+    pub fn record_stage_duration(&mut self, stage: InferenceStage, duration: Duration) {
+        self.metrics_state.record_stage_duration(stage, duration);
+    }
+
     /// Records a successful inference frame.
     pub fn record_processed(&mut self, seq: FrameSeq, finished_at: MonoTimeNs, duration: Duration) {
         self.last_source_seq = Some(seq);
         self.last_finished_at = Some(finished_at);
         self.last_inference_duration = Some(duration);
         self.frames_processed += 1;
+        self.metrics_state.record_processed();
     }
 
     /// Records a dropped frame.
@@ -103,11 +117,23 @@ impl InferenceWorkerStatus {
     /// Records an input slot overwrite.
     pub fn record_overwritten(&mut self, count: u64) {
         self.frames_overwritten += count;
+        self.metrics_state.record_input_overwritten(count);
+    }
+
+    /// Records a frame that was skipped before inference.
+    pub fn record_skipped_sequence(&mut self) {
+        self.metrics_state.record_skipped_sequence();
     }
 
     /// Records a frame that was suppressed because its sequence was a duplicate.
     pub fn record_duplicate_suppressed(&mut self) {
         self.duplicate_frames_suppressed += 1;
+        self.metrics_state.record_skipped_sequence();
+    }
+
+    /// Records frames overwritten in the output slot.
+    pub fn record_output_overwritten(&mut self, count: u64) {
+        self.metrics_state.record_output_overwritten(count);
     }
 
     /// Records a failure and transitions to [`InferenceWorkerState::Failed`].

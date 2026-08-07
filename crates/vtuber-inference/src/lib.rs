@@ -15,6 +15,8 @@ pub mod decode;
 pub mod descriptor;
 /// Typed errors for the inference subsystem.
 pub mod error;
+/// Fixed-size inference timing and drop metrics.
+pub mod metrics;
 /// Face inference pipeline orchestration.
 pub mod pipeline;
 /// Placeholder for inference subsystem.
@@ -34,11 +36,10 @@ pub mod state;
 /// Inference worker loop.
 pub mod worker;
 
-pub use controller::{
-    ControlCommand, InferenceController, InferenceMetrics, InferenceWorkerResult,
-};
+pub use controller::{ControlCommand, InferenceController, InferenceWorkerResult};
 pub use descriptor::{ChannelOrder, ModelDescriptor, ModelFormat, Normalization, RuntimeSettings};
 pub use error::{InferenceError, Result};
+pub use metrics::{DropCounters, InferenceMetrics, InferenceStage, StageTimingSnapshot};
 pub use runtime::FaceInference;
 #[cfg(feature = "onnx")]
 pub use runtime::OnnxRuntime;

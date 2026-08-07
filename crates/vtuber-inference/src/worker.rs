@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use vtuber_core::types::{FrameSeq, MonoTimeNs, RawFaceObservation, VideoFrame};
 use vtuber_core::{LatestSlot, ReadResult, StopToken};
 
-use crate::controller::{ControlCommand, InferenceMetrics, InferenceWorkerResult};
+use crate::controller::{ControlCommand, InferenceWorkerResult};
 use crate::descriptor::{ModelDescriptor, RuntimeSettings};
 use crate::error::Result;
+use crate::metrics::InferenceStage;
 use crate::pipeline::Pipeline;
 use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
 use crate::runtime::FaceInference;
@@ -36,7 +37,6 @@ pub fn run_inference_worker(
     frame_slot: Arc<LatestSlot<VideoFrame>>,
     output_slot: Arc<LatestSlot<RawFaceObservation>>,
 ) -> InferenceWorkerResult {
-    let mut metrics = InferenceMetrics::default();
     let mut context: Option<InferenceContext> = None;
     let mut last_gen = 0u64;
     let mut last_overwritten = 0u64;
@@ -101,19 +101,19 @@ pub fn run_inference_worker(
             continue;
         }
 
+        let wait_start = Instant::now();
         match frame_slot.wait_read_after(last_gen, Duration::from_millis(50)) {
             Some(ReadResult::New(frame)) => {
+                let wait_duration = wait_start.elapsed();
                 last_gen = frame_slot.generation();
                 let overwritten = frame_slot.overwritten_count();
                 let overwrite_delta = overwritten.saturating_sub(last_overwritten);
-                metrics.frames_overwritten += overwrite_delta;
                 update_status(&status, |s| s.record_overwritten(overwrite_delta));
                 last_overwritten = overwritten;
 
                 if let Some(last_seq) = last_processed_seq
                     && frame.seq <= last_seq
                 {
-                    metrics.duplicate_frames_suppressed += 1;
                     update_status(&status, |s| s.record_duplicate_suppressed());
                     continue;
                 }
@@ -127,6 +127,7 @@ pub fn run_inference_worker(
                 } = context.as_mut().expect("context present when not paused");
 
                 if !pipeline.should_run_detector(frame.seq) {
+                    update_status(&status, |s| s.record_skipped_sequence());
                     continue;
                 }
                 pipeline.record_detector_run(frame.seq);
@@ -135,41 +136,70 @@ pub fn run_inference_worker(
                 let started_at = MonoTimeNs(start.elapsed().as_nanos() as u64);
 
                 match preprocess_frame(buffers, &frame, params) {
-                    Ok(tensor) => match runtime.infer(tensor, &params.input_shape) {
-                        Ok(observation) => {
-                            // A low-confidence result or out-of-bounds ROI moves the pipeline
-                            // back to the lost state so the detector runs again.
-                            let _ = pipeline.update_from_observation(
-                                &observation,
-                                frame.width,
-                                frame.height,
-                            );
+                    Ok(tensor) => {
+                        let preprocess_duration = start.elapsed();
+                        let infer_start = Instant::now();
+                        match runtime.infer(tensor, &params.input_shape) {
+                            Ok(observation) => {
+                                let infer_duration = infer_start.elapsed();
+                                let decode_start = Instant::now();
+                                // A low-confidence result or out-of-bounds ROI moves the pipeline
+                                // back to the lost state so the detector runs again.
+                                let _ = pipeline.update_from_observation(
+                                    &observation,
+                                    frame.width,
+                                    frame.height,
+                                );
+                                let decode_duration = decode_start.elapsed();
 
-                            let elapsed = start.elapsed();
-                            let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
-                            let observation = RawFaceObservation {
-                                source_seq: frame.seq,
-                                captured_at: frame.captured_at,
-                                inference_started_at: started_at,
-                                inference_finished_at: finished_at,
-                                ..observation
-                            };
-                            if !output_slot.publish(observation) {
-                                metrics.frames_dropped += 1;
+                                let elapsed = start.elapsed();
+                                let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
+                                let observation = RawFaceObservation {
+                                    source_seq: frame.seq,
+                                    captured_at: frame.captured_at,
+                                    inference_started_at: started_at,
+                                    inference_finished_at: finished_at,
+                                    ..observation
+                                };
+
+                                let output_overwritten_before = output_slot.overwritten_count();
+                                if !output_slot.publish(observation) {
+                                    update_status(&status, |s| s.record_dropped());
+                                }
+                                let output_overwritten_delta = output_slot
+                                    .overwritten_count()
+                                    .saturating_sub(output_overwritten_before);
+
+                                update_status(&status, |s| {
+                                    s.record_stage_duration(InferenceStage::Wait, wait_duration);
+                                    s.record_stage_duration(
+                                        InferenceStage::Preprocess,
+                                        preprocess_duration,
+                                    );
+                                    // Detector and landmark are combined in the current single-
+                                    // stage runtime. Landmark timing will be split out when the
+                                    // pipeline supports a separate landmark-only path.
+                                    s.record_stage_duration(
+                                        InferenceStage::Detector,
+                                        infer_duration,
+                                    );
+                                    s.record_stage_duration(
+                                        InferenceStage::Decode,
+                                        decode_duration,
+                                    );
+                                    s.record_stage_duration(InferenceStage::Total, elapsed);
+                                    s.record_output_overwritten(output_overwritten_delta);
+                                    s.record_processed(frame.seq, finished_at, elapsed);
+                                });
                             }
-                            metrics.frames_processed += 1;
-
-                            update_status(&status, |s| {
-                                s.record_processed(frame.seq, finished_at, elapsed);
-                            });
+                            Err(err) => {
+                                pipeline.mark_lost();
+                                update_status(&status, |s| {
+                                    s.record_failure(FailureStage::FrameInference, err);
+                                });
+                            }
                         }
-                        Err(err) => {
-                            pipeline.mark_lost();
-                            update_status(&status, |s| {
-                                s.record_failure(FailureStage::FrameInference, err);
-                            });
-                        }
-                    },
+                    }
                     Err(err) => {
                         pipeline.mark_lost();
                         update_status(&status, |s| {
@@ -193,9 +223,12 @@ pub fn run_inference_worker(
         s.transition_to(InferenceWorkerState::Stopping);
     });
 
-    InferenceWorkerResult {
-        final_metrics: metrics,
-    }
+    let final_metrics = status
+        .lock()
+        .expect("InferenceController status mutex poisoned")
+        .metrics();
+
+    InferenceWorkerResult { final_metrics }
 }
 
 fn load_inference_context(
@@ -235,11 +268,12 @@ mod tests {
     use vtuber_core::{LatestSlot, ReadResult};
 
     use super::{InferenceContext, update_status};
-    use crate::controller::{InferenceController, InferenceMetrics, InferenceWorkerResult};
+    use crate::controller::{InferenceController, InferenceWorkerResult};
     use crate::descriptor::{
         ChannelOrder, ModelDescriptor, ModelFormat, Normalization, RuntimeSettings,
     };
     use crate::error::InferenceError;
+    use crate::metrics::InferenceStage;
     use crate::pipeline::Pipeline;
     use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
     use crate::runtime::FaceInference;
@@ -475,7 +509,6 @@ mod tests {
     ) -> InferenceWorkerResult {
         use std::time::Instant;
 
-        let mut metrics = InferenceMetrics::default();
         let mut context = InferenceContext {
             runtime,
             params,
@@ -494,19 +527,19 @@ mod tests {
         });
 
         while !stop.is_stopped() {
+            let wait_start = Instant::now();
             match frame_slot.wait_read_after(last_gen, Duration::from_millis(50)) {
                 Some(ReadResult::New(frame)) => {
+                    let wait_duration = wait_start.elapsed();
                     last_gen = frame_slot.generation();
                     let overwritten = frame_slot.overwritten_count();
                     let overwrite_delta = overwritten.saturating_sub(last_overwritten);
-                    metrics.frames_overwritten += overwrite_delta;
                     update_status(&status, |s| s.record_overwritten(overwrite_delta));
                     last_overwritten = overwritten;
 
                     if let Some(last_seq) = last_processed_seq
                         && frame.seq <= last_seq
                     {
-                        metrics.duplicate_frames_suppressed += 1;
                         update_status(&status, |s| s.record_duplicate_suppressed());
                         continue;
                     }
@@ -523,32 +556,59 @@ mod tests {
                     } = &mut context;
 
                     match preprocess_frame(buffers, &frame, params) {
-                        Ok(tensor) => match runtime.infer(tensor, &params.input_shape) {
-                            Ok(observation) => {
-                                let elapsed = start.elapsed();
-                                let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
-                                let observation = RawFaceObservation {
-                                    source_seq: frame.seq,
-                                    captured_at: frame.captured_at,
-                                    inference_started_at: started_at,
-                                    inference_finished_at: finished_at,
-                                    ..observation
-                                };
-                                if !output_slot.publish(observation) {
-                                    metrics.frames_dropped += 1;
-                                }
-                                metrics.frames_processed += 1;
+                        Ok(tensor) => {
+                            let preprocess_duration = start.elapsed();
+                            let infer_start = Instant::now();
+                            match runtime.infer(tensor, &params.input_shape) {
+                                Ok(observation) => {
+                                    let infer_duration = infer_start.elapsed();
+                                    let elapsed = start.elapsed();
+                                    let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
+                                    let observation = RawFaceObservation {
+                                        source_seq: frame.seq,
+                                        captured_at: frame.captured_at,
+                                        inference_started_at: started_at,
+                                        inference_finished_at: finished_at,
+                                        ..observation
+                                    };
 
-                                update_status(&status, |s| {
-                                    s.record_processed(frame.seq, finished_at, elapsed);
-                                });
+                                    let output_overwritten_before = output_slot.overwritten_count();
+                                    if !output_slot.publish(observation) {
+                                        update_status(&status, |s| s.record_dropped());
+                                    }
+                                    let output_overwritten_delta = output_slot
+                                        .overwritten_count()
+                                        .saturating_sub(output_overwritten_before);
+
+                                    update_status(&status, |s| {
+                                        s.record_stage_duration(
+                                            InferenceStage::Wait,
+                                            wait_duration,
+                                        );
+                                        s.record_stage_duration(
+                                            InferenceStage::Preprocess,
+                                            preprocess_duration,
+                                        );
+                                        s.record_stage_duration(
+                                            InferenceStage::Detector,
+                                            infer_duration,
+                                        );
+                                        s.record_stage_duration(
+                                            InferenceStage::Decode,
+                                            Duration::ZERO,
+                                        );
+                                        s.record_stage_duration(InferenceStage::Total, elapsed);
+                                        s.record_output_overwritten(output_overwritten_delta);
+                                        s.record_processed(frame.seq, finished_at, elapsed);
+                                    });
+                                }
+                                Err(err) => {
+                                    update_status(&status, |s| {
+                                        s.record_failure(FailureStage::FrameInference, err);
+                                    });
+                                }
                             }
-                            Err(err) => {
-                                update_status(&status, |s| {
-                                    s.record_failure(FailureStage::FrameInference, err);
-                                });
-                            }
-                        },
+                        }
                         Err(err) => {
                             update_status(&status, |s| {
                                 s.record_failure(FailureStage::FrameInference, err);
@@ -569,9 +629,12 @@ mod tests {
             s.transition_to(InferenceWorkerState::Stopping);
         });
 
-        InferenceWorkerResult {
-            final_metrics: metrics,
-        }
+        let final_metrics = status
+            .lock()
+            .expect("InferenceController status mutex poisoned")
+            .metrics();
+
+        InferenceWorkerResult { final_metrics }
     }
 
     #[test]
@@ -719,8 +782,8 @@ mod tests {
             "no duplicate sequence should be inferred"
         );
         assert_eq!(
-            metrics.duplicate_frames_suppressed, 0,
-            "metrics should report zero duplicates"
+            metrics.drops.skipped_sequence, 0,
+            "metrics should report zero skipped sequences"
         );
         assert_eq!(
             output_slot.generation(),
@@ -843,6 +906,201 @@ mod tests {
             infer_count.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "runtime should only be invoked once for seq 1"
+        );
+    }
+
+    #[test]
+    fn inference_metrics_records_stage_timings_and_drops() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let status: SharedStatus = Arc::new(std::sync::Mutex::new(InferenceWorkerStatus::new()));
+        let params = PreprocessParams {
+            input_shape: [1, 64, 64, 3],
+            channel_order: ChannelOrder::Rgb,
+            normalization: Normalization::ZeroToOne,
+        };
+        let buffers = PreprocessBuffers::for_shape(&params.input_shape).unwrap();
+
+        const FRAME_COUNT: u64 = 15;
+        const INFER_DELAY_MS: u64 = 25;
+        const PRODUCER_INTERVAL_MS: u64 = 8;
+
+        struct SlowRuntime {
+            schema: LandmarkSchemaId,
+        }
+
+        impl FaceInference for SlowRuntime {
+            fn infer(
+                &self,
+                _tensor: &[f32],
+                _input_shape: &[usize; 4],
+            ) -> crate::error::Result<RawFaceObservation> {
+                std::thread::sleep(Duration::from_millis(INFER_DELAY_MS));
+                Ok(RawFaceObservation {
+                    source_seq: FrameSeq(0),
+                    captured_at: MonoTimeNs(0),
+                    inference_started_at: MonoTimeNs(0),
+                    inference_finished_at: MonoTimeNs(0),
+                    face_confidence: 1.0,
+                    landmarks: Vec::new(),
+                    blendshapes: None,
+                    expressions: vtuber_core::types::RawExpressionObservation::default(),
+                    roi: NormalizedRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                        rotation_rad: 0.0,
+                    },
+                    schema: self.schema,
+                })
+            }
+
+            fn schema_id(&self) -> LandmarkSchemaId {
+                self.schema
+            }
+        }
+
+        let handle = WorkerHandle::spawn("inference-metrics", {
+            let frame_slot = Arc::clone(&frame_slot);
+            let output_slot = Arc::clone(&output_slot);
+            let status = Arc::clone(&status);
+            move |stop| {
+                run_inference_worker_with_runtime(
+                    stop,
+                    status,
+                    frame_slot,
+                    output_slot,
+                    Box::new(SlowRuntime {
+                        schema: LandmarkSchemaId("fake"),
+                    }),
+                    params,
+                    buffers,
+                )
+            }
+        });
+
+        let producer_slot = Arc::clone(&frame_slot);
+        let producer = std::thread::spawn(move || {
+            for seq in 1..=FRAME_COUNT {
+                producer_slot.publish(VideoFrame {
+                    seq: FrameSeq(seq),
+                    captured_at: MonoTimeNs(seq * 1_000_000),
+                    width: 64,
+                    height: 64,
+                    stride_bytes: 64 * 3,
+                    format: PixelFormat::Rgb8,
+                    data: vec![seq as u8; 64 * 64 * 3].into(),
+                });
+                std::thread::sleep(Duration::from_millis(PRODUCER_INTERVAL_MS));
+            }
+        });
+
+        producer.join().expect("producer panicked");
+
+        // Allow the worker to drain the backlog before shutdown.
+        std::thread::sleep(Duration::from_millis(300));
+        handle.stop();
+        let result = handle.join();
+        assert!(
+            matches!(result, WorkerResult::Completed(_)),
+            "worker should complete cleanly, got {result:?}"
+        );
+
+        let metrics = match result {
+            WorkerResult::Completed(m) => m.final_metrics,
+            _ => unreachable!(),
+        };
+        let status_final = status.lock().unwrap();
+
+        println!(
+            "inference_metrics: produced={FRAME_COUNT}, processed={}, input_overwritten={}, output_overwritten={}, skipped={}",
+            status_final.frames_processed,
+            metrics.drops.input_overwritten,
+            metrics.drops.output_overwritten,
+            metrics.drops.skipped_sequence,
+        );
+
+        assert!(
+            status_final.frames_processed > 0,
+            "worker should process at least one frame"
+        );
+        assert!(
+            status_final.frames_processed < FRAME_COUNT,
+            "worker should skip frames when inference is slower than the camera"
+        );
+        assert!(
+            status_final
+                .last_source_seq
+                .map_or(false, |s| s.0 >= FRAME_COUNT - 1),
+            "worker should catch up to the latest frames, got {:?}",
+            status_final.last_source_seq
+        );
+
+        // The capture timestamp must be carried through to the observation.
+        if let Some(ReadResult::New(observation)) = output_slot.try_read_after(0) {
+            let expected_captured_at = status_final
+                .last_source_seq
+                .map(|s| MonoTimeNs(s.0 * 1_000_000))
+                .unwrap_or(MonoTimeNs(0));
+            assert_eq!(
+                observation.captured_at, expected_captured_at,
+                "captured_at should be carried from the source frame"
+            );
+            assert_eq!(
+                observation.source_seq,
+                status_final.last_source_seq.unwrap_or(FrameSeq(0)),
+                "source_seq should match the last processed frame"
+            );
+        } else {
+            panic!("output slot should contain the latest observation");
+        }
+
+        // Stage timing counts must match processed count.
+        assert_eq!(
+            metrics.stage(InferenceStage::Wait).count,
+            status_final.frames_processed,
+            "wait samples should match processed frames"
+        );
+        assert_eq!(
+            metrics.stage(InferenceStage::Preprocess).count,
+            status_final.frames_processed,
+            "preprocess samples should match processed frames"
+        );
+        assert_eq!(
+            metrics.stage(InferenceStage::Detector).count,
+            status_final.frames_processed,
+            "detector samples should match processed frames"
+        );
+        assert_eq!(
+            metrics.stage(InferenceStage::Total).count,
+            status_final.frames_processed,
+            "total samples should match processed frames"
+        );
+
+        // Detector timing should reflect the fake runtime delay.
+        let detector_mean_ms = metrics.stage(InferenceStage::Detector).mean_ns as f64 / 1_000_000.0;
+        assert!(
+            detector_mean_ms >= INFER_DELAY_MS as f64 - 5.0,
+            "detector mean {detector_mean_ms}ms should be close to {INFER_DELAY_MS}ms"
+        );
+
+        // Drop accounting.
+        assert!(
+            metrics.drops.input_overwritten > 0,
+            "input slot should overwrite unread frames"
+        );
+        assert!(
+            metrics.drops.output_overwritten > 0 || status_final.frames_processed <= 1,
+            "output slot should overwrite unread observations"
+        );
+        assert_eq!(
+            metrics.drops.processed, status_final.frames_processed,
+            "processed counter should match status"
+        );
+        assert_eq!(
+            metrics.drops.skipped_sequence, 0,
+            "no sequence should be skipped in this scenario"
         );
     }
 }

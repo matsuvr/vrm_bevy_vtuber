@@ -12,6 +12,7 @@ use vtuber_core::{LatestSlot, WorkerHandle};
 
 use crate::descriptor::{ModelDescriptor, RuntimeSettings};
 use crate::error::InferenceError;
+use crate::metrics::InferenceMetrics;
 use crate::state::{InferenceWorkerState, SharedStatus};
 use crate::worker::run_inference_worker;
 
@@ -50,19 +51,6 @@ pub struct InferenceController {
 pub struct InferenceWorkerResult {
     /// Final metrics captured by the worker.
     pub final_metrics: InferenceMetrics,
-}
-
-/// Snapshot of inference metrics exposed to callers.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct InferenceMetrics {
-    /// Total frames processed since worker start.
-    pub frames_processed: u64,
-    /// Total frames dropped because the output slot could not accept them.
-    pub frames_dropped: u64,
-    /// Frames overwritten in the input slot before being read.
-    pub frames_overwritten: u64,
-    /// Frames suppressed because their source sequence was already processed.
-    pub duplicate_frames_suppressed: u64,
 }
 
 impl InferenceController {
@@ -207,12 +195,7 @@ impl InferenceController {
             .status
             .lock()
             .expect("InferenceController status mutex poisoned");
-        InferenceMetrics {
-            frames_processed: status.frames_processed,
-            frames_dropped: status.frames_dropped,
-            frames_overwritten: status.frames_overwritten,
-            duplicate_frames_suppressed: status.duplicate_frames_suppressed,
-        }
+        status.metrics()
     }
 }
 
