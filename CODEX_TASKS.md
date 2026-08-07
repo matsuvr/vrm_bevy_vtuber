@@ -4124,7 +4124,7 @@ cargo test -p vtuber-tracking neutral_relative_pose
 
 #### M1-03-005: head rotation filterをquaternion中心で実装する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-03-004`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 

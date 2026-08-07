@@ -7,6 +7,8 @@
 
 /// Calibration: neutral reference collection and session state.
 pub mod calibration;
+/// Tracking filters: rotation smoothing and expression filtering.
+pub mod filter;
 /// Neutral-relative head pose generation and tracking pipeline stages.
 pub mod pipeline;
 /// Placeholder for tracking subsystem.
@@ -18,6 +20,7 @@ pub use calibration::{
     CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralContext,
     NeutralProfile, NeutralReference, NeutralValidationSettings, RejectionReason, SampleDecision,
 };
+pub use filter::{HeadFilterParams, HeadRotationFilter};
 pub use pipeline::{
     HeadPoseFailure, HeadPoseFrame, PoseFailureReason, compute_neutral_relative_pose,
 };
