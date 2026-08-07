@@ -7,6 +7,8 @@
 
 /// Calibration: neutral reference collection and session state.
 pub mod calibration;
+/// Confidence synthesis and hysteresis gating.
+pub mod confidence;
 /// Tracking filters: rotation smoothing and expression filtering.
 pub mod filter;
 /// Neutral-relative head pose generation and tracking pipeline stages.
@@ -19,6 +21,11 @@ pub mod pose;
 pub use calibration::{
     CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralContext,
     NeutralProfile, NeutralReference, NeutralValidationSettings, RejectionReason, SampleDecision,
+};
+pub use confidence::{
+    ConfidenceAssessment, ConfidenceConfigError, ConfidenceError, ConfidenceGate,
+    ConfidenceGateParams, ConfidenceInputs, ConfidencePolicies, ConfidenceSignal, ConfidenceSource,
+    MissingSourcePolicy, synthesize,
 };
 pub use filter::{
     ExpressionCalibration, ExpressionCalibrationError, ExpressionChannel, ExpressionFilter,

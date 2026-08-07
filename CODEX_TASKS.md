@@ -4202,7 +4202,7 @@ cargo test -p vtuber-tracking expression_normalization
 
 #### M1-03-007: confidence hysteresisを実装する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-03-006`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
