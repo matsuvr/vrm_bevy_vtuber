@@ -12,13 +12,15 @@ description = "Face model loading, preprocessing, and pure-Rust inference for vr
 vtuber-core = { path = "../vtuber-core" }
 tract-tflite = "=0.23.4"
 tract-onnx = { version = "=0.23.4", optional = true }
+tract-core = { version = "=0.23.4", optional = true }
 sha2 = "=0.10.8"
 hex = "=0.4.3"
+thiserror = "2"
 anyhow = "=1.0.103"
 
 [features]
 default = []
-onnx = ["dep:tract-onnx"]
+onnx = ["dep:tract-onnx", "dep:tract-core"]
 
 [dev-dependencies]
 

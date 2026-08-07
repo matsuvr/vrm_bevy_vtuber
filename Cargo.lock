@@ -6268,6 +6268,8 @@ dependencies = [
  "anyhow",
  "hex",
  "sha2",
+ "thiserror 2.0.19",
+ "tract-core",
  "tract-onnx",
  "tract-tflite",
  "vtuber-core",

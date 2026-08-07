@@ -1,0 +1,347 @@
+//! Controller for the inference worker.
+//!
+//! The controller lives on the application main thread. It spawns a single
+//! inference worker thread that owns the model runtime. Frames are consumed
+//! from a [`LatestSlot<VideoFrame>`] and results are published to a
+//! [`LatestSlot<RawFaceObservation>`].
+
+use std::sync::Arc;
+
+use vtuber_core::types::{RawFaceObservation, VideoFrame};
+use vtuber_core::{LatestSlot, WorkerHandle};
+
+use crate::descriptor::{ModelDescriptor, RuntimeSettings};
+use crate::error::InferenceError;
+use crate::state::{InferenceWorkerState, SharedStatus};
+use crate::worker::run_inference_worker;
+
+/// Capacity of the control channel between controller and worker.
+const CONTROL_CHANNEL_CAPACITY: usize = 8;
+
+/// Control commands sent from [`InferenceController`] to the inference worker.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ControlCommand {
+    /// Load the model described by `descriptor` using `settings`.
+    LoadModel {
+        /// Model descriptor. Boxed to keep the enum small.
+        descriptor: Box<ModelDescriptor>,
+        /// Runtime settings.
+        settings: RuntimeSettings,
+    },
+    /// Stop inference but keep the worker alive.
+    Pause,
+    /// Resume inference after a pause.
+    Resume,
+    /// Reset the worker to an idle state.
+    Reset,
+}
+
+/// Controller for the inference worker.
+pub struct InferenceController {
+    pub(crate) status: SharedStatus,
+    pub(crate) command_tx: Option<std::sync::mpsc::SyncSender<ControlCommand>>,
+    pub(crate) frame_slot: Arc<LatestSlot<VideoFrame>>,
+    pub(crate) output_slot: Arc<LatestSlot<RawFaceObservation>>,
+    pub(crate) worker: Option<WorkerHandle<InferenceWorkerResult>>,
+}
+
+/// Result returned by the inference worker when it finishes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InferenceWorkerResult {
+    /// Final metrics captured by the worker.
+    pub final_metrics: InferenceMetrics,
+}
+
+/// Snapshot of inference metrics exposed to callers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InferenceMetrics {
+    /// Total frames processed since worker start.
+    pub frames_processed: u64,
+    /// Total frames dropped because the output slot could not accept them.
+    pub frames_dropped: u64,
+    /// Frames overwritten in the input slot before being read.
+    pub frames_overwritten: u64,
+}
+
+impl InferenceController {
+    /// Creates a new controller in the idle state.
+    #[must_use]
+    pub fn new(
+        frame_slot: Arc<LatestSlot<VideoFrame>>,
+        output_slot: Arc<LatestSlot<RawFaceObservation>>,
+    ) -> Self {
+        Self {
+            status: Arc::new(std::sync::Mutex::new(
+                crate::state::InferenceWorkerStatus::new(),
+            )),
+            command_tx: None,
+            frame_slot,
+            output_slot,
+            worker: None,
+        }
+    }
+
+    /// Returns the capacity-one slot used for frame transport.
+    #[must_use]
+    pub fn frame_slot(&self) -> Arc<LatestSlot<VideoFrame>> {
+        Arc::clone(&self.frame_slot)
+    }
+
+    /// Returns the capacity-one slot used for inference output transport.
+    #[must_use]
+    pub fn output_slot(&self) -> Arc<LatestSlot<RawFaceObservation>> {
+        Arc::clone(&self.output_slot)
+    }
+
+    /// Returns a snapshot of the current worker status.
+    #[must_use]
+    pub fn status(&self) -> crate::state::InferenceWorkerStatus {
+        self.status
+            .lock()
+            .expect("InferenceController status mutex poisoned")
+            .clone()
+    }
+
+    /// Starts the inference worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InferenceError::AlreadyRunning`] if the worker is already started.
+    pub fn start_worker(&mut self) -> Result<(), InferenceError> {
+        if self.worker.is_some() {
+            return Err(InferenceError::AlreadyRunning);
+        }
+
+        let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(CONTROL_CHANNEL_CAPACITY);
+        self.command_tx = Some(tx.clone());
+
+        let status = Arc::clone(&self.status);
+        let frame_slot = Arc::clone(&self.frame_slot);
+        let output_slot = Arc::clone(&self.output_slot);
+
+        let worker = WorkerHandle::spawn("inference-worker", move |stop| {
+            run_inference_worker(rx, stop, status, frame_slot, output_slot)
+        });
+
+        self.worker = Some(worker);
+        Ok(())
+    }
+
+    /// Loads a model described by `descriptor` with the given runtime settings.
+    ///
+    /// The model runtime is constructed inside the worker; the descriptor is
+    /// plain data and can safely cross thread boundaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the worker has not been started or the command
+    /// channel has been closed.
+    pub fn load_model(
+        &mut self,
+        descriptor: ModelDescriptor,
+        settings: RuntimeSettings,
+    ) -> Result<(), InferenceError> {
+        let tx = self
+            .command_tx
+            .as_ref()
+            .ok_or_else(|| InferenceError::Internal("inference worker not started".into()))?;
+
+        {
+            let mut status = self
+                .status
+                .lock()
+                .expect("InferenceController status mutex poisoned");
+            status.transition_to(InferenceWorkerState::LoadingModel);
+        }
+
+        tx.send(ControlCommand::LoadModel {
+            descriptor: Box::new(descriptor),
+            settings,
+        })
+        .map_err(|_| InferenceError::Internal("inference worker command channel closed".into()))?;
+        Ok(())
+    }
+
+    /// Pauses inference without stopping the worker.
+    pub fn pause(&mut self) {
+        if let Some(tx) = self.command_tx.as_ref() {
+            let _ = tx.send(ControlCommand::Pause);
+        }
+    }
+
+    /// Resumes inference after a pause.
+    pub fn resume(&mut self) {
+        if let Some(tx) = self.command_tx.as_ref() {
+            let _ = tx.send(ControlCommand::Resume);
+        }
+    }
+
+    /// Resets the worker to idle, releasing any loaded model.
+    pub fn reset(&mut self) {
+        if let Some(tx) = self.command_tx.as_ref() {
+            let _ = tx.send(ControlCommand::Reset);
+        }
+        {
+            let mut status = self
+                .status
+                .lock()
+                .expect("InferenceController status mutex poisoned");
+            status.transition_to(InferenceWorkerState::Idle);
+        }
+    }
+
+    /// Requests graceful shutdown and joins the worker.
+    ///
+    /// This consumes the controller. After this call returns, no worker thread
+    /// is running and the output slot is closed.
+    pub fn shutdown(mut self) -> InferenceMetrics {
+        if let Some(worker) = self.worker.take() {
+            worker.stop();
+            let _ = worker.join();
+        }
+        self.output_slot.close();
+
+        let status = self
+            .status
+            .lock()
+            .expect("InferenceController status mutex poisoned");
+        InferenceMetrics {
+            frames_processed: status.frames_processed,
+            frames_dropped: status.frames_dropped,
+            frames_overwritten: status.frames_overwritten,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    use vtuber_core::types::{FrameSeq, MonoTimeNs, PixelFormat};
+
+    use crate::descriptor::{
+        ChannelOrder, ModelDescriptor, ModelFormat, Normalization, RuntimeSettings,
+    };
+    use crate::state::{FailureStage, InferenceWorkerState};
+
+    fn dummy_descriptor() -> ModelDescriptor {
+        ModelDescriptor {
+            id: "dummy".into(),
+            format: ModelFormat::Tflite,
+            path: std::path::PathBuf::from("/dev/null"),
+            sha256: "0000".into(),
+            input_name: "input".into(),
+            input_shape: vec![1, 256, 256, 3],
+            input_dtype: "f32".into(),
+            channel_order: ChannelOrder::Rgb,
+            normalization: Normalization::ZeroToOne,
+            schema: vtuber_core::types::LandmarkSchemaId("dummy"),
+        }
+    }
+
+    fn dummy_frame(seq: u64) -> VideoFrame {
+        VideoFrame {
+            seq: FrameSeq(seq),
+            captured_at: MonoTimeNs(seq * 1_000_000),
+            width: 64,
+            height: 64,
+            stride_bytes: 64 * 3,
+            format: PixelFormat::Rgb8,
+            data: vec![0u8; 64 * 64 * 3].into(),
+        }
+    }
+
+    #[test]
+    fn worker_state_transitions_idle_loading_failed() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let mut controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+
+        assert_eq!(controller.status().state, InferenceWorkerState::Idle);
+
+        controller.start_worker().expect("start worker");
+        assert!(controller.worker.is_some());
+
+        controller
+            .load_model(dummy_descriptor(), RuntimeSettings::default())
+            .expect("send load model");
+
+        // Wait for the worker to process the load command and fail.
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(controller.status().state, InferenceWorkerState::Failed);
+        assert_eq!(
+            controller.status().last_failure.as_ref().map(|f| f.stage),
+            Some(FailureStage::ModelLoad)
+        );
+
+        controller.shutdown();
+    }
+
+    #[test]
+    fn controller_does_not_start_twice() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let mut controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+
+        controller.start_worker().expect("first start");
+        assert_eq!(
+            controller.start_worker().unwrap_err(),
+            InferenceError::AlreadyRunning
+        );
+        controller.shutdown();
+    }
+
+    #[test]
+    fn worker_drops_output_when_slot_full() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let mut controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+
+        controller.start_worker().expect("start worker");
+        controller
+            .load_model(dummy_descriptor(), RuntimeSettings::default())
+            .expect("send load model");
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Even though runtime load fails, the output slot remains closed on shutdown.
+        controller.shutdown();
+        assert!(output_slot.is_closed());
+    }
+
+    #[test]
+    fn pause_prevents_frame_processing() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let mut controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+
+        controller.start_worker().expect("start worker");
+        controller.pause();
+
+        // Publish a frame while paused; it should remain unread because no
+        // runtime is loaded and the worker is paused.
+        frame_slot.publish(dummy_frame(1));
+        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(controller.status().frames_processed, 0);
+
+        controller.shutdown();
+    }
+
+    #[test]
+    fn reset_returns_to_idle() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let mut controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+
+        controller.start_worker().expect("start worker");
+        controller.reset();
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(controller.status().state, InferenceWorkerState::Idle);
+        controller.shutdown();
+    }
+}
