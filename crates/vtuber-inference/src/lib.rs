@@ -5,6 +5,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Tract-based inference backends.
+pub mod backend;
 /// Inference worker controller and command protocol.
 pub mod controller;
 /// Model descriptor and runtime settings.

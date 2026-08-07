@@ -3577,7 +3577,7 @@ cargo clippy -p vtuber-inference --all-targets -- -D warnings
 
 #### M1-02-002: worker startup内でmodel runtimeをconstructする
 
-状態: `LEGACY_PROGRESS_CURRENT`  
+状態: `DONE`  
 依存: `M1-02-001`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
