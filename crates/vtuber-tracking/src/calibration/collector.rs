@@ -168,6 +168,19 @@ impl CalibrationCollector {
         &self.samples
     }
 
+    /// Returns a mutable reference to the retained samples.
+    ///
+    /// # Safety
+    ///
+    /// This is intended for tests that need to bypass the collector's
+    /// validation to exercise downstream aggregation.  Mutating the samples
+    /// can violate the collector's invariants.
+    #[cfg(test)]
+    #[must_use]
+    pub fn samples_mut(&mut self) -> &mut Vec<CalibrationInput> {
+        &mut self.samples
+    }
+
     /// Returns the current diagnostic counters.
     #[must_use]
     pub fn metrics(&self) -> &CollectorMetrics {
@@ -185,6 +198,12 @@ impl CalibrationCollector {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.samples.len() >= self.settings.required_sample_count()
+    }
+
+    /// Returns the landmark schema observed so far, if any.
+    #[must_use]
+    pub fn schema_id(&self) -> Option<LandmarkSchemaId> {
+        self.schema
     }
 
     /// Offers a single frame to the collector.

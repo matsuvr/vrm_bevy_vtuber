@@ -63,6 +63,22 @@ pub struct NeutralProfile {
     pub camera_fingerprint: Option<String>,
 }
 
+impl NeutralProfile {
+    /// Returns `true` if this profile may be reused for the given model hash.
+    ///
+    /// When both sides provide a hash, they must match exactly.  When either
+    /// side lacks a hash, compatibility cannot be verified and the profile is
+    /// allowed; this preserves legacy profiles collected before model-hash
+    /// tracking was added while still blocking definitely-different hashes.
+    #[must_use]
+    pub fn is_compatible_with(&self, model_hash: Option<&str>) -> bool {
+        match (&self.model_hash, model_hash) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
+        }
+    }
+}
+
 /// Lifecycle of a single calibration session.
 ///
 /// The session state is independent of any UI or Bevy state. Transitions are

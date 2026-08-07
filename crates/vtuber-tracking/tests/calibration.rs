@@ -9,7 +9,10 @@ use vtuber_core::control::CalibrationSettings;
 use vtuber_core::types::{
     FrameSeq, Landmark3, LandmarkSchemaId, MonoTimeNs, RawExpressionObservation,
 };
-use vtuber_tracking::{CalibrationCollector, CalibrationInput, RejectionReason, SampleDecision};
+use vtuber_tracking::{
+    CalibrationCollector, CalibrationInput, NeutralContext, NeutralReference,
+    NeutralValidationSettings, RejectionReason, SampleDecision,
+};
 
 fn settings() -> CalibrationSettings {
     CalibrationSettings::try_new(5, 5.0, 0.5, 5.0f32.to_radians(), 0.15).unwrap()
@@ -244,4 +247,45 @@ fn calibration_collector_ready_only_after_required_samples() {
     }
     collector.offer(input(5, 0.9));
     assert!(collector.is_ready());
+}
+
+#[test]
+fn neutral_reference_integration_builds_valid_profile() {
+    let settings = CalibrationSettings::try_new(5, 5.0, 0.5, 5.0f32.to_radians(), 0.15).unwrap();
+    let mut collector = CalibrationCollector::new(settings);
+    for seq in 1..=5 {
+        collector.offer(input(seq, 0.9));
+    }
+
+    let profile = NeutralReference::aggregate(
+        &collector,
+        &NeutralValidationSettings::default(),
+        &NeutralContext::new(
+            MonoTimeNs(1_000_000_000),
+            Some("model-hash".into()),
+            Some("camera-fp".into()),
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(profile.schema, LandmarkSchemaId("integration-test"));
+    assert!(!profile.landmarks.is_empty());
+    assert!(profile.is_compatible_with(Some("model-hash")));
+    assert!(!profile.is_compatible_with(Some("other-hash")));
+}
+
+#[test]
+fn neutral_reference_integration_rejects_incomplete_collector() {
+    let settings = CalibrationSettings::try_new(5, 5.0, 0.5, 5.0f32.to_radians(), 0.15).unwrap();
+    let mut collector = CalibrationCollector::new(settings);
+    collector.offer(input(1, 0.9));
+
+    let err = NeutralReference::aggregate(
+        &collector,
+        &NeutralValidationSettings::default(),
+        &NeutralContext::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code(), "CALIBRATION_INSUFFICIENT_SAMPLES");
 }

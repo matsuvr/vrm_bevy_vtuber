@@ -13,7 +13,7 @@ pub mod placeholder;
 pub mod pose;
 
 pub use calibration::{
-    CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralProfile,
-    RejectionReason, SampleDecision,
+    CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralContext,
+    NeutralProfile, NeutralReference, NeutralValidationSettings, RejectionReason, SampleDecision,
 };
 pub use pose::{LandmarkSet, PoseAlignment, PoseError, WeightedPoint, solve_relative_pose};

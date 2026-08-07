@@ -177,6 +177,30 @@ pub enum CalibrationError {
         /// Requested state name.
         to: &'static str,
     },
+    /// Too few landmarks were supplied to build a neutral reference.
+    InsufficientLandmarks(usize),
+    /// The neutral landmark point cloud is degenerate (collinear or all identical).
+    DegeneratePointCloud,
+    /// Head pose spread across calibration samples is too large.
+    PoseSpreadTooLarge {
+        /// Observed yaw spread in radians.
+        yaw: f32,
+        /// Observed pitch spread in radians.
+        pitch: f32,
+        /// Observed roll spread in radians.
+        roll: f32,
+        /// Maximum allowed spread in radians.
+        max: f32,
+    },
+    /// Landmark position spread across calibration samples is too large.
+    LandmarkSpreadTooLarge {
+        /// Observed normalized spread.
+        spread: f32,
+        /// Maximum allowed normalized spread.
+        max: f32,
+    },
+    /// The profile's model hash does not match the active model.
+    ModelHashMismatch,
 }
 
 impl fmt::Display for CalibrationError {
@@ -209,6 +233,29 @@ impl fmt::Display for CalibrationError {
                     "cannot transition calibration session from {from} to {to}"
                 )
             }
+            Self::InsufficientLandmarks(n) => {
+                write!(f, "insufficient landmarks: need at least 3, got {n}")
+            }
+            Self::DegeneratePointCloud => {
+                write!(f, "neutral landmark point cloud is degenerate")
+            }
+            Self::PoseSpreadTooLarge {
+                yaw,
+                pitch,
+                roll,
+                max,
+            } => {
+                write!(
+                    f,
+                    "head pose spread too large: yaw={yaw}, pitch={pitch}, roll={roll}, max={max}"
+                )
+            }
+            Self::LandmarkSpreadTooLarge { spread, max } => {
+                write!(f, "landmark spread too large: spread={spread}, max={max}")
+            }
+            Self::ModelHashMismatch => {
+                write!(f, "profile model hash does not match active model")
+            }
         }
     }
 }
@@ -230,6 +277,11 @@ impl CalibrationError {
             Self::InvalidMotionThreshold(_) => "CALIBRATION_INVALID_MOTION_THRESHOLD",
             Self::ExpressionMotionOutOfRange(_) => "CALIBRATION_EXPRESSION_MOTION_OUT_OF_RANGE",
             Self::InvalidStateTransition { .. } => "CALIBRATION_INVALID_STATE_TRANSITION",
+            Self::InsufficientLandmarks(_) => "CALIBRATION_INSUFFICIENT_LANDMARKS",
+            Self::DegeneratePointCloud => "CALIBRATION_DEGENERATE_POINT_CLOUD",
+            Self::PoseSpreadTooLarge { .. } => "CALIBRATION_POSE_SPREAD_TOO_LARGE",
+            Self::LandmarkSpreadTooLarge { .. } => "CALIBRATION_LANDMARK_SPREAD_TOO_LARGE",
+            Self::ModelHashMismatch => "CALIBRATION_MODEL_HASH_MISMATCH",
         }
     }
 }
