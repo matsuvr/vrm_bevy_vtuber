@@ -4241,7 +4241,7 @@ cargo test -p vtuber-tracking confidence_hysteresis
 
 #### M1-03-008: tracking state machineを実装する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-03-007`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 

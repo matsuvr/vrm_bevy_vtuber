@@ -17,6 +17,8 @@ pub mod pipeline;
 pub mod placeholder;
 /// Head pose estimation from landmark sets.
 pub mod pose;
+/// Explicit tracking state machine and transition table.
+pub mod state_machine;
 
 pub use calibration::{
     CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralContext,
@@ -36,3 +38,7 @@ pub use pipeline::{
     HeadPoseFailure, HeadPoseFrame, PoseFailureReason, compute_neutral_relative_pose,
 };
 pub use pose::{LandmarkSet, PoseAlignment, PoseError, WeightedPoint, solve_relative_pose};
+pub use state_machine::{
+    StateMachineConfigError, StateMachineParams, StateTransitionResult, TrackingAction,
+    TrackingStateMachine, TransitionInput,
+};
