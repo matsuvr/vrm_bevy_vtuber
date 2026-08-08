@@ -7,10 +7,15 @@
 //! an ECS world. The sign convention and Euler order follow ADR-004.
 
 pub mod binding;
+pub mod distribution;
 pub mod math;
 pub mod types;
 
 pub use binding::{RestOrientationCache, RestOrientationError, build_rest_orientation_cache};
+pub use distribution::{
+    DistributedPose, DistributionDiagnostic, HeadNeckWeights, PoseClampSettings,
+    PoseDistributionSettings, apply_distributed_pose, distribute_pose,
+};
 pub use math::{
     apply_model_delta_to_bone, bone_rest_model_rotation, compute_output_rotation,
     model_delta_to_local_delta,
