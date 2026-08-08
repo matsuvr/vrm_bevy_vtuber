@@ -8,8 +8,13 @@
 
 pub mod compatibility;
 pub mod lifecycle;
+pub mod load;
 pub mod placeholder;
 pub mod plugin;
 
 pub use lifecycle::*;
+pub use load::{
+    AssetPathError, AvatarAssetId, ImportedAvatar, LoadImportedAvatarError,
+    LoadImportedAvatarRequest, LoadImportedAvatarResult, PendingAvatarLoad, UserAssetPath,
+};
 pub use plugin::{StartupModelPath, VtuberAvatarPlugin};

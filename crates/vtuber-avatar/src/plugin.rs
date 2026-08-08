@@ -11,6 +11,9 @@ use crate::lifecycle::{
     AvatarLifecycle, LoadAvatarRequest, LoadAvatarResult, ReplaceAvatarRequest,
     ReplaceAvatarResult, UnloadAvatarRequest, UnloadAvatarResult, apply_avatar_request_events,
 };
+use crate::load::{
+    LoadImportedAvatarRequest, LoadImportedAvatarResult, handle_load_imported_avatar_requests,
+};
 
 /// Plugin that sets up the VRM avatar scene, lifecycle, and diagnostics.
 #[derive(Default)]
@@ -27,8 +30,17 @@ impl Plugin for VtuberAvatarPlugin {
             .add_message::<UnloadAvatarResult>()
             .add_message::<ReplaceAvatarRequest>()
             .add_message::<ReplaceAvatarResult>()
+            .add_message::<LoadImportedAvatarRequest>()
+            .add_message::<LoadImportedAvatarResult>()
             .add_systems(Startup, setup_scene)
-            .add_systems(Update, apply_avatar_request_events)
+            .add_systems(
+                Update,
+                (
+                    handle_load_imported_avatar_requests,
+                    apply_avatar_request_events,
+                )
+                    .chain(),
+            )
             .add_systems(Update, log_loaded_vrm)
             .add_systems(Update, log_head_bone);
     }
