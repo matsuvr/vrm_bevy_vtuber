@@ -4,6 +4,8 @@
 //! into VRM expression weight commands. The builder is pure and testable
 //! without Bevy ECS.
 
+pub mod blink;
 pub mod command;
 
+pub use blink::{RawBlinkInput, map_blink_to_expressions, map_blink_with_fallback};
 pub use command::{ExpressionCommand, ExpressionCommandBuilder, ExpressionCommandMetrics};
