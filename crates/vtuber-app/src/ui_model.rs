@@ -67,6 +67,8 @@ pub struct AvatarViewModel {
     pub lifecycle: AvatarLifecycleState,
     /// Whether the avatar is ready for tracking.
     pub is_ready: bool,
+    /// Whether the avatar load/binding failed (recoverable).
+    pub load_failed: bool,
 }
 
 /// Summary of an imported model for display.

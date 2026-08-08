@@ -3,7 +3,7 @@
 use bevy_egui::egui::Ui;
 
 use crate::actions::UiAction;
-use crate::ui_model::UiViewModel;
+use crate::ui_model::{AvatarLifecycleState, UiViewModel};
 
 use super::file_dialog::FileDialogState;
 
@@ -62,6 +62,38 @@ pub fn render_setup_screen(
             }
         ));
         ui.label(format!("Expressions: {}", model.expression_count));
+
+        // Lifecycle status for the avatar.
+        match vm.avatar.lifecycle {
+            AvatarLifecycleState::None => {
+                ui.label("Status: Waiting to load…");
+            }
+            AvatarLifecycleState::Loading => {
+                ui.colored_label(
+                    bevy_egui::egui::Color32::LIGHT_BLUE,
+                    "Status: Loading model…",
+                );
+            }
+            AvatarLifecycleState::Binding => {
+                ui.colored_label(
+                    bevy_egui::egui::Color32::LIGHT_YELLOW,
+                    "Status: Binding bones…",
+                );
+            }
+            AvatarLifecycleState::Ready => {
+                ui.colored_label(bevy_egui::egui::Color32::LIGHT_GREEN, "Status: Ready");
+            }
+            AvatarLifecycleState::Unloading => {
+                ui.label("Status: Unloading…");
+            }
+            AvatarLifecycleState::Failed => {
+                ui.colored_label(bevy_egui::egui::Color32::LIGHT_RED, "Status: Load failed");
+                if ui.button("Retry Load").clicked() {
+                    ui_state.emit(UiAction::RetryAfterError);
+                }
+            }
+        }
+
         if ui.button("Unload Avatar").clicked() {
             ui_state.emit(UiAction::UnloadAvatar);
         }

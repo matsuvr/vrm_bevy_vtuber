@@ -3,21 +3,83 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::path::PathBuf;
+
+use bevy::asset::io::{AssetSourceBuilder, AssetSourceBuilders};
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
+use vtuber_app::import;
+use vtuber_app::orchestrator::Orchestrator;
 use vtuber_app::ui::UiShellPlugin;
-use vtuber_avatar::{StartupModelPath, VtuberAvatarPlugin};
+use vtuber_avatar::{
+    AvatarAssetId, ImportedAvatar, LoadImportedAvatarRequest, StartupModelPath, UserAssetPath,
+    VtuberAvatarPlugin,
+};
 
 fn main() {
-    let model_path = parse_model_arg();
+    let managed_root = managed_asset_root();
+    std::fs::create_dir_all(&managed_root).ok();
 
-    App::new()
+    // Import CLI model through the managed asset source so that the same
+    // `user://avatars/<sha256>/model.vrm` path invariant is used.
+    let startup_model = parse_model_arg().and_then(|path| {
+        match import::import_vrm(&path, &managed_root, import::DEFAULT_SIZE_LIMIT) {
+            Ok(model) => {
+                let id = AvatarAssetId::new(&model.id);
+                match UserAssetPath::avatar_model_path(&id) {
+                    Ok(asset_path) => Some(ImportedAvatar::new(id, asset_path, model.name.clone())),
+                    Err(e) => {
+                        eprintln!("Failed to construct user asset path for CLI model: {e}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to import CLI model: {e}");
+                None
+            }
+        }
+    });
+
+    // Register the `user` asset source BEFORE DefaultPlugins so that
+    // `user://avatars/<sha256>/model.vrm` resolves to
+    // `<managed_root>/avatars/<sha256>/model.vrm`.
+    let mut sources = AssetSourceBuilders::default();
+    sources.insert(
+        "user",
+        AssetSourceBuilder::platform_default(
+            managed_root.to_str().expect("managed root is valid UTF-8"),
+            None,
+        ),
+    );
+
+    let mut app = App::new();
+    app.insert_resource(sources)
         .add_plugins(DefaultPlugins)
         .add_plugins(EguiPlugin::default())
         .add_plugins(VtuberAvatarPlugin)
         .add_plugins(UiShellPlugin)
-        .insert_resource(StartupModelPath(model_path))
-        .run();
+        .insert_resource(Orchestrator::new(managed_root));
+
+    if let Some(imported) = startup_model {
+        app.insert_resource(StartupModelPath(Some(imported.id.0.clone())));
+        app.insert_resource(StartupImportedAvatar(imported));
+    }
+
+    app.add_systems(Startup, submit_startup_model_request).run();
+}
+
+/// Returns the application-managed asset root directory.
+///
+/// On Windows this is `%APPDATA%\vrm-bevy-vtuber`. Falls back to
+/// `.vtuber` in the current directory when the platform directories
+/// crate cannot determine a suitable location.
+fn managed_asset_root() -> PathBuf {
+    if let Some(proj_dirs) = directories::ProjectDirs::from("", "", "vrm-bevy-vtuber") {
+        proj_dirs.data_dir().to_path_buf()
+    } else {
+        PathBuf::from(".vtuber")
+    }
 }
 
 /// Parses the optional `--model <path>` command-line argument.
@@ -28,40 +90,30 @@ fn parse_model_arg() -> Option<String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--model" {
-            return args.next().map(canonicalize_asset_path);
+            return args.next();
         }
     }
     None
 }
 
-/// Converts an arbitrary filesystem path into a path usable by Bevy's
-/// `AssetServer` while keeping it inside the approved asset root.
+/// Resource holding the imported avatar from the CLI `--model` argument.
 ///
-/// Bevy 0.19 rejects absolute paths by default and resolves relative paths
-/// against `apps/desktop/assets`. To load models outside that directory
-/// (e.g. `tests/fixtures/vrm/`), we copy the file into the approved asset
-/// root on startup and return the asset-relative path.
-fn canonicalize_asset_path(path: String) -> String {
-    // If the path is already inside the approved asset root, use it as-is.
-    if !std::path::Path::new(&path).is_absolute() {
-        return path;
-    }
+/// The startup system reads this and emits a [`LoadImportedAvatarRequest`]
+/// so the model is loaded through the avatar lifecycle.
+#[derive(Resource, Debug)]
+struct StartupImportedAvatar(ImportedAvatar);
 
-    let workspace_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let assets_dir = workspace_root.join("apps/desktop/assets/models");
-    let _ = std::fs::create_dir_all(&assets_dir);
-
-    let source = std::path::Path::new(&path);
-    let file_name = source
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "model.vrm".to_string());
-    let dest = assets_dir.join(&file_name);
-
-    if let Err(e) = std::fs::copy(source, &dest) {
-        eprintln!("Failed to stage model into asset root: {e}");
-        return path;
-    }
-
-    format!("models/{file_name}")
+/// Startup system that submits a CLI-imported model to the avatar lifecycle.
+///
+/// Reads the [`StartupImportedAvatar`] resource (if present) and writes a
+/// [`LoadImportedAvatarRequest`] message that the avatar plugin consumes.
+fn submit_startup_model_request(
+    startup: Option<Res<StartupImportedAvatar>>,
+    mut load_requests: MessageWriter<LoadImportedAvatarRequest>,
+) {
+    let Some(imported) = startup else { return };
+    load_requests.write(LoadImportedAvatarRequest {
+        request_id: 0,
+        imported: imported.0.clone(),
+    });
 }

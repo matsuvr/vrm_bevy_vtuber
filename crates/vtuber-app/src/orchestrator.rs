@@ -3,6 +3,12 @@
 //! The orchestrator receives [`UiAction`] commands from the UI layer and
 //! translates them into domain service calls (camera, import, tracking, etc.).
 //! It updates the [`UiViewModel`] snapshot that the UI reads each frame.
+//!
+//! Avatar loading is bridged to the `vtuber-avatar` lifecycle through a
+//! pending-request protocol: after a successful import the orchestrator stores
+//! a [`PendingLoadRequest`]; a Bevy system (in the same crate) drains it and
+//! emits the corresponding `LoadImportedAvatarRequest` message that the avatar
+//! plugin consumes.
 
 use std::path::PathBuf;
 
@@ -12,6 +18,19 @@ use crate::actions::UiAction;
 use crate::import::{self, ImportedModel, ModelImportError};
 use crate::ui::UiState;
 use crate::ui_model::*;
+
+/// A pending avatar load request waiting to be submitted to the lifecycle.
+///
+/// After a successful `import_vrm()` call the orchestrator stores the
+/// [`ImportedModel`] here. A Bevy system drains this value and emits a
+/// `LoadImportedAvatarRequest` message that the avatar plugin consumes.
+#[derive(Clone, Debug)]
+pub struct PendingLoadRequest {
+    /// Monotonically increasing correlation identifier.
+    pub request_id: u64,
+    /// The imported model to load.
+    pub model: ImportedModel,
+}
 
 /// Resource managing the application orchestration state.
 #[derive(Resource, Debug)]
@@ -32,6 +51,12 @@ pub struct Orchestrator {
     pipeline_state: PipelineState,
     /// Current UI screen.
     current_screen: Screen,
+    /// Pending avatar load request not yet submitted to the lifecycle.
+    pending_load: Option<PendingLoadRequest>,
+    /// Next avatar load request correlation identifier.
+    next_load_request_id: u64,
+    /// Mirror of the avatar lifecycle state, updated by the sync system.
+    lifecycle_state: crate::ui_model::AvatarLifecycleState,
 }
 
 /// State of the tracking pipeline.
@@ -102,6 +127,9 @@ impl Default for Orchestrator {
             last_error: None,
             pipeline_state: PipelineState::Idle,
             current_screen: Screen::default(),
+            pending_load: None,
+            next_load_request_id: 1,
+            lifecycle_state: AvatarLifecycleState::None,
         }
     }
 }
@@ -144,8 +172,7 @@ impl Orchestrator {
                 self.last_error = None;
             }
             UiAction::RetryAfterError => {
-                self.last_error = None;
-                // Retry logic depends on the error type.
+                self.retry_avatar_load();
             }
             _ => {
                 // Other actions handled by specific subsystems.
@@ -177,14 +204,29 @@ impl Orchestrator {
     }
 
     /// Import an avatar from the given path.
+    ///
+    /// On success the imported model is stored and a [`PendingLoadRequest`] is
+    /// queued. The sync system drains the pending request and emits a
+    /// `LoadImportedAvatarRequest` that the avatar lifecycle consumes.
     fn import_avatar(&mut self, path: &PathBuf) {
         self.import_state = ImportState::InProgress;
         self.last_error = None;
 
         match import::import_vrm(path, &self.asset_root, import::DEFAULT_SIZE_LIMIT) {
             Ok(model) => {
+                let request_id = self.next_load_request_id;
+                self.next_load_request_id += 1;
+                self.pending_load = Some(PendingLoadRequest {
+                    request_id,
+                    model: model.clone(),
+                });
                 self.imported_model = Some(model);
                 self.import_state = ImportState::Success;
+                // Reset lifecycle from any previous Failed state so the new
+                // load can proceed.
+                if self.lifecycle_state == AvatarLifecycleState::Failed {
+                    self.lifecycle_state = AvatarLifecycleState::None;
+                }
             }
             Err(e) => {
                 let msg = format_import_error(&e);
@@ -195,9 +237,27 @@ impl Orchestrator {
     }
 
     /// Unload the current avatar.
+    ///
+    /// Clears the imported model and any pending load request. The sync system
+    /// detects the removal and emits an `UnloadAvatarRequest`.
     fn unload_avatar(&mut self) {
         self.imported_model = None;
         self.import_state = ImportState::Idle;
+        self.pending_load = None;
+    }
+
+    /// Retry a failed avatar load by re-submitting the current imported model.
+    fn retry_avatar_load(&mut self) {
+        if self.lifecycle_state != AvatarLifecycleState::Failed {
+            return;
+        }
+        if let Some(model) = self.imported_model.clone() {
+            let request_id = self.next_load_request_id;
+            self.next_load_request_id += 1;
+            self.pending_load = Some(PendingLoadRequest { request_id, model });
+            self.last_error = None;
+            self.lifecycle_state = AvatarLifecycleState::None;
+        }
     }
 
     /// Start the tracking pipeline.
@@ -242,6 +302,11 @@ impl Orchestrator {
     }
 
     /// Update the UI view model from current orchestrator state.
+    ///
+    /// The avatar `lifecycle` and `is_ready` fields are driven by the
+    /// lifecycle mirror maintained by the sync system, not by the presence of
+    /// an imported model. A model becomes ready only after the `bevy_vrm1`
+    /// asset has initialized and humanoid binding has completed.
     pub fn update_view_model(&self, vm: &mut UiViewModel) {
         // Screen.
         vm.screen = self.current_screen;
@@ -259,7 +324,7 @@ impl Orchestrator {
         vm.camera.available_cameras = self.cameras.clone();
         vm.camera.selected_index = self.selected_camera;
 
-        // Avatar.
+        // Avatar — imported model summary for display.
         vm.avatar.imported_model = self.imported_model.as_ref().map(|m| ImportedModelSummary {
             id: m.id.clone(),
             name: m.name.clone(),
@@ -268,7 +333,11 @@ impl Orchestrator {
                 && m.summary.humanoid_nodes.head < 1000,
             expression_count: m.summary.expression_presets.len(),
         });
-        vm.avatar.is_ready = self.imported_model.is_some();
+
+        // Avatar lifecycle — driven by the sync system, not by import state.
+        vm.avatar.lifecycle = self.lifecycle_state;
+        vm.avatar.is_ready = self.lifecycle_state == AvatarLifecycleState::Ready;
+        vm.avatar.load_failed = self.lifecycle_state == AvatarLifecycleState::Failed;
     }
 
     /// Get the last error, if any.
@@ -281,6 +350,34 @@ impl Orchestrator {
     #[must_use]
     pub fn import_state(&self) -> &ImportState {
         &self.import_state
+    }
+
+    /// Take the pending load request, if any.
+    ///
+    /// The sync system calls this once per request to obtain the data needed
+    /// to construct a `LoadImportedAvatarRequest` message.
+    pub fn take_pending_load_request(&mut self) -> Option<PendingLoadRequest> {
+        self.pending_load.take()
+    }
+
+    /// Update the lifecycle state mirror.
+    ///
+    /// The sync system calls this after reading the `AvatarLifecycle` resource
+    /// so that `update_view_model` can report the true lifecycle state.
+    pub fn set_lifecycle_state(&mut self, state: AvatarLifecycleState) {
+        self.lifecycle_state = state;
+    }
+
+    /// Whether the orchestrator has an imported model.
+    #[must_use]
+    pub fn has_imported_model(&self) -> bool {
+        self.imported_model.is_some()
+    }
+
+    /// The asset root used for model imports.
+    #[must_use]
+    pub fn asset_root(&self) -> &PathBuf {
+        &self.asset_root
     }
 }
 
@@ -316,6 +413,80 @@ pub fn process_ui_actions_system(
         orchestrator.process_action(action);
     }
     orchestrator.update_view_model(&mut view_model);
+}
+
+/// Converts the avatar lifecycle's internal state to the UI model's state.
+fn map_avatar_lifecycle_state(
+    state: vtuber_avatar::lifecycle::AvatarLifecycleState,
+) -> AvatarLifecycleState {
+    use vtuber_avatar::lifecycle::AvatarLifecycleState as Engine;
+    match state {
+        Engine::NoAvatar => AvatarLifecycleState::None,
+        Engine::Loading => AvatarLifecycleState::Loading,
+        Engine::Binding => AvatarLifecycleState::Binding,
+        Engine::Ready => AvatarLifecycleState::Ready,
+        Engine::Unloading => AvatarLifecycleState::Unloading,
+        Engine::Failed => AvatarLifecycleState::Failed,
+    }
+}
+
+/// System that bridges the orchestrator to the avatar lifecycle.
+///
+/// 1. Reads the [`AvatarLifecycle`] state and mirrors it into the orchestrator
+///    so that `update_view_model` reports the true engine state.
+/// 2. Drains any pending load request from the orchestrator and emits a
+///    [`LoadImportedAvatarRequest`] message.
+/// 3. Detects when the user has cleared the imported model while the lifecycle
+///    still has an active avatar, and emits an [`UnloadAvatarRequest`].
+///
+/// This system must run after [`process_ui_actions_system`] so that it sees
+/// the latest orchestrator mutations.
+pub fn sync_avatar_lifecycle_system(
+    mut orchestrator: ResMut<Orchestrator>,
+    lifecycle: Res<vtuber_avatar::lifecycle::AvatarLifecycle>,
+    mut load_requests: MessageWriter<vtuber_avatar::LoadImportedAvatarRequest>,
+    mut unload_requests: MessageWriter<vtuber_avatar::lifecycle::UnloadAvatarRequest>,
+) {
+    // 1. Mirror the lifecycle state into the orchestrator.
+    let engine_state = lifecycle.state();
+    let ui_state = map_avatar_lifecycle_state(engine_state);
+    orchestrator.set_lifecycle_state(ui_state);
+
+    // 2. Drain pending load requests.
+    if let Some(pending) = orchestrator.take_pending_load_request() {
+        let id = vtuber_avatar::AvatarAssetId::new(&pending.model.id);
+        let asset_path = vtuber_avatar::UserAssetPath::avatar_model_path(&id);
+
+        match asset_path {
+            Ok(path) => {
+                let imported =
+                    vtuber_avatar::ImportedAvatar::new(id, path, pending.model.name.clone());
+                load_requests.write(vtuber_avatar::LoadImportedAvatarRequest {
+                    request_id: pending.request_id,
+                    imported,
+                });
+            }
+            Err(e) => {
+                // Should never happen for a well-formed SHA-256 id, but handle
+                // gracefully rather than panicking.
+                bevy::log::error!(
+                    "failed to construct user asset path for import {}: {e}",
+                    pending.model.id
+                );
+            }
+        }
+    }
+
+    // 3. Detect unload: model cleared while lifecycle is still active.
+    if !orchestrator.has_imported_model() {
+        use vtuber_avatar::lifecycle::AvatarLifecycleState as Engine;
+        match engine_state {
+            Engine::Ready | Engine::Loading | Engine::Binding => {
+                unload_requests.write(vtuber_avatar::lifecycle::UnloadAvatarRequest);
+            }
+            Engine::NoAvatar | Engine::Unloading | Engine::Failed => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -437,5 +608,137 @@ mod tests {
         let err = ModelImportError::MissingRequiredBone("hips".to_string());
         let msg = format_import_error(&err);
         assert!(msg.contains("hips"));
+    }
+
+    fn stub_imported_model() -> ImportedModel {
+        ImportedModel {
+            id: "abc123".into(),
+            name: "Test Model".into(),
+            asset_path: PathBuf::new(),
+            meta_path: PathBuf::new(),
+            summary: Default::default(),
+            original_path: PathBuf::new(),
+            size: 0,
+        }
+    }
+
+    #[test]
+    fn orchestrator_unload_clears_pending_load() {
+        let mut orch = Orchestrator {
+            imported_model: Some(stub_imported_model()),
+            pending_load: Some(PendingLoadRequest {
+                request_id: 1,
+                model: stub_imported_model(),
+            }),
+            ..Default::default()
+        };
+        orch.process_action(&UiAction::UnloadAvatar);
+        assert!(orch.imported_model.is_none());
+        assert!(orch.take_pending_load_request().is_none());
+    }
+
+    #[test]
+    fn orchestrator_retry_after_failure_creates_pending_load() {
+        let model = stub_imported_model();
+        let mut orch = Orchestrator {
+            imported_model: Some(model.clone()),
+            lifecycle_state: AvatarLifecycleState::Failed,
+            ..Default::default()
+        };
+        orch.process_action(&UiAction::RetryAfterError);
+        let pending = orch
+            .take_pending_load_request()
+            .expect("should have pending load");
+        assert_eq!(pending.request_id, 1);
+        assert_eq!(pending.model.id, model.id);
+        assert_eq!(orch.lifecycle_state, AvatarLifecycleState::None);
+    }
+
+    #[test]
+    fn orchestrator_retry_ignored_when_not_failed() {
+        let mut orch = Orchestrator {
+            imported_model: Some(stub_imported_model()),
+            lifecycle_state: AvatarLifecycleState::Ready,
+            ..Default::default()
+        };
+        orch.process_action(&UiAction::RetryAfterError);
+        assert!(orch.take_pending_load_request().is_none());
+    }
+
+    #[test]
+    fn orchestrator_view_model_reflects_lifecycle_not_import() {
+        let orch = Orchestrator {
+            imported_model: Some(stub_imported_model()),
+            lifecycle_state: AvatarLifecycleState::Loading,
+            ..Default::default()
+        };
+        let mut vm = UiViewModel::default();
+        orch.update_view_model(&mut vm);
+
+        // Model is imported but lifecycle is Loading, so is_ready must be false.
+        assert!(vm.avatar.imported_model.is_some());
+        assert!(!vm.avatar.is_ready);
+        assert_eq!(vm.avatar.lifecycle, AvatarLifecycleState::Loading);
+        assert!(!vm.avatar.load_failed);
+    }
+
+    #[test]
+    fn orchestrator_view_model_ready_only_when_lifecycle_ready() {
+        let orch = Orchestrator {
+            imported_model: Some(stub_imported_model()),
+            lifecycle_state: AvatarLifecycleState::Ready,
+            ..Default::default()
+        };
+        let mut vm = UiViewModel::default();
+        orch.update_view_model(&mut vm);
+
+        assert!(vm.avatar.is_ready);
+        assert_eq!(vm.avatar.lifecycle, AvatarLifecycleState::Ready);
+        assert!(!vm.avatar.load_failed);
+    }
+
+    #[test]
+    fn orchestrator_view_model_failed_sets_load_failed() {
+        let orch = Orchestrator {
+            imported_model: Some(stub_imported_model()),
+            lifecycle_state: AvatarLifecycleState::Failed,
+            ..Default::default()
+        };
+        let mut vm = UiViewModel::default();
+        orch.update_view_model(&mut vm);
+
+        assert!(!vm.avatar.is_ready);
+        assert!(vm.avatar.load_failed);
+        assert_eq!(vm.avatar.lifecycle, AvatarLifecycleState::Failed);
+    }
+
+    #[test]
+    fn map_lifecycle_state_round_trip() {
+        use vtuber_avatar::lifecycle::AvatarLifecycleState as Engine;
+
+        assert_eq!(
+            map_avatar_lifecycle_state(Engine::NoAvatar),
+            AvatarLifecycleState::None
+        );
+        assert_eq!(
+            map_avatar_lifecycle_state(Engine::Loading),
+            AvatarLifecycleState::Loading
+        );
+        assert_eq!(
+            map_avatar_lifecycle_state(Engine::Binding),
+            AvatarLifecycleState::Binding
+        );
+        assert_eq!(
+            map_avatar_lifecycle_state(Engine::Ready),
+            AvatarLifecycleState::Ready
+        );
+        assert_eq!(
+            map_avatar_lifecycle_state(Engine::Unloading),
+            AvatarLifecycleState::Unloading
+        );
+        assert_eq!(
+            map_avatar_lifecycle_state(Engine::Failed),
+            AvatarLifecycleState::Failed
+        );
     }
 }

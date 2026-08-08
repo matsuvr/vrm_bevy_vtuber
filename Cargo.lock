@@ -6550,6 +6550,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "bevy_vrm1",
+ "directories",
  "vtuber-app",
  "vtuber-avatar",
 ]

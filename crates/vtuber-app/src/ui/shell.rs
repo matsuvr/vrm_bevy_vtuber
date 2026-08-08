@@ -9,7 +9,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use crate::actions::UiAction;
 use crate::diagnostics::DiagnosticsSnapshot;
 use crate::error_presenter::ErrorPresenter;
-use crate::orchestrator::{Orchestrator, process_ui_actions_system};
+use crate::orchestrator::{Orchestrator, process_ui_actions_system, sync_avatar_lifecycle_system};
 use crate::preview::PreviewState;
 use crate::ui_model::{Screen, UiViewModel};
 
@@ -37,8 +37,12 @@ impl Plugin for UiShellPlugin {
             .init_resource::<DiagnosticsSnapshot>()
             .init_resource::<ErrorPresenter>()
             .init_resource::<super::file_dialog::FileDialogState>()
-            // Action processing in Update (runs after EguiPrimaryContextPass).
-            .add_systems(Update, process_ui_actions_system)
+            // Action processing then lifecycle sync, chained in Update.
+            .add_systems(
+                Update,
+                (process_ui_actions_system, sync_avatar_lifecycle_system)
+                    .chain(),
+            )
             .add_systems(Update, sync_error_presenter)
             // egui rendering in EguiPrimaryContextPass.
             .add_systems(EguiPrimaryContextPass, ui_render_system);
