@@ -11,6 +11,9 @@ pub mod types;
 /// Control settings and commands for the tracking pipeline.
 pub mod control;
 
+/// Fixed-size metrics collection for acceptance testing.
+pub mod metrics;
+
 /// Raw observation contract between inference and tracking.
 pub mod observation;
 /// Latest-value slot for single-producer / single-consumer communication.
