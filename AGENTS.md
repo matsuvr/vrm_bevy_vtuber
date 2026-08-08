@@ -2,9 +2,9 @@
 
 ## Mission
 
-Implement the application described by `DESIGN.md` and `CODEX_TASKS.md`: a full-Rust, desktop-only VTuber application for VRM 1.0 using Bevy 0.19 and `bevy_vrm1`, with webcam face tracking on Windows and macOS.
+Implement the application described by `DESIGN.md` and `AI_AGENT_TASKS.md`: a full-Rust, desktop-only VTuber application for VRM 1.0 using Bevy 0.19 and `bevy_vrm1`, with webcam face tracking on Windows and macOS.
 
-Work on exactly one task ID from `CODEX_TASKS.md` at a time.
+Work on exactly one task ID from `AI_AGENT_TASKS.md` at a time.
 
 ## Sources of truth
 
@@ -12,7 +12,7 @@ Order of authority:
 
 1. Current user instruction
 2. `DESIGN.md`
-3. `CODEX_TASKS.md`
+3. `AI_AGENT_TASKS.md`
 4. Accepted ADRs under `docs/adr/`
 5. Official upstream documentation and source pinned by revision
 6. Existing code and tests
@@ -194,7 +194,7 @@ Do not claim camera, MToon, permission, or performance success without an actual
 
 ## Documentation
 
-- Keep `DESIGN.md`, `CODEX_TASKS.md`, ADRs, and public APIs consistent.
+- Keep `DESIGN.md`, `AI_AGENT_TASKS.md`, ADRs, and public APIs consistent.
 - Record tested OS, hardware, model SHA, Bevy version, `bevy_vrm1` revision, and commands in compatibility/performance reports.
 - Do not write unsupported claims such as “cross-platform” when only one OS was tested.
 

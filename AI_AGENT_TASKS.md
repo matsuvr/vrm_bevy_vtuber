@@ -1,4 +1,4 @@
-# CODEX_TASKS.md
+# AI_AGENT_TASKS.md
 
 基準日: 2026-08-04  
 subtask細分化改訂日: 2026-08-07  
@@ -70,7 +70,7 @@ subtask細分化改訂日: 2026-08-07
 ```text
 Implement <SUBTASK-ID> only.
 
-Read AGENTS.md, the parent task in CODEX_TASKS.md, the selected subtask, and only the DESIGN.md sections referenced by that parent/subtask.
+Read AGENTS.md, the parent task in AI_AGENT_TASKS.md, the selected subtask, and only the DESIGN.md sections referenced by that parent/subtask.
 Inspect the current repository before editing. Preserve all existing work, especially LEGACY_PROGRESS tasks. Do not reimplement the parent task or continue to the next subtask.
 
 Follow the exact Implementation instructions, exclusions, acceptance conditions, and verification commands. Resolve routine details from the existing code without asking questions. If an external prerequisite is genuinely unavailable, complete every non-blocked part and report a precise blocker.
@@ -6204,7 +6204,7 @@ sha256sum docs/acceptance/artifacts/* 2>/dev/null || true
 **変更候補**
 
 - `docs/acceptance/windows-m1.md`
-- `CODEX_TASKS.md status（運用時）`
+- `AI_AGENT_TASKS.md status（運用時）`
 
 
 **実装指示**

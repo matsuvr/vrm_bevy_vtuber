@@ -1,4 +1,4 @@
-# Codex bootstrap prompt
+# AI_AGENT bootstrap prompt
 
 Use the repository documents as binding implementation instructions.
 
@@ -6,7 +6,7 @@ Read, in this order:
 
 1. `AGENTS.md`
 2. `DESIGN.md`
-3. `CODEX_TASKS.md`
+3. `AI_AGENT_TASKS.md`
 4. every accepted ADR under `docs/adr/`
 5. `REFERENCES.md`
 

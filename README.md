@@ -21,11 +21,11 @@ Webカメラで一人の顔を追跡し、VRM 1.0モデルを動かすWindows／
 ## 読む順序
 
 1. `DESIGN.md` — 主設計書
-2. `AGENTS.md` — Codexが常時守る拘束条件
-3. `CODEX_TASKS.md` — PR単位の実装task
+2. `AGENTS.md` — AI_AGENTが常時守る拘束条件
+3. `AI_AGENT_TASKS.md` — PR単位の実装task
 4. `docs/adr/` — 主要な設計判断
 5. `REFERENCES.md` — 一次資料と固定source
-6. `CODEX_BOOTSTRAP_PROMPT.md` — 最初のtaskを開始するprompt
+6. `AI_AGENT_BOOTSTRAP_PROMPT.md` — 最初のtaskを開始するprompt
 7. `REVISION_NOTES.md` — 前版からの変更点
 
 補助資料:
@@ -33,9 +33,9 @@ Webカメラで一人の顔を追跡し、VRM 1.0モデルを動かすWindows／
 - `docs/MODEL_COMPATIBILITY_TEMPLATE.md`
 - `docs/PERFORMANCE_TEST_PLAN.md`
 
-## Codexでの使い方
+## AI_AGENTでの使い方
 
-設計一式をrepository rootへ配置し、最初に`CODEX_BOOTSTRAP_PROMPT.md`を渡す。以後は`CODEX_TASKS.md`からtask IDを一つだけ指定する。
+設計一式をrepository rootへ配置し、最初に`AI_AGENT_BOOTSTRAP_PROMPT.md`を渡す。以後は`AI_AGENT_TASKS.md`からtask IDを一つだけ指定する。
 
 Gate 0を省略しない。特に、顔modelのpure-Rust runtime互換性、対象VRMの`bevy_vrm1`互換性、Windows／macOS camera、macOS app bundle permissionを実測してから縦断MVPへ進む。
 

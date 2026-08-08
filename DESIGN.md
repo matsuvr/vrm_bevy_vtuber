@@ -7,7 +7,7 @@
 描画基盤: Bevy 0.19.0
 VRMランタイム: `bevy_vrm1` 0.9.1相当、Git revision固定
 主要用途: Webカメラによる単一人物の顔追跡とVRMアバター制御
-実装担当想定: Codex
+実装担当想定: AI_AGENT
 
 ---
 
@@ -15,7 +15,7 @@ VRMランタイム: `bevy_vrm1` 0.9.1相当、Git revision固定
 
 本書は、Webカメラから一人分の顔を追跡し、その結果でVRM 1.0モデルの頭、首、眼、まばたき、口形状を動かす基本的なVTuberアプリを、WindowsおよびmacOS向けに原則Rustだけで構築するための実装契約である。
 
-本書は概念説明ではなく、Codexが段階的に実装し、各段階をテスト可能な単位で完了させるための詳細設計として扱う。次を明確に定義する。
+本書は概念説明ではなく、AI_AGENTが段階的に実装し、各段階をテスト可能な単位で完了させるための詳細設計として扱う。次を明確に定義する。
 
 - 製品スコープと非スコープ
 - 採用ライブラリとバージョン固定方針
@@ -28,7 +28,7 @@ VRMランタイム: `bevy_vrm1` 0.9.1相当、Git revision固定
 - WindowsとmacOSの差分
 - モデル互換性、既知制約、upstream修正方針
 - テスト、性能計測、パッケージング
-- Codex向けの実装順序と受入条件
+- AI_AGENT向けの実装順序と受入条件
 
 VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡結果を同crateの公開APIとBevy ECSへ適用するアダプター、モデル取込前の軽量なVRM 1.0検査、および互換性試験に限定する。独自のVRMローダー、Humanoidランタイム、MToon、Expression、SpringBone、Node Constraintは実装しない。
 
@@ -361,7 +361,7 @@ vtuber-rs/
 ├─ deny.toml
 ├─ AGENTS.md
 ├─ DESIGN.md
-├─ CODEX_TASKS.md
+├─ AI_AGENT_TASKS.md
 ├─ assets/
 │  ├─ ui/
 │  └─ models/
@@ -1972,9 +1972,9 @@ exact secondary versionsはGate 0の最初のgreen buildでCargo.lockと`DEPENDE
 
 ---
 
-## 27. Codex実装時の重要事項
+## 27. AI_AGENT実装時の重要事項
 
-- 一度に`CODEX_TASKS.md`の一taskだけを実装する。
+- 一度に`AI_AGENT_TASKS.md`の一taskだけを実装する。
 - `bevy_vrm1`の代替runtimeを作らない。
 - model互換性に問題があっても、別のVRM runtimeを並立させない。
 - `LookAt`と`BodyTracking`を無検証で追加しない。

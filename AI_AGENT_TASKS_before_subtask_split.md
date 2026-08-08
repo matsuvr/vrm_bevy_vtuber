@@ -1,9 +1,9 @@
-# CODEX_TASKS.md
+# AI_AGENT_TASKS.md
 
 基準日: 2026-08-04  
 対象: Windows／macOS、VRM 1.0、Bevy 0.19.0、`bevy_vrm1`
 
-このファイルは`DESIGN.md`をCodexが安全に実装できるPR単位へ分割する。一度に一つのtask IDだけを実装する。
+このファイルは`DESIGN.md`をAI_AGENTが安全に実装できるPR単位へ分割する。一度に一つのtask IDだけを実装する。
 
 ---
 
