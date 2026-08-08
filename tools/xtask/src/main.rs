@@ -4,9 +4,10 @@
 #![warn(missing_docs)]
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
+mod acceptance;
 mod vrm_compatibility;
 
 fn main() {
@@ -15,6 +16,7 @@ fn main() {
         println!("usage: cargo xtask <task>");
         println!("tasks:");
         println!("  vrm-compat [fixture-dir]  run bevy_vrm1 compatibility gate");
+        println!("  acceptance <command>      Windows acceptance test support");
         return;
     }
 
@@ -46,8 +48,55 @@ fn main() {
                 }
             }
         }
+        "acceptance" => {
+            handle_acceptance(&args[1..]);
+        }
         other => {
             eprintln!("unknown task: {other}");
+            process::exit(1);
+        }
+    }
+}
+
+fn handle_acceptance(args: &[String]) {
+    if args.is_empty() {
+        acceptance::print_help();
+        return;
+    }
+
+    match args[0].as_str() {
+        "env" => {
+            acceptance::print_env();
+        }
+        "new" => {
+            let base_dir = args
+                .get(1)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("docs/acceptance/runs"));
+            match acceptance::new_run(&base_dir) {
+                Ok(run_dir) => println!("Created acceptance run: {}", run_dir.display()),
+                Err(e) => {
+                    eprintln!("failed to create run: {e}");
+                    process::exit(1);
+                }
+            }
+        }
+        "verify" => {
+            let manifest = args
+                .get(1)
+                .map(Path::new)
+                .unwrap_or_else(|| Path::new("docs/acceptance/model-manifest.md"));
+            if let Err(e) = acceptance::verify_models(manifest) {
+                eprintln!("verify failed: {e}");
+                process::exit(1);
+            }
+        }
+        "help" | "--help" | "-h" => {
+            acceptance::print_help();
+        }
+        other => {
+            eprintln!("unknown acceptance command: {other}");
+            acceptance::print_help();
             process::exit(1);
         }
     }
