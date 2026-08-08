@@ -4280,7 +4280,7 @@ cargo test -p vtuber-tracking tracking_state_machine
 
 #### M1-03-009: loss hold、neutral decay、recovery blendを実装する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-03-008`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 

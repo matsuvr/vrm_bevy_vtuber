@@ -11,6 +11,8 @@ pub mod calibration;
 pub mod confidence;
 /// Tracking filters: rotation smoothing and expression filtering.
 pub mod filter;
+/// Loss hold, neutral decay, and recovery blend.
+pub mod loss_recovery;
 /// Neutral-relative head pose generation and tracking pipeline stages.
 pub mod pipeline;
 /// Placeholder for tracking subsystem.
@@ -33,6 +35,11 @@ pub use filter::{
     ExpressionCalibration, ExpressionCalibrationError, ExpressionChannel, ExpressionFilter,
     ExpressionFilterParams, ExpressionRange, HeadFilterParams, HeadRotationFilter,
     MissingChannelFallback, MissingChannelPolicy,
+};
+pub use loss_recovery::{
+    LossRecovery, LossRecoveryConfigError, LossRecoveryParams, MAX_DECAY_DURATION,
+    MAX_HOLD_DURATION, MAX_RECOVERY_DURATION, MIN_DECAY_DURATION, MIN_HOLD_DURATION,
+    MIN_RECOVERY_DURATION,
 };
 pub use pipeline::{
     HeadPoseFailure, HeadPoseFrame, PoseFailureReason, compute_neutral_relative_pose,

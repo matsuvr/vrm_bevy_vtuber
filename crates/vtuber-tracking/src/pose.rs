@@ -196,7 +196,7 @@ pub fn solve_relative_pose(
 /// - yaw   > 0  -> +Y axis rotation
 /// - pitch > 0  -> +X axis rotation
 /// - roll  > 0  -> +Z axis rotation
-fn quaternion_to_semantic_pose(q: UnitQuaternion<f32>) -> HeadPose {
+pub(crate) fn quaternion_to_semantic_pose(q: UnitQuaternion<f32>) -> HeadPose {
     // Canonical basis: right +X, up +Y, forward +Z.
     // A right turn (+yaw) is a rotation around +Y.
     // Chin up (+pitch) is a rotation around +X.
