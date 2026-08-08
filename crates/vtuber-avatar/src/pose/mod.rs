@@ -9,6 +9,7 @@
 pub mod binding;
 pub mod distribution;
 pub mod math;
+pub mod system;
 pub mod types;
 
 pub use binding::{RestOrientationCache, RestOrientationError, build_rest_orientation_cache};
@@ -20,6 +21,7 @@ pub use math::{
     apply_model_delta_to_bone, bone_rest_model_rotation, compute_output_rotation,
     model_delta_to_local_delta,
 };
+pub use system::{PoseApplyMetrics, apply_tracked_head_pose};
 pub use types::{
     ClampedHeadPose, ModelSpaceDelta, NonFiniteInputError, RawAxisDeltas, clamp_head_pose,
     raw_axis_deltas, semantic_to_model_delta, semantic_to_model_delta_explicit, validate_head_pose,

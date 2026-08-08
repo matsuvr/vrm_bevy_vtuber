@@ -29,5 +29,9 @@ pub use load::{
     LoadImportedAvatarRequest, LoadImportedAvatarResult, PendingAvatarLoad, UserAssetPath,
 };
 pub use plugin::{StartupModelPath, VtuberAvatarPlugin};
-pub use pose::{ClampedHeadPose, ModelSpaceDelta, RestOrientationCache, RestOrientationError};
+pub use pose::{
+    ClampedHeadPose, DistributedPose, DistributionDiagnostic, HeadNeckWeights, ModelSpaceDelta,
+    NonFiniteInputError, PoseApplyMetrics, PoseClampSettings, PoseDistributionSettings,
+    RawAxisDeltas, RestOrientationCache, RestOrientationError,
+};
 pub use unload::{ActiveControlFrame, ControlFrameError};

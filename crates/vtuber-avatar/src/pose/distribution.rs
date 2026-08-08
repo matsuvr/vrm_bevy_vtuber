@@ -5,6 +5,7 @@
 //! applied to the head.
 
 use bevy::math::Quat;
+use bevy::prelude::Resource;
 
 use super::binding::RestOrientationCache;
 use super::types::{ClampedHeadPose, ModelSpaceDelta, semantic_to_model_delta};
@@ -109,7 +110,7 @@ pub struct DistributedPose {
 /// Settings for the pose distribution pipeline.
 ///
 /// Combines weights and clamp settings into a single configurable type.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Resource)]
 pub struct PoseDistributionSettings {
     /// Head/neck weight distribution.
     pub weights: HeadNeckWeights,

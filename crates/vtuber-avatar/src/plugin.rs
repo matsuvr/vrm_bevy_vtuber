@@ -16,6 +16,7 @@ use crate::lifecycle::{
 use crate::load::{
     LoadImportedAvatarRequest, LoadImportedAvatarResult, handle_load_imported_avatar_requests,
 };
+use crate::pose::{PoseApplyMetrics, PoseDistributionSettings, apply_tracked_head_pose};
 use crate::unload::{
     ActiveControlFrame, clear_control_cache_on_lifecycle_change, despawn_unloading_avatar,
 };
@@ -30,6 +31,8 @@ impl Plugin for VtuberAvatarPlugin {
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
             .init_resource::<ActiveControlFrame>()
+            .init_resource::<PoseDistributionSettings>()
+            .init_resource::<PoseApplyMetrics>()
             .add_message::<LoadAvatarRequest>()
             .add_message::<LoadAvatarResult>()
             .add_message::<UnloadAvatarRequest>()
@@ -52,7 +55,8 @@ impl Plugin for VtuberAvatarPlugin {
             )
             .add_systems(Update, clear_control_cache_on_lifecycle_change)
             .add_systems(Update, log_loaded_vrm)
-            .add_systems(Update, log_head_bone);
+            .add_systems(Update, log_head_bone)
+            .add_systems(PostUpdate, apply_tracked_head_pose);
     }
 }
 
