@@ -111,8 +111,15 @@ impl fmt::Display for CameraFormat {
 pub trait CameraBackend {
     /// Enumerates available camera devices.
     fn enumerate(&self) -> Result<Vec<CameraDescriptor>, CameraError>;
-    /// Opens the requested camera and returns a stream.
-    fn open(&self, request: &CameraRequest) -> Result<Box<dyn CameraStream>, CameraError>;
+    /// Opens the selected camera device and returns a stream.
+    ///
+    /// The `descriptor` identifies which physical device to open. The
+    /// `request` specifies the desired capture format.
+    fn open(
+        &self,
+        descriptor: &CameraDescriptor,
+        request: &CameraRequest,
+    ) -> Result<Box<dyn CameraStream>, CameraError>;
 }
 
 /// Trait for an opened camera stream.

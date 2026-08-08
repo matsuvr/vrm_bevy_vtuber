@@ -3,7 +3,7 @@
 //! Native camera objects are constructed, opened, used, stopped, and dropped
 //! inside the capture worker. Backend buffers and OS handles are never exposed.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 /// Production capture service.
@@ -16,6 +16,9 @@ pub mod format;
 pub mod mock;
 /// Placeholder for camera subsystem.
 pub mod placeholder;
+
+/// Platform-specific camera backends.
+pub mod backend;
 
 pub use capture::{CaptureController, CaptureMetrics, CaptureServiceState};
 pub use device::{CameraDescriptor, CameraError, CameraFormat, CameraRequest};

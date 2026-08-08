@@ -442,7 +442,7 @@ where
 /// Opens the requested camera and returns the stream.
 fn open_and_stream<B>(
     backend: &B,
-    _device: &CameraDescriptor,
+    device: &CameraDescriptor,
     request: CameraRequest,
     stop: &StopToken,
     state: &Arc<std::sync::Mutex<SharedState>>,
@@ -452,7 +452,7 @@ fn open_and_stream<B>(
 where
     B: CameraBackend,
 {
-    let mut stream = backend.open(&request)?;
+    let mut stream = backend.open(device, &request)?;
     metrics.format = Some(stream.actual_format());
 
     // Discard stale slot contents so the consumer does not see an old frame

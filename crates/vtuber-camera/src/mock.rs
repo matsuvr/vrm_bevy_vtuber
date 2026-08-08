@@ -42,7 +42,11 @@ impl CameraBackend for MockBackend {
         Ok(self.descriptors.clone())
     }
 
-    fn open(&self, _request: &CameraRequest) -> Result<Box<dyn CameraStream>, CameraError> {
+    fn open(
+        &self,
+        _descriptor: &CameraDescriptor,
+        _request: &CameraRequest,
+    ) -> Result<Box<dyn CameraStream>, CameraError> {
         Ok(Box::new(MockStream {
             format: self.formats.first().copied().unwrap_or(CameraFormat {
                 width: 640,
@@ -104,8 +108,12 @@ mod tests {
     #[test]
     fn mock_produces_frames() {
         let backend = MockBackend::default();
+        let descriptor = CameraDescriptor {
+            id: "mock-0".into(),
+            label: "Mock".into(),
+        };
         let request = CameraRequest::default();
-        let mut stream = backend.open(&request).unwrap();
+        let mut stream = backend.open(&descriptor, &request).unwrap();
         let stop = StopToken::new();
         let frame = stream.next_frame(&stop).unwrap();
         assert_eq!(frame.width, 1280);
@@ -118,8 +126,12 @@ mod tests {
             disconnect_after: Some(2),
             ..Default::default()
         };
+        let descriptor = CameraDescriptor {
+            id: "mock-0".into(),
+            label: "Mock".into(),
+        };
         let request = CameraRequest::default();
-        let mut stream = backend.open(&request).unwrap();
+        let mut stream = backend.open(&descriptor, &request).unwrap();
         let stop = StopToken::new();
         assert!(stream.next_frame(&stop).is_ok());
         assert!(stream.next_frame(&stop).is_ok());
