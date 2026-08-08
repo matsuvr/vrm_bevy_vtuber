@@ -4517,8 +4517,8 @@ cargo test -p vtuber-avatar avatar_initialized_once
 
 #### M1-04-004: required／optional humanoid bone bindingを作る
 
-状態: `PENDING`  
-依存: `M1-04-003`  
+状態: `DONE`
+依存: `M1-04-003`
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
