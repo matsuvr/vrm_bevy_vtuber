@@ -6,6 +6,7 @@
 
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
+use std::time::{Duration, Instant};
 
 /// Lifecycle state of the single active avatar slot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -147,6 +148,9 @@ pub enum AvatarLifecycleFailure {
     AssetLoadFailed,
 }
 
+/// Maximum time to wait for a VRM asset to initialize before treating it as failed.
+const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Resource that owns the single active avatar lifecycle.
 ///
 /// This resource maintains the invariant that at most one avatar is active at
@@ -156,6 +160,7 @@ pub struct AvatarLifecycle {
     state: AvatarLifecycleState,
     active_root: Option<Entity>,
     pending_root: Option<Entity>,
+    load_started: Option<Instant>,
 }
 
 impl AvatarLifecycle {
@@ -183,6 +188,19 @@ impl AvatarLifecycle {
         self.pending_root
     }
 
+    /// Instant when the current `Loading` state began, if any.
+    #[must_use]
+    pub fn load_started(&self) -> Option<Instant> {
+        self.load_started
+    }
+
+    /// Returns `true` if the current load has exceeded the timeout deadline.
+    #[must_use]
+    pub fn is_load_timed_out(&self, now: Instant) -> bool {
+        self.load_started
+            .is_some_and(|started| now >= started + LOAD_TIMEOUT)
+    }
+
     /// Returns a read-only snapshot for UI consumption.
     #[must_use]
     pub fn snapshot(&self) -> AvatarLifecycleSnapshot {
@@ -202,6 +220,7 @@ impl AvatarLifecycle {
                 self.state = AvatarLifecycleState::Loading;
                 self.active_root = Some(root);
                 self.pending_root = None;
+                self.load_started = Some(Instant::now());
                 Ok(())
             }
             _ => Err(AvatarRequestError::InvalidState {
@@ -251,13 +270,15 @@ impl AvatarLifecycle {
         }
     }
 
-    /// Transitions from `Loading` to `Binding`.
+    /// Transitions from `Loading` to `Binding` for the given root.
     ///
     /// Called by internal systems once the VRM asset has spawned and the
-    /// `Initialized` marker is observed.
-    pub fn start_binding(&mut self) {
-        if self.state == AvatarLifecycleState::Loading {
+    /// `Initialized` marker is observed. The root must match the currently
+    /// tracked active root; stale initializations are ignored.
+    pub fn start_binding(&mut self, root: Entity) {
+        if self.state == AvatarLifecycleState::Loading && self.active_root == Some(root) {
             self.state = AvatarLifecycleState::Binding;
+            self.load_started = None;
         }
     }
 
@@ -284,9 +305,11 @@ impl AvatarLifecycle {
         if let Some(pending) = self.pending_root.take() {
             self.state = AvatarLifecycleState::Loading;
             self.active_root = Some(pending);
+            self.load_started = Some(Instant::now());
         } else {
             self.state = AvatarLifecycleState::NoAvatar;
             self.active_root = None;
+            self.load_started = None;
         }
     }
 
@@ -295,6 +318,15 @@ impl AvatarLifecycle {
         self.state = AvatarLifecycleState::Failed;
         self.active_root = None;
         self.pending_root = None;
+        self.load_started = None;
+    }
+}
+
+#[cfg(test)]
+impl AvatarLifecycle {
+    /// Sets the load start timestamp for tests. Not part of the public contract.
+    pub fn set_load_started_for_test(&mut self, instant: Option<Instant>) {
+        self.load_started = instant;
     }
 }
 
@@ -408,7 +440,7 @@ mod tests {
         let second = entity(2);
 
         lifecycle.request_load(first).unwrap();
-        lifecycle.start_binding();
+        lifecycle.start_binding(first);
         lifecycle.finish_ready();
         assert_eq!(lifecycle.state(), AvatarLifecycleState::Ready);
         assert_eq!(lifecycle.active_root(), Some(first));
@@ -446,7 +478,7 @@ mod tests {
         let root = entity(3);
 
         lifecycle.request_load(root).unwrap();
-        lifecycle.start_binding();
+        lifecycle.start_binding(root);
         lifecycle.finish_ready();
         assert!(lifecycle.request_unload().is_ok());
         assert_eq!(lifecycle.state(), AvatarLifecycleState::Unloading);

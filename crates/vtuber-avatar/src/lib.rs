@@ -6,12 +6,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod bind;
 pub mod compatibility;
 pub mod lifecycle;
 pub mod load;
 pub mod placeholder;
 pub mod plugin;
 
+pub use bind::BindTriggered;
 pub use lifecycle::*;
 pub use load::{
     AssetPathError, AvatarAssetId, ImportedAvatar, LoadImportedAvatarError,

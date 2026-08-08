@@ -489,9 +489,14 @@ mod tests {
         app.update();
 
         // Simulate successful initialization and binding of the first avatar.
+        let active_root = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .active_root()
+            .expect("active root should exist");
         app.world_mut()
             .resource_mut::<AvatarLifecycle>()
-            .start_binding();
+            .start_binding(active_root);
         app.world_mut()
             .resource_mut::<AvatarLifecycle>()
             .finish_ready();
