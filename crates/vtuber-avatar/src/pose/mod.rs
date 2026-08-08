@@ -10,4 +10,7 @@ pub mod binding;
 pub mod types;
 
 pub use binding::{RestOrientationCache, RestOrientationError, build_rest_orientation_cache};
-pub use types::{ClampedHeadPose, ModelSpaceDelta, clamp_head_pose, semantic_to_model_delta};
+pub use types::{
+    ClampedHeadPose, ModelSpaceDelta, NonFiniteInputError, RawAxisDeltas, clamp_head_pose,
+    raw_axis_deltas, semantic_to_model_delta, semantic_to_model_delta_explicit, validate_head_pose,
+};

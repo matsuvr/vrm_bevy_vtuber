@@ -51,6 +51,32 @@ pub struct ModelSpaceDelta {
     pub rotation: Quat,
 }
 
+/// Raw per-axis model-space deltas before Euler composition.
+///
+/// Each field is the rotation around a single model-space axis, derived from
+/// the corresponding semantic axis. Useful for diagnostics and per-axis clamping.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RawAxisDeltas {
+    /// Rotation around model-space +Y axis (from semantic yaw).
+    pub yaw_delta: Quat,
+    /// Rotation around model-space -X axis (from semantic pitch).
+    pub pitch_delta: Quat,
+    /// Rotation around model-space -Z axis (from semantic roll).
+    pub roll_delta: Quat,
+}
+
+/// Error returned when input contains non-finite values (NaN or infinity).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NonFiniteInputError;
+
+impl std::fmt::Display for NonFiniteInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "head pose contains non-finite value (NaN or infinity)")
+    }
+}
+
+impl std::error::Error for NonFiniteInputError {}
+
 /// Clamp a raw semantic head pose to valid ranges.
 ///
 /// Each component is clamped independently to its maximum absolute value.
@@ -72,6 +98,8 @@ pub fn clamp_head_pose(raw: &HeadPose) -> ClampedHeadPose {
 /// - roll → -Z axis rotation
 /// - Intrinsic Y-X-Z Euler order
 ///
+/// The result is a normalized unit quaternion.
+///
 /// # Invariant
 ///
 /// Neutral input (all zeros) produces [`Quat::IDENTITY`].
@@ -84,6 +112,49 @@ pub fn semantic_to_model_delta(pose: &ClampedHeadPose) -> ModelSpaceDelta {
         -pose.pitch_rad,
         -pose.roll_rad,
     );
+    // Quat::from_euler always produces a unit quaternion, but normalize for safety.
+    ModelSpaceDelta {
+        rotation: rotation.normalize(),
+    }
+}
+
+/// Validate that a head pose contains only finite values.
+///
+/// Returns `Err(NonFiniteInputError)` if any component is NaN or infinity.
+pub fn validate_head_pose(pose: &HeadPose) -> Result<(), NonFiniteInputError> {
+    if pose.yaw_rad.is_finite() && pose.pitch_rad.is_finite() && pose.roll_rad.is_finite() {
+        Ok(())
+    } else {
+        Err(NonFiniteInputError)
+    }
+}
+
+/// Compute raw per-axis model-space deltas before Euler composition.
+///
+/// Each axis produces an independent quaternion. The final composed rotation
+/// is `yaw_delta * pitch_delta * roll_delta` (Y-X-Z intrinsic order).
+///
+/// This is useful for diagnostics and per-axis clamping strategies.
+#[must_use]
+pub fn raw_axis_deltas(pose: &ClampedHeadPose) -> RawAxisDeltas {
+    RawAxisDeltas {
+        yaw_delta: Quat::from_axis_angle(bevy::math::Vec3::Y, pose.yaw_rad),
+        pitch_delta: Quat::from_axis_angle(bevy::math::Vec3::X, -pose.pitch_rad),
+        roll_delta: Quat::from_axis_angle(bevy::math::Vec3::Z, -pose.roll_rad),
+    }
+}
+
+/// Convert a clamped head pose to model-space delta using explicit axis composition.
+///
+/// This is equivalent to [`semantic_to_model_delta`] but makes the per-axis
+/// composition explicit: `R = R_y(yaw) * R_x(-pitch) * R_z(-roll)`.
+///
+/// Useful for testing that the Euler order is correct.
+#[must_use]
+pub fn semantic_to_model_delta_explicit(pose: &ClampedHeadPose) -> ModelSpaceDelta {
+    let raw = raw_axis_deltas(pose);
+    // Y-X-Z intrinsic: R = R_y * R_x * R_z
+    let rotation = (raw.yaw_delta * raw.pitch_delta * raw.roll_delta).normalize();
     ModelSpaceDelta { rotation }
 }
 
@@ -325,6 +396,127 @@ mod tests {
         assert!(
             (norm * norm + w_sq - 1.0).abs() < EPSILON,
             "delta must be a unit quaternion"
+        );
+    }
+
+    // ---- M1-05-003: non-finite rejection and raw axis deltas ----
+
+    #[test]
+    fn model_space_pose_validate_rejects_nan() {
+        let pose = HeadPose {
+            yaw_rad: f32::NAN,
+            pitch_rad: 0.0,
+            roll_rad: 0.0,
+        };
+        assert_eq!(validate_head_pose(&pose), Err(NonFiniteInputError));
+    }
+
+    #[test]
+    fn model_space_pose_validate_rejects_infinity() {
+        let pose = HeadPose {
+            yaw_rad: 0.0,
+            pitch_rad: f32::INFINITY,
+            roll_rad: 0.0,
+        };
+        assert_eq!(validate_head_pose(&pose), Err(NonFiniteInputError));
+    }
+
+    #[test]
+    fn model_space_pose_validate_accepts_finite() {
+        let pose = HeadPose {
+            yaw_rad: 0.5,
+            pitch_rad: -0.3,
+            roll_rad: 0.1,
+        };
+        assert!(validate_head_pose(&pose).is_ok());
+    }
+
+    #[test]
+    fn model_space_pose_raw_axis_deltas_neutral() {
+        let pose = ClampedHeadPose {
+            yaw_rad: 0.0,
+            pitch_rad: 0.0,
+            roll_rad: 0.0,
+        };
+        let raw = raw_axis_deltas(&pose);
+        assert!(approx_eq(raw.yaw_delta, Quat::IDENTITY));
+        assert!(approx_eq(raw.pitch_delta, Quat::IDENTITY));
+        assert!(approx_eq(raw.roll_delta, Quat::IDENTITY));
+    }
+
+    #[test]
+    fn model_space_pose_raw_axis_deltas_yaw_only() {
+        let pose = ClampedHeadPose {
+            yaw_rad: 0.5,
+            pitch_rad: 0.0,
+            roll_rad: 0.0,
+        };
+        let raw = raw_axis_deltas(&pose);
+
+        // Yaw should produce rotation around +Y.
+        let (axis, angle) = raw.yaw_delta.to_axis_angle();
+        assert!(axis.y > 0.0 && axis.x.abs() < EPSILON && axis.z.abs() < EPSILON);
+        assert!((angle - 0.5).abs() < EPSILON);
+
+        // Pitch and roll should be identity.
+        assert!(approx_eq(raw.pitch_delta, Quat::IDENTITY));
+        assert!(approx_eq(raw.roll_delta, Quat::IDENTITY));
+    }
+
+    #[test]
+    fn model_space_pose_explicit_matches_euler() {
+        let pose = ClampedHeadPose {
+            yaw_rad: 0.3,
+            pitch_rad: 0.2,
+            roll_rad: 0.1,
+        };
+        let euler_delta = semantic_to_model_delta(&pose);
+        let explicit_delta = semantic_to_model_delta_explicit(&pose);
+
+        assert!(
+            approx_eq(euler_delta.rotation, explicit_delta.rotation),
+            "explicit axis composition must match Euler result"
+        );
+    }
+
+    #[test]
+    fn model_space_pose_wrong_order_detected() {
+        // Verify that swapping the Euler order produces a different result.
+        let pose = ClampedHeadPose {
+            yaw_rad: 0.5,
+            pitch_rad: 0.3,
+            roll_rad: 0.2,
+        };
+        let correct = semantic_to_model_delta(&pose);
+
+        // Wrong order: Z-X-Y instead of Y-X-Z.
+        let wrong = Quat::from_euler(
+            bevy::math::EulerRot::ZXY,
+            -pose.roll_rad,
+            -pose.pitch_rad,
+            pose.yaw_rad,
+        );
+
+        assert!(
+            !approx_eq(correct.rotation, wrong),
+            "wrong Euler order must be detected by test"
+        );
+    }
+
+    #[test]
+    fn model_space_pose_result_determinant_is_one() {
+        let pose = ClampedHeadPose {
+            yaw_rad: 0.7,
+            pitch_rad: -0.4,
+            roll_rad: 0.3,
+        };
+        let delta = semantic_to_model_delta(&pose);
+
+        // Unit quaternion has norm 1, which implies determinant 1 for the rotation matrix.
+        let norm_sq = delta.rotation.length_squared();
+        assert!(
+            (norm_sq - 1.0).abs() < EPSILON,
+            "quaternion norm must be 1.0, got {norm_sq}"
         );
     }
 }
