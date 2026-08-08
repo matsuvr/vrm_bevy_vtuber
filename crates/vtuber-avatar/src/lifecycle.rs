@@ -9,6 +9,14 @@ use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use std::time::{Duration, Instant};
 
+/// Monotonically increasing identifier for an avatar instance.
+///
+/// Control frames are tagged with the generation of the avatar they target.
+/// When a new avatar is loaded or replaces the current one, the generation
+/// changes and frames targeting a previous generation are rejected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub struct AvatarGeneration(pub u64);
+
 /// Lifecycle state of the single active avatar slot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AvatarLifecycleState {
@@ -74,6 +82,8 @@ pub struct AvatarLifecycleSnapshot {
     pub pending_root: Option<Entity>,
     /// Capability snapshot of the active avatar, if binding has completed.
     pub capabilities: Option<AvatarCapabilities>,
+    /// Generation of the active or in-progress avatar instance.
+    pub generation: AvatarGeneration,
 }
 
 /// Request to load a new avatar into the active slot.
@@ -158,13 +168,29 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// This resource maintains the invariant that at most one avatar is active at
 /// a time. It validates request events and drives internal state transitions.
-#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct AvatarLifecycle {
     state: AvatarLifecycleState,
     active_root: Option<Entity>,
     pending_root: Option<Entity>,
     load_started: Option<Instant>,
     capabilities: Option<AvatarCapabilities>,
+    current_generation: AvatarGeneration,
+    next_generation: u64,
+}
+
+impl Default for AvatarLifecycle {
+    fn default() -> Self {
+        Self {
+            state: AvatarLifecycleState::NoAvatar,
+            active_root: None,
+            pending_root: None,
+            load_started: None,
+            capabilities: None,
+            current_generation: AvatarGeneration::default(),
+            next_generation: 1,
+        }
+    }
 }
 
 impl AvatarLifecycle {
@@ -216,6 +242,24 @@ impl AvatarLifecycle {
             .is_some_and(|started| now >= started + LOAD_TIMEOUT)
     }
 
+    /// Current avatar generation.
+    ///
+    /// Frames and bindings are correlated by this value. It changes whenever
+    /// a new avatar is loaded or replaces the current one.
+    #[must_use]
+    pub fn current_generation(&self) -> AvatarGeneration {
+        self.current_generation
+    }
+
+    /// Returns `true` if a non-zero generation is assigned to an in-progress
+    /// or active avatar.
+    #[must_use]
+    pub fn has_active_generation(&self) -> bool {
+        self.current_generation.0 != 0
+            && self.state != AvatarLifecycleState::NoAvatar
+            && self.state != AvatarLifecycleState::Failed
+    }
+
     /// Returns a read-only snapshot for UI consumption.
     #[must_use]
     pub fn snapshot(&self) -> AvatarLifecycleSnapshot {
@@ -224,6 +268,7 @@ impl AvatarLifecycle {
             active_root: self.active_root,
             pending_root: self.pending_root,
             capabilities: self.capabilities.clone(),
+            generation: self.current_generation,
         }
     }
 
@@ -238,6 +283,8 @@ impl AvatarLifecycle {
                 self.pending_root = None;
                 self.load_started = Some(Instant::now());
                 self.capabilities = None;
+                self.current_generation = AvatarGeneration(self.next_generation);
+                self.next_generation += 1;
                 Ok(())
             }
             _ => Err(AvatarRequestError::InvalidState {
@@ -276,16 +323,16 @@ impl AvatarLifecycle {
     /// load.
     pub fn request_replace(&mut self, root: Entity) -> AvatarRequestResult {
         match self.state {
-            AvatarLifecycleState::Ready => {
+            AvatarLifecycleState::Ready | AvatarLifecycleState::Unloading => {
+                // A new avatar instance gets a fresh generation even when
+                // coalescing rapid replacements. Frames targeting an older
+                // generation will be rejected by the binding that eventually
+                // becomes Ready.
+                self.current_generation = AvatarGeneration(self.next_generation);
+                self.next_generation += 1;
                 self.state = AvatarLifecycleState::Unloading;
                 self.pending_root = Some(root);
                 self.capabilities = None;
-                Ok(())
-            }
-            AvatarLifecycleState::Unloading => {
-                // Coalesce to the latest pending replacement. The previously
-                // spawned pending root is despawned by the caller.
-                self.pending_root = Some(root);
                 Ok(())
             }
             AvatarLifecycleState::NoAvatar | AvatarLifecycleState::Failed => {
@@ -365,7 +412,7 @@ impl AvatarLifecycle {
 /// This system also inserts and removes the [`ActiveAvatar`] marker to keep
 /// the ECS view consistent with the resource invariant.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn apply_avatar_request_events(
+pub fn apply_avatar_request_events(
     mut commands: Commands,
     mut lifecycle: ResMut<AvatarLifecycle>,
     mut load_requests: MessageReader<LoadAvatarRequest>,
@@ -442,48 +489,6 @@ pub(crate) fn apply_avatar_request_events(
     }
 }
 
-/// Despawns the active avatar root once a replacement has been requested.
-///
-/// This system drives the `Unloading -> Loading` transition. It recursively
-/// removes the old root (and with it any [`AvatarBinding`], expression state,
-/// and `bevy_vrm1` components), then promotes the pending replacement root to
-/// active by adding the [`ActiveAvatar`] marker. The new root is not marked
-/// active until the old root has been removed, preserving the single-active-
-/// avatar invariant at the ECS level.
-///
-/// If the replacement load fails after this point, the slot moves to `Failed`
-/// and remains empty; the old avatar has already been despawned and is not
-/// revived.
-pub(crate) fn despawn_unloading_avatar(
-    mut commands: Commands,
-    mut lifecycle: ResMut<AvatarLifecycle>,
-) {
-    if lifecycle.state() != AvatarLifecycleState::Unloading {
-        return;
-    }
-
-    let Some(old_root) = lifecycle.active_root() else {
-        // No active root to remove; finish the unload immediately.
-        lifecycle.finish_unload();
-        return;
-    };
-
-    // Recursive despawn removes the old binding, capability cache, and any
-    // pending expression state. A missing entity is treated as already despawned.
-    if let Ok(mut entity_commands) = commands.get_entity(old_root) {
-        entity_commands.despawn();
-    }
-
-    lifecycle.finish_unload();
-
-    // Promote the pending root to active now that the old root is gone.
-    if let Some(new_root) = lifecycle.active_root()
-        && let Ok(mut entity_commands) = commands.get_entity(new_root)
-    {
-        entity_commands.insert(ActiveAvatar);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,6 +499,7 @@ mod tests {
         AvatarAssetId, AvatarLoadRequestId, ImportedAvatar, LoadImportedAvatarRequest,
         LoadImportedAvatarResult, UserAssetPath, handle_load_imported_avatar_requests,
     };
+    use crate::unload::despawn_unloading_avatar;
 
     fn entity(id: u32) -> Entity {
         Entity::from_raw_u32(id).expect("test entity index is valid")
@@ -856,7 +862,7 @@ mod tests {
         assert!(world.entity(second_root).contains::<ActiveAvatar>());
 
         let mut query = world.query::<(Entity, &PendingAvatarLoad)>();
-        let pending: Vec<_> = query.iter(&world).collect();
+        let pending: Vec<_> = query.iter(world).collect();
         assert_eq!(pending.len(), 1);
         let (pending_entity, pending_load) = pending[0];
         assert_eq!(pending_entity, second_root);
@@ -890,7 +896,7 @@ mod tests {
 
         // At no point were two roots active simultaneously.
         let mut query = world.query_filtered::<Entity, With<ActiveAvatar>>();
-        let active_count = query.iter(&world).count();
+        let active_count = query.iter(world).count();
         assert_eq!(active_count, 1);
     }
 

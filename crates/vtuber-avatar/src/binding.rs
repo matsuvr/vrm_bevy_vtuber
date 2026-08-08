@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::bind::BindTriggered;
 use crate::capabilities::{AvatarCapabilities, BonePresence, ExpressionCapabilities};
 use crate::lifecycle::{
-    ActiveAvatar, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
+    ActiveAvatar, AvatarGeneration, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
 };
 
 /// Maximum time to wait for transient bone components after entering `Binding`.
@@ -42,12 +42,14 @@ pub struct AvatarBinding {
     pub left_eye: Option<Entity>,
     /// Optional right eye bone entity.
     pub right_eye: Option<Entity>,
+    /// Generation of the avatar instance this binding belongs to.
+    pub generation: AvatarGeneration,
 }
 
 impl AvatarBinding {
     /// Creates a head-only binding for the simplest capable avatar.
     #[must_use]
-    pub fn head_only(root: Entity, head: Entity) -> Self {
+    pub fn head_only(root: Entity, head: Entity, generation: AvatarGeneration) -> Self {
         Self {
             root,
             head,
@@ -57,6 +59,7 @@ impl AvatarBinding {
             spine: None,
             left_eye: None,
             right_eye: None,
+            generation,
         }
     }
 }
@@ -219,7 +222,12 @@ pub fn bind_humanoid_bones(
     );
 
     match result {
-        Ok(binding) => {
+        Ok(mut binding) => {
+            // Stamp the binding with the generation assigned when this avatar
+            // instance was accepted. Frames targeting any other generation are
+            // rejected as stale.
+            binding.generation = lifecycle.current_generation();
+
             let expression_map = expression_maps.get(root_entity).ok().flatten();
             let expression_caps = ExpressionCapabilities::from_map(expression_map);
             let has_spring_bone = spring_roots
@@ -305,6 +313,8 @@ fn resolve_binding(
         spine,
         left_eye,
         right_eye,
+        // Stamped with the lifecycle generation once binding succeeds.
+        generation: AvatarGeneration::default(),
     })
 }
 
@@ -385,9 +395,11 @@ mod tests {
         let root = world.spawn_empty().id();
         let head = bone_entity(&mut world);
 
-        let binding = AvatarBinding::head_only(root, head);
+        let generation = AvatarGeneration(7);
+        let binding = AvatarBinding::head_only(root, head, generation);
         assert_eq!(binding.root, root);
         assert_eq!(binding.head, head);
+        assert_eq!(binding.generation, generation);
         assert!(binding.neck.is_none());
         assert!(binding.left_eye.is_none());
         assert!(binding.right_eye.is_none());

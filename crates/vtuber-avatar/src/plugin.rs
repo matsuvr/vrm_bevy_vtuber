@@ -12,10 +12,12 @@ use crate::binding::bind_humanoid_bones;
 use crate::lifecycle::{
     AvatarLifecycle, LoadAvatarRequest, LoadAvatarResult, ReplaceAvatarRequest,
     ReplaceAvatarResult, UnloadAvatarRequest, UnloadAvatarResult, apply_avatar_request_events,
-    despawn_unloading_avatar,
 };
 use crate::load::{
     LoadImportedAvatarRequest, LoadImportedAvatarResult, handle_load_imported_avatar_requests,
+};
+use crate::unload::{
+    ActiveControlFrame, clear_control_cache_on_lifecycle_change, despawn_unloading_avatar,
 };
 
 /// Plugin that sets up the VRM avatar scene, lifecycle, and diagnostics.
@@ -27,6 +29,7 @@ impl Plugin for VtuberAvatarPlugin {
         app.add_plugins(VrmPlugin)
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
+            .init_resource::<ActiveControlFrame>()
             .add_message::<LoadAvatarRequest>()
             .add_message::<LoadAvatarResult>()
             .add_message::<UnloadAvatarRequest>()
@@ -47,6 +50,7 @@ impl Plugin for VtuberAvatarPlugin {
                 )
                     .chain(),
             )
+            .add_systems(Update, clear_control_cache_on_lifecycle_change)
             .add_systems(Update, log_loaded_vrm)
             .add_systems(Update, log_head_bone);
     }
