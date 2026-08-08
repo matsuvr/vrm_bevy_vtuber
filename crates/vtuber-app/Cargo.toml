@@ -26,6 +26,9 @@ thiserror = "2"
 toml = "0.9"
 directories = "5"
 
+[features]
+dev-synthetic-input = []
+
 [dev-dependencies]
 tempfile = "3"
 

@@ -26,6 +26,10 @@ pub mod placeholder;
 /// Camera preview texture pipeline.
 pub mod preview;
 
+/// Dev-only synthetic tracking source (feature-gated).
+#[cfg(feature = "dev-synthetic-input")]
+pub mod synthetic_tracking;
+
 /// UI rendering module using bevy_egui.
 pub mod ui;
 

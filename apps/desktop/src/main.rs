@@ -66,7 +66,19 @@ fn main() {
         app.insert_resource(StartupImportedAvatar(imported));
     }
 
-    app.add_systems(Startup, submit_startup_model_request).run();
+    app.add_systems(Startup, submit_startup_model_request);
+
+    // Dev-only synthetic tracking: generates AvatarControlFrame values from
+    // sine waves so the avatar apply path can be verified without a camera.
+    #[cfg(feature = "dev-synthetic-input")]
+    {
+        use vtuber_app::synthetic_tracking::{SyntheticTrackingSource, synthetic_tracking_system};
+        app.init_resource::<SyntheticTrackingSource>()
+            .add_systems(Update, synthetic_tracking_system);
+        bevy::log::warn!("dev-synthetic-input enabled: using synthetic tracking source");
+    }
+
+    app.run();
 }
 
 /// Returns the application-managed asset root directory.
