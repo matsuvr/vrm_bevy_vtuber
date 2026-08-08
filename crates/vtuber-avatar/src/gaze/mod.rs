@@ -3,9 +3,14 @@
 //! This module handles gaze direction mapping from tracking data to
 //! VRM expression presets or eye bone rotations.
 
+pub mod bone;
 pub mod expression;
 pub mod mode;
 
+pub use bone::{
+    EyeBoneGazeSettings, MissingEyePolicy, compute_eye_bone_local_rotation,
+    compute_eye_bone_rotation, has_both_eyes, resolve_eye_targets,
+};
 pub use expression::{
     GazeExpressionSettings, RawGazeInput, is_gaze_in_dead_zone, map_gaze_to_expressions,
 };
