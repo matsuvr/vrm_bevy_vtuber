@@ -4,6 +4,11 @@
 //! [`crate::actions::UiAction`] commands. It never accesses domain
 //! services directly.
 
+pub mod diagnostics;
+pub mod error;
+pub mod file_dialog;
+pub mod live;
+pub mod setup;
 pub mod shell;
 
 pub use shell::{UiShellPlugin, UiState};

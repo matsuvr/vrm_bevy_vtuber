@@ -30,6 +30,8 @@ pub struct Orchestrator {
     last_error: Option<OrchestratorError>,
     /// Pipeline lifecycle state.
     pipeline_state: PipelineState,
+    /// Current UI screen.
+    current_screen: Screen,
 }
 
 /// State of the tracking pipeline.
@@ -99,6 +101,7 @@ impl Default for Orchestrator {
             selected_camera: None,
             last_error: None,
             pipeline_state: PipelineState::Idle,
+            current_screen: Screen::default(),
         }
     }
 }
@@ -116,6 +119,9 @@ impl Orchestrator {
     /// Process a UI action and update internal state.
     pub fn process_action(&mut self, action: &UiAction) {
         match action {
+            UiAction::SwitchScreen(screen) => {
+                self.current_screen = *screen;
+            }
             UiAction::RefreshCameras => {
                 self.refresh_cameras();
             }
@@ -237,6 +243,9 @@ impl Orchestrator {
 
     /// Update the UI view model from current orchestrator state.
     pub fn update_view_model(&self, vm: &mut UiViewModel) {
+        // Screen.
+        vm.screen = self.current_screen;
+
         // Lifecycle.
         vm.lifecycle = match self.pipeline_state {
             PipelineState::Idle => AppLifecycle::Idle,

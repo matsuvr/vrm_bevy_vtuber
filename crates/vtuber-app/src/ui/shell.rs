@@ -2,30 +2,46 @@
 //!
 //! Provides the [`UiShellPlugin`] which sets up egui and renders the
 //! three main screens: Setup, Live, and Diagnostics.
-//!
-//! NOTE: This module requires bevy_egui compatible with Bevy 0.19.
-//! The egui rendering is stubbed until version compatibility is resolved.
 
 use bevy::prelude::*;
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
 use crate::actions::UiAction;
+use crate::diagnostics::DiagnosticsSnapshot;
+use crate::error_presenter::ErrorPresenter;
 use crate::orchestrator::{Orchestrator, process_ui_actions_system};
-use crate::ui_model::UiViewModel;
+use crate::preview::PreviewState;
+use crate::ui_model::{Screen, UiViewModel};
+
+use super::diagnostics::render_diagnostics_screen;
+use super::live::render_live_screen;
+use super::setup::render_setup_screen;
 
 /// Plugin that sets up the egui-based UI shell.
 ///
-/// Currently a stub — the actual egui integration requires a bevy_egui
-/// version compatible with Bevy 0.19. The UI model and action types
-/// are fully functional (see [`crate::ui_model`] and [`crate::actions`]).
+/// Requires `EguiPlugin` to be installed before this plugin.
 pub struct UiShellPlugin;
 
 impl Plugin for UiShellPlugin {
     fn build(&self, app: &mut App) {
+        // Assert that EguiPlugin is already installed.
+        assert!(
+            app.is_plugin_added::<EguiPlugin>(),
+            "UiShellPlugin requires EguiPlugin to be installed first"
+        );
+
         app.init_resource::<UiState>()
             .init_resource::<UiViewModel>()
             .init_resource::<Orchestrator>()
+            .init_resource::<PreviewState>()
+            .init_resource::<DiagnosticsSnapshot>()
+            .init_resource::<ErrorPresenter>()
+            .init_resource::<super::file_dialog::FileDialogState>()
+            // Action processing in Update (runs after EguiPrimaryContextPass).
             .add_systems(Update, process_ui_actions_system)
-            .add_systems(Update, ui_stub_system);
+            .add_systems(Update, sync_error_presenter)
+            // egui rendering in EguiPrimaryContextPass.
+            .add_systems(EguiPrimaryContextPass, ui_render_system);
     }
 }
 
@@ -37,8 +53,12 @@ pub struct UiState {
 }
 
 impl UiState {
-    /// Emit a UI action.
+    /// Emit a UI action, deduplicating one-shot actions within the same batch.
     pub fn emit(&mut self, action: UiAction) {
+        // Deduplicate navigation and toggle actions within the same batch.
+        if is_deduplicatable(&action) && self.pending_actions.contains(&action) {
+            return;
+        }
         self.pending_actions.push(action);
     }
 
@@ -48,10 +68,87 @@ impl UiState {
     }
 }
 
-/// Stub system — will be replaced with actual egui rendering.
-fn ui_stub_system(_view_model: Res<UiViewModel>, _ui_state: ResMut<UiState>) {
-    // TODO: Integrate bevy_egui rendering when version compatibility is resolved.
-    // The UI model and action types are ready for use.
+/// Check if an action should be deduplicated within a batch.
+fn is_deduplicatable(action: &UiAction) -> bool {
+    matches!(
+        action,
+        UiAction::SwitchScreen(_)
+            | UiAction::ToggleMirror
+            | UiAction::TogglePreview
+            | UiAction::DismissError
+    )
+}
+
+/// System that synchronizes the error presenter from the orchestrator.
+fn sync_error_presenter(
+    orchestrator: Res<Orchestrator>,
+    mut error_presenter: ResMut<ErrorPresenter>,
+) {
+    error_presenter.update(orchestrator.last_error());
+}
+
+/// System that renders the UI using egui.
+///
+/// Reads [`UiViewModel`] and emits [`UiAction`] via [`UiState`].
+fn ui_render_system(
+    mut contexts: EguiContexts,
+    view_model: Res<UiViewModel>,
+    mut ui_state: ResMut<UiState>,
+    diagnostics: Res<DiagnosticsSnapshot>,
+    preview: Res<PreviewState>,
+    mut file_dialog: ResMut<super::file_dialog::FileDialogState>,
+) -> Result {
+    let ctx = contexts.ctx_mut()?;
+
+    // Poll file dialog.
+    super::file_dialog::poll_file_dialog(&mut file_dialog, &mut ui_state);
+
+    // Main control window (left side, 350px wide).
+    bevy_egui::egui::Window::new("Controls")
+        .id(bevy_egui::egui::Id::new("control_window"))
+        .default_width(350.0)
+        .default_height(600.0)
+        .resizable(true)
+        .collapsible(false)
+        .movable(true)
+        .show(ctx, |ui| {
+            // Navigation tabs at the top.
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(view_model.screen == Screen::Setup, "Setup")
+                    .clicked()
+                {
+                    ui_state.emit(UiAction::SwitchScreen(Screen::Setup));
+                }
+                if ui
+                    .selectable_label(view_model.screen == Screen::Live, "Live")
+                    .clicked()
+                {
+                    ui_state.emit(UiAction::SwitchScreen(Screen::Live));
+                }
+                if ui
+                    .selectable_label(view_model.screen == Screen::Diagnostics, "Diagnostics")
+                    .clicked()
+                {
+                    ui_state.emit(UiAction::SwitchScreen(Screen::Diagnostics));
+                }
+            });
+            ui.separator();
+
+            // Screen content in a scroll area.
+            bevy_egui::egui::ScrollArea::vertical().show(ui, |ui| match view_model.screen {
+                Screen::Setup => {
+                    render_setup_screen(ui, &view_model, &mut ui_state, &mut file_dialog)
+                }
+                Screen::Live => render_live_screen(ui, &view_model, &mut ui_state, &preview),
+                Screen::Diagnostics => render_diagnostics_screen(ui, &view_model, &diagnostics),
+            });
+        });
+
+    // Handle drag-and-drop for VRM files.
+    super::file_dialog::handle_dropped_files(ctx, &mut ui_state);
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -76,5 +173,43 @@ mod tests {
     fn ui_state_default_is_empty() {
         let state = UiState::default();
         assert!(state.pending_actions.is_empty());
+    }
+
+    #[test]
+    fn ui_state_emit_deduplicates_navigation() {
+        let mut state = UiState::default();
+        state.emit(UiAction::SwitchScreen(Screen::Live));
+        state.emit(UiAction::SwitchScreen(Screen::Live)); // duplicate
+        assert_eq!(state.pending_actions.len(), 1);
+
+        state.emit(UiAction::SwitchScreen(Screen::Setup)); // different
+        assert_eq!(state.pending_actions.len(), 2);
+    }
+
+    #[test]
+    fn ui_state_emit_deduplicates_toggle() {
+        let mut state = UiState::default();
+        state.emit(UiAction::ToggleMirror);
+        state.emit(UiAction::ToggleMirror); // duplicate
+        assert_eq!(state.pending_actions.len(), 1);
+    }
+
+    #[test]
+    fn ui_state_take_allows_same_action_next_batch() {
+        let mut state = UiState::default();
+        state.emit(UiAction::SwitchScreen(Screen::Live));
+        let _ = state.take_actions();
+
+        // Same action in next batch should work.
+        state.emit(UiAction::SwitchScreen(Screen::Live));
+        assert_eq!(state.pending_actions.len(), 1);
+    }
+
+    #[test]
+    fn ui_state_emit_does_not_deduplicate_non_deduplicatable() {
+        let mut state = UiState::default();
+        state.emit(UiAction::Start);
+        state.emit(UiAction::Start); // not deduplicated
+        assert_eq!(state.pending_actions.len(), 2);
     }
 }

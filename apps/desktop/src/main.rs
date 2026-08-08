@@ -4,6 +4,8 @@
 #![warn(missing_docs)]
 
 use bevy::prelude::*;
+use bevy_egui::EguiPlugin;
+use vtuber_app::ui::UiShellPlugin;
 use vtuber_avatar::{StartupModelPath, VtuberAvatarPlugin};
 
 fn main() {
@@ -11,7 +13,9 @@ fn main() {
 
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(EguiPlugin::default())
         .add_plugins(VtuberAvatarPlugin)
+        .add_plugins(UiShellPlugin)
         .insert_resource(StartupModelPath(model_path))
         .run();
 }
