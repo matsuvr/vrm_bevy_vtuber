@@ -14,6 +14,7 @@ pub mod lifecycle;
 pub mod load;
 pub mod placeholder;
 pub mod plugin;
+pub mod pose;
 pub mod unload;
 
 pub use bind::BindTriggered;
@@ -28,4 +29,5 @@ pub use load::{
     LoadImportedAvatarRequest, LoadImportedAvatarResult, PendingAvatarLoad, UserAssetPath,
 };
 pub use plugin::{StartupModelPath, VtuberAvatarPlugin};
+pub use pose::{ClampedHeadPose, ModelSpaceDelta};
 pub use unload::{ActiveControlFrame, ControlFrameError};
