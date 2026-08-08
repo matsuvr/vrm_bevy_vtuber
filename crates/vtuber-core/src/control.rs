@@ -286,6 +286,67 @@ impl CalibrationError {
     }
 }
 
+/// Versioned pipeline settings persisted by the app.
+///
+/// This struct intentionally contains only the knobs that the user or app
+/// should persist across sessions. Runtime tuning parameters that change
+/// every frame or are derived from calibration live in
+/// `vtuber-tracking::pipeline::PipelineConfig`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackingPipelineSettings {
+    version: u16,
+    inner: TrackingPipelineSettingsV1,
+}
+
+impl TrackingPipelineSettings {
+    /// Creates default pipeline settings.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            version: 1,
+            inner: TrackingPipelineSettingsV1 {
+                calibration: CalibrationSettings::new(),
+            },
+        }
+    }
+
+    /// Creates settings with an explicit calibration configuration.
+    ///
+    /// `calibration` is expected to have been constructed through
+    /// [`CalibrationSettings::try_new`]; this constructor does not re-validate
+    /// it because the calibration type's fields are private.
+    #[must_use]
+    pub fn with_calibration(calibration: CalibrationSettings) -> Self {
+        Self {
+            version: 1,
+            inner: TrackingPipelineSettingsV1 { calibration },
+        }
+    }
+
+    /// Format version of these settings.
+    #[must_use]
+    pub fn version(&self) -> u16 {
+        self.version
+    }
+
+    /// Calibration settings for the tracking pipeline.
+    #[must_use]
+    pub fn calibration(&self) -> &CalibrationSettings {
+        &self.inner.calibration
+    }
+}
+
+impl Default for TrackingPipelineSettings {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TrackingPipelineSettingsV1 {
+    calibration: CalibrationSettings,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,5 +414,28 @@ mod tests {
             CalibrationSettings::try_new(10, 5.0, 0.5, 0.1, 1.1).unwrap_err(),
             CalibrationError::ExpressionMotionOutOfRange(_)
         ));
+    }
+
+    #[test]
+    fn default_pipeline_settings_are_valid() {
+        let settings = TrackingPipelineSettings::new();
+        assert_eq!(settings.version(), 1);
+        assert_eq!(settings.calibration().version(), 1);
+        assert_eq!(settings.calibration().required_sample_count(), 30);
+    }
+
+    #[test]
+    fn pipeline_settings_default_matches_explicit() {
+        let default = TrackingPipelineSettings::default();
+        let explicit = TrackingPipelineSettings::new();
+        assert_eq!(default, explicit);
+    }
+
+    #[test]
+    fn pipeline_settings_with_calibration_persists_values() {
+        let calibration = CalibrationSettings::try_new(10, 5.0, 0.5, 0.1, 0.1).unwrap();
+        let settings = TrackingPipelineSettings::with_calibration(calibration.clone());
+        assert_eq!(settings.calibration(), &calibration);
+        assert_eq!(settings.version(), 1);
     }
 }

@@ -375,11 +375,29 @@ impl ExpressionFilter {
         }
     }
 
+    /// Returns the calibration used by this filter.
+    #[must_use]
+    pub fn calibration(&self) -> &ExpressionCalibration {
+        &self.calibration
+    }
+
     /// Resets all smoothed state to zero.
     pub fn reset(&mut self) {
         self.blink_left = ChannelState::default();
         self.blink_right = ChannelState::default();
         self.mouth = ChannelState::default();
+    }
+
+    /// Returns the current smoothed coefficients without consuming a new
+    /// observation.
+    #[must_use]
+    pub fn current(&self) -> ExpressionCoefficients {
+        ExpressionCoefficients {
+            blink_left: self.blink_left.value,
+            blink_right: self.blink_right.value,
+            aa: self.mouth.value,
+            ..ExpressionCoefficients::default()
+        }
     }
 
     /// Updates the filter with a new raw observation and returns the

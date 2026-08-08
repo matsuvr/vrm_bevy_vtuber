@@ -4319,7 +4319,7 @@ cargo test -p vtuber-tracking loss_recovery
 
 #### M1-03-010: `AvatarControlFrame` assemblyとdeterministic replayを完成させる
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-03-009`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
@@ -4398,7 +4398,7 @@ cargo clippy -p vtuber-core -p vtuber-tracking --all-targets -- -D warnings
 
 #### M1-04-001: `VtuberAvatarPlugin`とlifecycle domainを定義する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `G0-03、G0-08`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 

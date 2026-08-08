@@ -45,7 +45,7 @@ impl HeadFilterParams {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct FilterState {
     quat: UnitQuaternion<f32>,
     last_time: MonoTimeNs,
@@ -63,7 +63,7 @@ struct FilterState {
 /// target quaternion that yields the shortest arc from the current state.
 /// Switching between `q` and `-q` for the same physical rotation therefore
 /// does not produce a discontinuity.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HeadRotationFilter {
     params: HeadFilterParams,
     state: Option<FilterState>,

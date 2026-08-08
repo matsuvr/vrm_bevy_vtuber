@@ -318,7 +318,6 @@ pub fn angle_eq(a: f32, b: f32, tolerance_rad: f32) -> bool {
 ///
 /// Points are centered around the origin. The shape is stretched along X
 /// (left-right) and Y (up-down) with a small Z depth to avoid degeneracy.
-#[cfg(test)]
 #[must_use]
 pub fn synthetic_face_points() -> Vec<[f32; 3]> {
     vec![

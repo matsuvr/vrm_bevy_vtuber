@@ -243,6 +243,10 @@ fn transition_table(
 
         Acquiring => match (signal, has_observation, calibration_available) {
             (Acquire, true, true) => (Tracking, vec![ResetFilters], Duration::ZERO),
+            // Once the gate has become confident (the only way to enter
+            // Acquiring), a face with calibration is enough to start tracking
+            // even if the gate does not emit another Acquire signal.
+            (ConfidenceSignal::None, true, true) => (Tracking, none, Duration::ZERO),
             (Degrade, false, _) => (LostHold, vec![StartHold], Duration::ZERO),
             _ => (Acquiring, none, elapsed),
         },

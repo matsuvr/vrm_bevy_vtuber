@@ -1,18 +1,54 @@
-//! Neutral-relative head pose generation.
+//! Tracking pipeline: assembles filtered `AvatarControlFrame` values from
+//! raw face observations.
 //!
-//! Connects a calibrated [`NeutralProfile`] with a live
-//! [`RawFaceObservation`] through the weighted Kabsch solver to produce a
-//! semantic head pose and a pose confidence. This module does not implement
-//! loss recovery, filtering, or expression normalization; those are handled
-//! by later stages of the tracking pipeline.
+//! The pipeline wires together the subsystems implemented in earlier
+//! milestones:
+//!
+//! 1. Confidence synthesis and hysteresis gating.
+//! 2. Tracking state machine.
+//! 3. Neutral-relative head pose solving.
+//! 4. Head rotation smoothing.
+//! 5. Expression normalization and smoothing.
+//! 6. Loss hold, neutral decay, and recovery blending.
+//!
+//! The result is a single [`AvatarControlFrame`] per input observation, or
+//! `None` when no frame should be published. All timing uses the caller's
+//! monotonic timestamp and a caller-supplied delta-time so that recorded
+//! streams replay deterministically.
 
 use std::error::Error;
 use std::fmt;
+use std::time::Duration;
 
-use vtuber_core::types::{FrameSeq, HeadPose, Landmark3, MonoTimeNs, RawFaceObservation};
+use vtuber_core::control::{CalibrationSettings, TrackingPipelineSettings};
+#[cfg(test)]
+use vtuber_core::types::LandmarkSchemaId;
+#[cfg(test)]
+use vtuber_core::types::NamedCoefficient;
+use vtuber_core::types::{
+    AvatarControlFrame, FrameSeq, GazePose, HeadPose, Landmark3, MonoTimeNs, RawFaceObservation,
+    TrackingState,
+};
 
-use crate::calibration::NeutralProfile;
-use crate::pose::{LandmarkSet, PoseError, solve_relative_pose};
+use crate::calibration::{NeutralProfile, NeutralValidationSettings};
+use crate::confidence::{
+    ConfidenceAssessment, ConfidenceGate, ConfidenceGateParams, ConfidenceInputs,
+    ConfidencePolicies, synthesize,
+};
+use crate::filter::{
+    ExpressionCalibration, ExpressionCalibrationError, ExpressionFilter, ExpressionFilterParams,
+    ExpressionRange, HeadFilterParams, HeadRotationFilter,
+};
+use crate::loss_recovery::{LossRecovery, LossRecoveryParams};
+use crate::pose::{
+    LandmarkSet, PoseError, quaternion_to_semantic_pose, semantic_pose_to_quaternion,
+    solve_relative_pose,
+};
+use crate::state_machine::{StateMachineParams, TrackingStateMachine, TransitionInput};
+
+// -----------------------------------------------------------------------------
+// Existing neutral-relative pose code (M1-03-004)
+// -----------------------------------------------------------------------------
 
 /// Why head pose could not be computed for a frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -207,11 +243,429 @@ fn map_pose_error(err: PoseError) -> PoseFailureReason {
     }
 }
 
+// -----------------------------------------------------------------------------
+// Pipeline assembly (M1-03-010)
+// -----------------------------------------------------------------------------
+
+/// Errors that can occur while constructing a [`TrackingPipeline`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PipelineConfigError {
+    /// The confidence-gate parameters are invalid.
+    ConfidenceGate,
+    /// The state-machine parameters are invalid.
+    StateMachine,
+    /// The loss-recovery parameters are invalid.
+    LossRecovery,
+    /// The expression calibration derived from the neutral profile is invalid.
+    ExpressionCalibration,
+}
+
+impl fmt::Display for PipelineConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ConfidenceGate => write!(f, "invalid confidence-gate parameters"),
+            Self::StateMachine => write!(f, "invalid state-machine parameters"),
+            Self::LossRecovery => write!(f, "invalid loss-recovery parameters"),
+            Self::ExpressionCalibration => write!(f, "invalid expression calibration"),
+        }
+    }
+}
+
+impl Error for PipelineConfigError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
+
+/// Runtime configuration for the tracking pipeline.
+///
+/// This is the tracking-side counterpart to
+/// [`TrackingPipelineSettings`](vtuber_core::control::TrackingPipelineSettings).
+/// It groups every subsystem parameter the pipeline needs to run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PipelineConfig {
+    /// Calibration collection settings.
+    pub calibration: CalibrationSettings,
+    /// Neutral-reference validation settings.
+    pub validation: NeutralValidationSettings,
+    /// Confidence hysteresis gate parameters.
+    pub confidence_gate: ConfidenceGateParams,
+    /// Tracking state-machine timing.
+    pub state_machine: StateMachineParams,
+    /// Head rotation filter parameters.
+    pub head_filter: HeadFilterParams,
+    /// Expression normalization and smoothing parameters.
+    pub expression_filter: ExpressionFilterParams,
+    /// Loss hold / decay / recovery timing.
+    pub loss_recovery: LossRecoveryParams,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self {
+            calibration: CalibrationSettings::new(),
+            validation: NeutralValidationSettings::default(),
+            confidence_gate: ConfidenceGateParams::default(),
+            state_machine: StateMachineParams::default(),
+            head_filter: HeadFilterParams::default(),
+            expression_filter: ExpressionFilterParams::default(),
+            loss_recovery: LossRecoveryParams::default(),
+        }
+    }
+}
+
+impl PipelineConfig {
+    /// Creates a configuration from persisted pipeline settings.
+    ///
+    /// Runtime parameters use their documented defaults; only the persisted
+    /// calibration settings are taken from `settings`.
+    #[must_use]
+    pub fn from_settings(settings: &TrackingPipelineSettings) -> Self {
+        Self {
+            calibration: settings.calibration().clone(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Result of a single pipeline update.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PipelineUpdate {
+    /// The emitted control frame, if any.
+    pub frame: Option<AvatarControlFrame>,
+    /// Confidence assessment for this frame.
+    pub confidence: ConfidenceAssessment,
+    /// Tracking state after this update.
+    pub state: TrackingState,
+}
+
+/// Owns the end-to-end tracking pipeline.
+///
+/// `TrackingPipeline` is single-threaded and contains no worker handles,
+/// channels, or rendering state. It is suitable for use on the Bevy main
+/// thread or in deterministic replay tests.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackingPipeline {
+    config: PipelineConfig,
+    profile: Option<NeutralProfile>,
+    expression_filter: ExpressionFilter,
+    head_filter: HeadRotationFilter,
+    confidence_gate: ConfidenceGate,
+    state_machine: TrackingStateMachine,
+    loss_recovery: LossRecovery,
+}
+
+impl TrackingPipeline {
+    /// Creates a new pipeline from a validated configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineConfigError`] if any subsystem parameter is invalid.
+    pub fn new(config: PipelineConfig) -> Result<Self, PipelineConfigError> {
+        let expression_filter =
+            ExpressionFilter::new(default_expression_calibration(), config.expression_filter);
+        let head_filter = HeadRotationFilter::new(config.head_filter);
+        let confidence_gate = ConfidenceGate::new(config.confidence_gate)
+            .map_err(|_| PipelineConfigError::ConfidenceGate)?;
+        let state_machine = TrackingStateMachine::new(config.state_machine)
+            .map_err(|_| PipelineConfigError::StateMachine)?;
+        let loss_recovery = LossRecovery::new(config.loss_recovery)
+            .map_err(|_| PipelineConfigError::LossRecovery)?;
+
+        Ok(Self {
+            config,
+            profile: None,
+            expression_filter,
+            head_filter,
+            confidence_gate,
+            state_machine,
+            loss_recovery,
+        })
+    }
+
+    /// Returns the active neutral profile, if any.
+    #[must_use]
+    pub fn profile(&self) -> Option<&NeutralProfile> {
+        self.profile.as_ref()
+    }
+
+    /// Returns `true` if a calibrated neutral profile is available.
+    #[must_use]
+    pub fn is_calibrated(&self) -> bool {
+        self.profile.is_some()
+    }
+
+    /// Applies a new neutral profile and resets filters so that smoothing
+    /// state does not blend data from a previous calibration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineConfigError::ExpressionCalibration`] if the profile
+    /// cannot be turned into expression calibration ranges.
+    pub fn apply_calibration(
+        &mut self,
+        profile: NeutralProfile,
+    ) -> Result<(), PipelineConfigError> {
+        let calibration = expression_calibration_from_profile(&profile)
+            .map_err(|_| PipelineConfigError::ExpressionCalibration)?;
+        self.expression_filter = ExpressionFilter::new(calibration, self.config.expression_filter);
+        self.head_filter.reset();
+        self.profile = Some(profile);
+        Ok(())
+    }
+
+    /// Clears calibration and resets all smoothing state.
+    pub fn reset_calibration(&mut self) {
+        self.profile = None;
+        self.head_filter.reset();
+        self.expression_filter = ExpressionFilter::new(
+            default_expression_calibration(),
+            self.config.expression_filter,
+        );
+    }
+
+    /// Resets filters and tracking state without changing calibration.
+    pub fn reset(&mut self) {
+        self.head_filter.reset();
+        self.expression_filter.reset();
+        self.confidence_gate.reset();
+        self.state_machine = TrackingStateMachine::new(self.config.state_machine)
+            .expect("config was validated in constructor");
+        self.loss_recovery = LossRecovery::new(self.config.loss_recovery)
+            .expect("config was validated in constructor");
+    }
+
+    /// Runs one frame through the pipeline.
+    ///
+    /// `observation` is the latest inference output, or `None` when no face
+    /// was detected. `now` is the monotonic timestamp to stamp on the
+    /// produced frame. `dt` is the elapsed wall time since the previous
+    /// update and is used by the state machine and loss recovery.
+    ///
+    /// The returned frame is `None` only when the pipeline has no prior
+    /// state to hold or return to neutral from. Once a face has been
+    /// tracked at least once, lost-face periods still emit held or decaying
+    /// frames.
+    #[must_use]
+    pub fn update(
+        &mut self,
+        observation: Option<&RawFaceObservation>,
+        now: MonoTimeNs,
+        dt: Duration,
+    ) -> PipelineUpdate {
+        let calibration_available = self.profile.is_some();
+
+        // 1. Pose solve (only meaningful when calibrated).
+        let pose_result = self.profile.as_ref().and_then(|profile| {
+            observation.map(|obs| compute_neutral_relative_pose(profile, obs, now))
+        });
+
+        // 2. Frame confidence from all available sources.
+        let frame_confidence = self.synthesize_confidence(observation, &pose_result);
+
+        // 3. Hysteresis gate.
+        let confidence_assessment = self.confidence_gate.update(frame_confidence);
+
+        // 4. Tracking state machine.
+        let transition = self.state_machine.update(TransitionInput {
+            signal: confidence_assessment.signal,
+            dt,
+            observation,
+            calibration_available,
+        });
+
+        // 5. Apply state-machine actions.
+        for action in &transition.actions {
+            match action {
+                crate::state_machine::TrackingAction::ResetFilters => {
+                    self.head_filter.reset();
+                    self.expression_filter.reset();
+                }
+                crate::state_machine::TrackingAction::StartHold
+                | crate::state_machine::TrackingAction::StartReturnToNeutral => {}
+            }
+        }
+
+        // 6. Update filters and build a tracked frame when a face is present.
+        let tracked = observation.map(|obs| {
+            let head = self.update_head_filter(&pose_result, now);
+            let expressions = self.expression_filter.update(&obs.expressions, now);
+            let gaze = extract_gaze(obs);
+
+            AvatarControlFrame {
+                source_seq: obs.source_seq,
+                captured_at: obs.captured_at,
+                produced_at: now,
+                confidence: frame_confidence,
+                state: transition.current,
+                head,
+                gaze,
+                expressions,
+            }
+        });
+
+        // 7. Loss recovery blends held/decay/recovery frames.
+        let frame = self
+            .loss_recovery
+            .update(transition.current, dt, tracked, now);
+
+        PipelineUpdate {
+            frame,
+            confidence: confidence_assessment,
+            state: transition.current,
+        }
+    }
+
+    fn synthesize_confidence(
+        &self,
+        observation: Option<&RawFaceObservation>,
+        pose_result: &Option<Result<HeadPoseFrame, HeadPoseFailure>>,
+    ) -> f32 {
+        let Some(obs) = observation else {
+            return 0.0;
+        };
+
+        let landmark = mean_landmark_confidence(&obs.landmarks);
+        let pose = pose_result
+            .as_ref()
+            .and_then(|r| r.as_ref().map(|p| p.confidence).ok());
+        let expression = if obs.expressions.is_valid() {
+            Some(
+                (obs.expressions.blink_left_confidence
+                    + obs.expressions.blink_right_confidence
+                    + obs.expressions.mouth_open_confidence)
+                    / 3.0,
+            )
+        } else {
+            None
+        };
+
+        let inputs = ConfidenceInputs {
+            detector: Some(obs.face_confidence),
+            landmark,
+            pose,
+            expression,
+        };
+
+        synthesize(&inputs, &ConfidencePolicies::default()).unwrap_or(0.0)
+    }
+
+    fn update_head_filter(
+        &mut self,
+        pose_result: &Option<Result<HeadPoseFrame, HeadPoseFailure>>,
+        now: MonoTimeNs,
+    ) -> HeadPose {
+        if let Some(Ok(pose_frame)) = pose_result {
+            let q = semantic_pose_to_quaternion(pose_frame.pose);
+            let filtered_q = self.head_filter.update(q, now);
+            quaternion_to_semantic_pose(filtered_q)
+        } else {
+            self.head_filter
+                .current()
+                .map(quaternion_to_semantic_pose)
+                .unwrap_or_default()
+        }
+    }
+}
+
+fn mean_landmark_confidence(landmarks: &[Landmark3]) -> Option<f32> {
+    if landmarks.is_empty() {
+        return None;
+    }
+    let sum = landmarks
+        .iter()
+        .map(|lm| lm.visibility.clamp(0.0, 1.0))
+        .sum::<f32>();
+    Some(sum / landmarks.len() as f32)
+}
+
+/// Builds expression calibration ranges from a validated neutral profile.
+///
+/// The profile stores open-eye and closed-mouth baselines. Fully-closed
+/// eye and fully-open mouth values are inferred by adding a fixed margin to
+/// the baseline. This is a deliberate MVP simplification; future tasks may
+/// store explicit open/closed calibration targets in the profile.
+fn expression_calibration_from_profile(
+    profile: &NeutralProfile,
+) -> Result<ExpressionCalibration, ExpressionCalibrationError> {
+    let blink_closed_left = (profile.blink_left_baseline + 0.85).min(1.0);
+    let blink_closed_right = (profile.blink_right_baseline + 0.85).min(1.0);
+    let mouth_open = (profile.mouth_open_baseline + 0.75).min(1.0);
+
+    Ok(ExpressionCalibration::new(
+        ExpressionRange::for_blink(
+            profile.blink_left_baseline,
+            profile.blink_left_baseline,
+            blink_closed_left,
+        )?,
+        ExpressionRange::for_blink(
+            profile.blink_right_baseline,
+            profile.blink_right_baseline,
+            blink_closed_right,
+        )?,
+        ExpressionRange::for_mouth(profile.mouth_open_baseline, mouth_open)?,
+    ))
+}
+
+/// A default identity mapping used when no calibration is available.
+///
+/// Raw expression coefficients pass through unscaled until the user
+/// completes calibration. This keeps the avatar responsive during the
+/// initial setup without requiring a persisted profile.
+fn default_expression_calibration() -> ExpressionCalibration {
+    // These constructors cannot fail for the fixed [0,1] ranges.
+    ExpressionCalibration::new(
+        ExpressionRange::for_blink(0.0, 0.0, 1.0).unwrap_or_else(|_| unreachable!()),
+        ExpressionRange::for_blink(0.0, 0.0, 1.0).unwrap_or_else(|_| unreachable!()),
+        ExpressionRange::for_mouth(0.0, 1.0).unwrap_or_else(|_| unreachable!()),
+    )
+}
+
+/// Extracts a semantic gaze direction from inference blendshape coefficients.
+///
+/// Looks for the standard MediaPipe-style names `eyeLookLeft`,
+/// `eyeLookRight`, `eyeLookUp`, and `eyeLookDown` (case-sensitive). When
+/// all four are present, yaw = right - left and pitch = up - down. The
+/// result is clamped to a physiologically plausible range.
+fn extract_gaze(observation: &RawFaceObservation) -> Option<GazePose> {
+    let coefficients = observation.blendshapes.as_ref()?;
+    let find = |name: &str| {
+        coefficients
+            .iter()
+            .find(|c| c.name == name)
+            .map(|c| c.value.clamp(0.0, 1.0))
+            .unwrap_or(0.0)
+    };
+
+    let left = find("eyeLookLeft");
+    let right = find("eyeLookRight");
+    let up = find("eyeLookUp");
+    let down = find("eyeLookDown");
+
+    if left == 0.0 && right == 0.0 && up == 0.0 && down == 0.0 {
+        return None;
+    }
+
+    // Maximum expected eye movement: 35 degrees in either direction.
+    const MAX_GAZE_RAD: f32 = 35.0f32.to_radians();
+    let yaw = ((right - left) * MAX_GAZE_RAD).clamp(-MAX_GAZE_RAD, MAX_GAZE_RAD);
+    let pitch = ((up - down) * MAX_GAZE_RAD).clamp(-MAX_GAZE_RAD, MAX_GAZE_RAD);
+
+    Some(GazePose {
+        yaw_rad: yaw,
+        pitch_rad: pitch,
+    })
+}
+
+// -----------------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------------
+
 #[cfg(test)]
 mod neutral_relative_pose {
     use super::*;
     use approx::assert_relative_eq;
-    use vtuber_core::types::{LandmarkSchemaId, NormalizedRect, RawExpressionObservation};
+    use vtuber_core::types::{NormalizedRect, RawExpressionObservation};
 
     fn observation(
         seq: u64,
@@ -446,5 +900,296 @@ mod neutral_relative_pose {
         // The successful frame is independent of the later failure.
         assert_eq!(failure.source_seq, FrameSeq(2));
         assert!(valid.source_seq != failure.source_seq);
+    }
+}
+
+#[cfg(test)]
+mod assembly {
+    use super::*;
+    use approx::assert_relative_eq;
+    use vtuber_core::types::{NormalizedRect, RawExpressionObservation};
+
+    fn observation(
+        seq: u64,
+        landmarks: Vec<Landmark3>,
+        expressions: RawExpressionObservation,
+    ) -> RawFaceObservation {
+        RawFaceObservation {
+            source_seq: FrameSeq(seq),
+            captured_at: MonoTimeNs(seq * 33_333_333),
+            inference_started_at: MonoTimeNs(seq * 33_333_333 + 5_000_000),
+            inference_finished_at: MonoTimeNs(seq * 33_333_333 + 25_000_000),
+            face_confidence: 0.9,
+            landmarks,
+            blendshapes: None,
+            expressions,
+            roi: NormalizedRect::default(),
+            schema: LandmarkSchemaId("pipeline-test"),
+        }
+    }
+
+    fn neutral_profile() -> NeutralProfile {
+        NeutralProfile {
+            version: 1,
+            schema: LandmarkSchemaId("pipeline-test"),
+            landmarks: crate::pose::synthetic_face_points()
+                .into_iter()
+                .map(|p| Landmark3 {
+                    x: p[0],
+                    y: p[1],
+                    z: p[2],
+                    visibility: 1.0,
+                })
+                .collect(),
+            head_pose: HeadPose::default(),
+            blink_left_baseline: 0.05,
+            blink_right_baseline: 0.05,
+            mouth_open_baseline: 0.05,
+            face_scale: 1.0,
+            confidence_baseline: 0.9,
+            collected_at: MonoTimeNs(0),
+            model_hash: None,
+            camera_fingerprint: None,
+        }
+    }
+
+    fn config() -> PipelineConfig {
+        PipelineConfig {
+            calibration: CalibrationSettings::try_new(5, 5.0, 0.5, 5.0f32.to_radians(), 0.15)
+                .unwrap(),
+            validation: NeutralValidationSettings::try_new(5.0f32.to_radians(), 1.0).unwrap(),
+            confidence_gate: ConfidenceGateParams {
+                enter_threshold: 0.6,
+                exit_threshold: 0.3,
+                required_consecutive_good: 1,
+                required_consecutive_bad: 1,
+                max_count: 100,
+            },
+            state_machine: StateMachineParams {
+                hold_duration: Duration::from_millis(100),
+                return_duration: Duration::from_millis(200),
+            },
+            head_filter: HeadFilterParams::with_time_constant(0.05),
+            expression_filter: ExpressionFilterParams::with_time_constants(0.03, 0.10),
+            loss_recovery: LossRecoveryParams {
+                hold_duration: Duration::from_millis(100),
+                decay_duration: Duration::from_millis(200),
+                recovery_duration: Duration::from_millis(100),
+            },
+        }
+    }
+
+    fn relaxed_expression() -> RawExpressionObservation {
+        RawExpressionObservation {
+            blink_left: 0.05,
+            blink_left_confidence: 0.9,
+            blink_right: 0.05,
+            blink_right_confidence: 0.9,
+            mouth_open: 0.05,
+            mouth_open_confidence: 0.9,
+        }
+    }
+
+    #[test]
+    fn pipeline_starts_uncalibrated_and_searching() {
+        let pipeline = TrackingPipeline::new(config()).unwrap();
+        assert!(!pipeline.is_calibrated());
+    }
+
+    #[test]
+    fn uncalibrated_observation_does_not_crash() {
+        let mut pipeline = TrackingPipeline::new(config()).unwrap();
+        let obs = observation(1, vec![], relaxed_expression());
+        let update = pipeline.update(
+            Some(&obs),
+            MonoTimeNs(33_333_333),
+            Duration::from_millis(33),
+        );
+        assert_eq!(update.state, TrackingState::Searching);
+        assert!(update.frame.is_none() || update.frame.unwrap().confidence < 0.1);
+    }
+
+    #[test]
+    fn calibrated_neutral_observation_yields_identity() {
+        let mut pipeline = TrackingPipeline::new(config()).unwrap();
+        pipeline.apply_calibration(neutral_profile()).unwrap();
+
+        let obs1 = observation(1, neutral_profile().landmarks.clone(), relaxed_expression());
+        let _ = pipeline.update(
+            Some(&obs1),
+            MonoTimeNs(33_333_333),
+            Duration::from_millis(33),
+        );
+
+        let obs2 = observation(2, neutral_profile().landmarks.clone(), relaxed_expression());
+        let update = pipeline.update(
+            Some(&obs2),
+            MonoTimeNs(66_666_666),
+            Duration::from_millis(33),
+        );
+
+        let frame = update.frame.expect("should emit frame");
+        assert_relative_eq!(frame.head.yaw_rad, 0.0, epsilon = 1e-3);
+        assert_relative_eq!(frame.head.pitch_rad, 0.0, epsilon = 1e-3);
+        assert_relative_eq!(frame.head.roll_rad, 0.0, epsilon = 1e-3);
+        assert!(frame.expressions.blink_left.abs() < 1e-3);
+        assert!(frame.expressions.aa.abs() < 1e-3);
+        assert_eq!(frame.state, TrackingState::Tracking);
+        assert_eq!(frame.source_seq, FrameSeq(2));
+    }
+
+    #[test]
+    fn output_timestamps_trace_back_to_input() {
+        let mut pipeline = TrackingPipeline::new(config()).unwrap();
+        pipeline.apply_calibration(neutral_profile()).unwrap();
+
+        let obs = observation(7, neutral_profile().landmarks.clone(), relaxed_expression());
+        let update = pipeline.update(
+            Some(&obs),
+            MonoTimeNs(1_000_000_000),
+            Duration::from_millis(33),
+        );
+
+        let frame = update.frame.expect("should emit frame");
+        assert_eq!(frame.source_seq, FrameSeq(7));
+        assert_eq!(frame.captured_at, MonoTimeNs(7 * 33_333_333));
+        assert_eq!(frame.produced_at, MonoTimeNs(1_000_000_000));
+    }
+
+    #[test]
+    fn reset_clears_filter_state_but_keeps_calibration() {
+        let mut pipeline = TrackingPipeline::new(config()).unwrap();
+        pipeline.apply_calibration(neutral_profile()).unwrap();
+
+        // Move to a non-neutral pose.
+        let mut rotated_landmarks = neutral_profile().landmarks.clone();
+        rotated_landmarks = rotated_landmarks
+            .iter()
+            .map(|lm| {
+                let q = semantic_pose_to_quaternion(HeadPose {
+                    yaw_rad: 0.5,
+                    pitch_rad: 0.0,
+                    roll_rad: 0.0,
+                });
+                let v = nalgebra::OVector::<f32, nalgebra::U3>::new(lm.x, lm.y, lm.z);
+                let r = q * v;
+                Landmark3 {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                    visibility: lm.visibility,
+                }
+            })
+            .collect();
+        let obs = observation(1, rotated_landmarks, relaxed_expression());
+        let _ = pipeline.update(
+            Some(&obs),
+            MonoTimeNs(33_333_333),
+            Duration::from_millis(33),
+        );
+
+        pipeline.reset();
+
+        // After reset, a neutral observation should again be near identity.
+        let obs2 = observation(2, neutral_profile().landmarks.clone(), relaxed_expression());
+        let update = pipeline.update(
+            Some(&obs2),
+            MonoTimeNs(66_666_666),
+            Duration::from_millis(33),
+        );
+        let frame = update.frame.expect("should emit frame");
+        assert_relative_eq!(frame.head.yaw_rad, 0.0, epsilon = 1e-3);
+    }
+
+    #[test]
+    fn applying_new_calibration_resets_filter_state() {
+        let mut pipeline = TrackingPipeline::new(config()).unwrap();
+        pipeline.apply_calibration(neutral_profile()).unwrap();
+
+        let mut rotated_landmarks = neutral_profile().landmarks.clone();
+        rotated_landmarks = rotated_landmarks
+            .iter()
+            .map(|lm| {
+                let q = semantic_pose_to_quaternion(HeadPose {
+                    yaw_rad: 0.5,
+                    pitch_rad: 0.0,
+                    roll_rad: 0.0,
+                });
+                let v = nalgebra::OVector::<f32, nalgebra::U3>::new(lm.x, lm.y, lm.z);
+                let r = q * v;
+                Landmark3 {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                    visibility: lm.visibility,
+                }
+            })
+            .collect();
+        let obs = observation(1, rotated_landmarks, relaxed_expression());
+        let _ = pipeline.update(
+            Some(&obs),
+            MonoTimeNs(33_333_333),
+            Duration::from_millis(33),
+        );
+
+        // Re-apply the same calibration: filter state must reset.
+        pipeline.apply_calibration(neutral_profile()).unwrap();
+        let obs2 = observation(2, neutral_profile().landmarks.clone(), relaxed_expression());
+        let update = pipeline.update(
+            Some(&obs2),
+            MonoTimeNs(66_666_666),
+            Duration::from_millis(33),
+        );
+        let frame = update.frame.expect("should emit frame");
+        assert_relative_eq!(frame.head.yaw_rad, 0.0, epsilon = 1e-3);
+    }
+
+    #[test]
+    fn gaze_is_extracted_from_blendshapes() {
+        let mut pipeline = TrackingPipeline::new(config()).unwrap();
+        pipeline.apply_calibration(neutral_profile()).unwrap();
+
+        let mut obs = observation(1, neutral_profile().landmarks.clone(), relaxed_expression());
+        obs.blendshapes = Some(vec![
+            NamedCoefficient {
+                name: "eyeLookRight".into(),
+                value: 0.5,
+            },
+            NamedCoefficient {
+                name: "eyeLookUp".into(),
+                value: 0.25,
+            },
+        ]);
+
+        let update = pipeline.update(
+            Some(&obs),
+            MonoTimeNs(33_333_333),
+            Duration::from_millis(33),
+        );
+        let frame = update.frame.expect("should emit frame");
+        let gaze = frame.gaze.expect("gaze should be present");
+        assert!(
+            gaze.yaw_rad > 0.0,
+            "looking right should yield positive yaw"
+        );
+        assert!(
+            gaze.pitch_rad > 0.0,
+            "looking up should yield positive pitch"
+        );
+    }
+
+    #[test]
+    fn no_blendshapes_means_no_gaze() {
+        let mut pipeline = TrackingPipeline::new(config()).unwrap();
+        pipeline.apply_calibration(neutral_profile()).unwrap();
+
+        let obs = observation(1, neutral_profile().landmarks.clone(), relaxed_expression());
+        let update = pipeline.update(
+            Some(&obs),
+            MonoTimeNs(33_333_333),
+            Duration::from_millis(33),
+        );
+        let frame = update.frame.expect("should emit frame");
+        assert!(frame.gaze.is_none());
     }
 }

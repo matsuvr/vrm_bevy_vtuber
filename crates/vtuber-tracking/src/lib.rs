@@ -42,7 +42,8 @@ pub use loss_recovery::{
     MIN_RECOVERY_DURATION,
 };
 pub use pipeline::{
-    HeadPoseFailure, HeadPoseFrame, PoseFailureReason, compute_neutral_relative_pose,
+    HeadPoseFailure, HeadPoseFrame, PipelineConfig, PipelineConfigError, PipelineUpdate,
+    PoseFailureReason, TrackingPipeline, compute_neutral_relative_pose,
 };
 pub use pose::{LandmarkSet, PoseAlignment, PoseError, WeightedPoint, solve_relative_pose};
 pub use state_machine::{
