@@ -11,6 +11,7 @@ pub mod binding;
 pub mod capabilities;
 pub mod compatibility;
 pub mod expression;
+pub mod gaze;
 pub mod lifecycle;
 pub mod load;
 pub mod placeholder;
