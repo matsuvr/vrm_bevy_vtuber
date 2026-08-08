@@ -136,6 +136,22 @@ pub fn apply_tracked_head_pose(
     metrics.frames_applied += 1;
 }
 
+/// System that resets pose metrics when the avatar lifecycle changes.
+///
+/// Runs after `clear_control_cache_on_lifecycle_change` to ensure metrics
+/// don't accumulate across avatar replacements.
+pub fn reset_pose_metrics_on_lifecycle_change(
+    lifecycle: Res<AvatarLifecycle>,
+    mut metrics: ResMut<PoseApplyMetrics>,
+    mut last_state: Local<Option<AvatarLifecycleState>>,
+) {
+    let current = lifecycle.state();
+    if last_state.as_ref() != Some(&current) {
+        *metrics = PoseApplyMetrics::default();
+        *last_state = Some(current);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
