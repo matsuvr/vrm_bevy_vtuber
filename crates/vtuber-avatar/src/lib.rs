@@ -8,6 +8,7 @@
 
 pub mod bind;
 pub mod binding;
+pub mod capabilities;
 pub mod compatibility;
 pub mod lifecycle;
 pub mod load;
@@ -16,6 +17,9 @@ pub mod plugin;
 
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};
+pub use capabilities::{
+    BlinkMode, EmotionSet, ExpressionCapabilities, LookDirectionSet, MouthMode,
+};
 pub use lifecycle::*;
 pub use load::{
     AssetPathError, AvatarAssetId, ImportedAvatar, LoadImportedAvatarError,
