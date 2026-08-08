@@ -14,5 +14,8 @@ pub mod import;
 /// Placeholder for app subsystem.
 pub mod placeholder;
 
+/// UI rendering module using bevy_egui.
+pub mod ui;
+
 /// UI view models — immutable snapshots for rendering the UI.
 pub mod ui_model;

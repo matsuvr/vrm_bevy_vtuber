@@ -3,6 +3,7 @@
 //! These types hide Bevy query details from the UI layer. The UI reads
 //! these snapshots and emits [`crate::actions::UiAction`] commands.
 
+use bevy::prelude::Resource;
 use std::path::PathBuf;
 
 /// Which screen the UI is currently showing.
@@ -146,7 +147,7 @@ pub enum TrackingState {
 }
 
 /// Complete UI view model snapshot.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Resource)]
 pub struct UiViewModel {
     /// Current screen.
     pub screen: Screen,
