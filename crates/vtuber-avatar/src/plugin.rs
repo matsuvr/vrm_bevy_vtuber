@@ -12,6 +12,7 @@ use crate::binding::bind_humanoid_bones;
 use crate::lifecycle::{
     AvatarLifecycle, LoadAvatarRequest, LoadAvatarResult, ReplaceAvatarRequest,
     ReplaceAvatarResult, UnloadAvatarRequest, UnloadAvatarResult, apply_avatar_request_events,
+    despawn_unloading_avatar,
 };
 use crate::load::{
     LoadImportedAvatarRequest, LoadImportedAvatarResult, handle_load_imported_avatar_requests,
@@ -40,6 +41,7 @@ impl Plugin for VtuberAvatarPlugin {
                 (
                     handle_load_imported_avatar_requests,
                     apply_avatar_request_events,
+                    despawn_unloading_avatar,
                     observe_initialized,
                     bind_humanoid_bones,
                 )

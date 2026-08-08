@@ -262,6 +262,9 @@ impl LoadImportedAvatarError {
 ///
 /// - If no avatar is active, a [`LoadAvatarRequest`] is emitted.
 /// - If an avatar is currently ready, a [`ReplaceAvatarRequest`] is emitted.
+/// - If a replacement is already unloading, the previously spawned pending root
+///   is discarded and a new [`ReplaceAvatarRequest`] is emitted for the latest
+///   request (coalescing).
 /// - Otherwise the request is rejected and no root is spawned.
 pub(crate) fn handle_load_imported_avatar_requests(
     mut commands: Commands,
@@ -274,8 +277,11 @@ pub(crate) fn handle_load_imported_avatar_requests(
 ) {
     // The lifecycle resource will not be updated until `apply_avatar_request_events`
     // runs later in the frame. Track the effective state locally so that multiple
-    // import requests in a single frame do not spawn orphaned roots.
+    // import requests in a single frame do not spawn orphaned roots. Also track
+    // the latest pending replacement root spawned this frame so continuous replace
+    // requests can be coalesced to the latest one.
     let mut effective_state = lifecycle.state();
+    let mut latest_pending_root: Option<Entity> = None;
 
     for request in requests.read() {
         let asset_path = match request.imported.asset_path.as_str().parse_asset_path() {
@@ -298,7 +304,21 @@ pub(crate) fn handle_load_imported_avatar_requests(
                 effective_state = AvatarLifecycleState::Unloading;
                 Some(LoadOrReplace::Replace)
             }
-            _ => None,
+            AvatarLifecycleState::Unloading => {
+                // Coalesce to the latest request: discard the previously spawned
+                // pending root. The lifecycle resource will be updated to point
+                // to the new root by the `ReplaceAvatarRequest` emitted below.
+                let root_to_discard = latest_pending_root.or_else(|| lifecycle.pending_root());
+                if let Some(old) = root_to_discard
+                    && let Ok(mut entity_commands) = commands.get_entity(old)
+                {
+                    entity_commands.despawn();
+                }
+                // effective_state stays Unloading; latest_pending_root is updated
+                // after the new root is spawned.
+                Some(LoadOrReplace::Replace)
+            }
+            AvatarLifecycleState::Loading | AvatarLifecycleState::Binding => None,
         };
 
         let Some(event) = event else {
@@ -323,6 +343,8 @@ pub(crate) fn handle_load_imported_avatar_requests(
                 Visibility::Hidden,
             ))
             .id();
+
+        latest_pending_root = Some(root);
 
         match event {
             LoadOrReplace::Load => {
@@ -517,7 +539,11 @@ mod tests {
         assert_ne!(pending_root, active_root);
 
         let world = app.world();
-        assert!(world.entity(pending_root).contains::<ActiveAvatar>());
+        // During unloading, neither the old active root nor the pending
+        // replacement root carries the active marker. The marker is promoted
+        // to the replacement only after the old root is despawned.
+        assert!(!world.entity(active_root).contains::<ActiveAvatar>());
+        assert!(!world.entity(pending_root).contains::<ActiveAvatar>());
     }
 
     #[test]

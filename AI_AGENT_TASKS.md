@@ -4634,7 +4634,7 @@ cargo test -p vtuber-avatar avatar_capability_snapshot
 
 #### M1-04-007: single-active avatar replacementを実装する
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-04-006`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 

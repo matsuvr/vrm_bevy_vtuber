@@ -271,13 +271,21 @@ impl AvatarLifecycle {
     /// Validates and starts a replace request.
     ///
     /// From `Ready`, the current avatar moves to `Unloading` and the new root
-    /// is queued. From `NoAvatar` or `Failed`, this behaves like a load.
+    /// is queued. From `Unloading`, the pending root is updated to the latest
+    /// request (coalescing). From `NoAvatar` or `Failed`, this behaves like a
+    /// load.
     pub fn request_replace(&mut self, root: Entity) -> AvatarRequestResult {
         match self.state {
             AvatarLifecycleState::Ready => {
                 self.state = AvatarLifecycleState::Unloading;
                 self.pending_root = Some(root);
                 self.capabilities = None;
+                Ok(())
+            }
+            AvatarLifecycleState::Unloading => {
+                // Coalesce to the latest pending replacement. The previously
+                // spawned pending root is despawned by the caller.
+                self.pending_root = Some(root);
                 Ok(())
             }
             AvatarLifecycleState::NoAvatar | AvatarLifecycleState::Failed => {
@@ -395,13 +403,34 @@ pub(crate) fn apply_avatar_request_events(
     }
 
     for request in replace_requests.read() {
-        let current = lifecycle.active_root();
+        let previous_state = lifecycle.state();
+        let previous_active = lifecycle.active_root();
         match lifecycle.request_replace(request.root) {
             Ok(()) => {
-                if let Some(current) = current {
-                    commands.entity(current).remove::<ActiveAvatar>();
+                let new_state = lifecycle.state();
+                match (previous_state, new_state) {
+                    (AvatarLifecycleState::Ready, AvatarLifecycleState::Unloading) => {
+                        // Old active avatar is being replaced. Remove its marker
+                        // now; the new root stays inactive until the unload completes.
+                        if let Some(old) = previous_active {
+                            commands.entity(old).remove::<ActiveAvatar>();
+                        }
+                    }
+                    (
+                        AvatarLifecycleState::NoAvatar | AvatarLifecycleState::Failed,
+                        AvatarLifecycleState::Loading,
+                    ) => {
+                        // No previous active avatar; the new root is the loading
+                        // active root immediately.
+                        commands.entity(request.root).insert(ActiveAvatar);
+                    }
+                    (AvatarLifecycleState::Unloading, AvatarLifecycleState::Unloading) => {
+                        // Coalesced replacement while already unloading. The old
+                        // active avatar is already being unloaded and the new root
+                        // remains pending.
+                    }
+                    _ => {}
                 }
-                commands.entity(request.root).insert(ActiveAvatar);
                 replace_results.write(ReplaceAvatarResult::Accepted {
                     new_root: request.root,
                 });
@@ -413,11 +442,58 @@ pub(crate) fn apply_avatar_request_events(
     }
 }
 
+/// Despawns the active avatar root once a replacement has been requested.
+///
+/// This system drives the `Unloading -> Loading` transition. It recursively
+/// removes the old root (and with it any [`AvatarBinding`], expression state,
+/// and `bevy_vrm1` components), then promotes the pending replacement root to
+/// active by adding the [`ActiveAvatar`] marker. The new root is not marked
+/// active until the old root has been removed, preserving the single-active-
+/// avatar invariant at the ECS level.
+///
+/// If the replacement load fails after this point, the slot moves to `Failed`
+/// and remains empty; the old avatar has already been despawned and is not
+/// revived.
+pub(crate) fn despawn_unloading_avatar(
+    mut commands: Commands,
+    mut lifecycle: ResMut<AvatarLifecycle>,
+) {
+    if lifecycle.state() != AvatarLifecycleState::Unloading {
+        return;
+    }
+
+    let Some(old_root) = lifecycle.active_root() else {
+        // No active root to remove; finish the unload immediately.
+        lifecycle.finish_unload();
+        return;
+    };
+
+    // Recursive despawn removes the old binding, capability cache, and any
+    // pending expression state. A missing entity is treated as already despawned.
+    if let Ok(mut entity_commands) = commands.get_entity(old_root) {
+        entity_commands.despawn();
+    }
+
+    lifecycle.finish_unload();
+
+    // Promote the pending root to active now that the old root is gone.
+    if let Some(new_root) = lifecycle.active_root()
+        && let Ok(mut entity_commands) = commands.get_entity(new_root)
+    {
+        entity_commands.insert(ActiveAvatar);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::LookDirectionSet;
+    use crate::PendingAvatarLoad;
     use crate::capabilities::{BlinkMode, BonePresence, GazeMode, MouthMode};
+    use crate::load::{
+        AvatarAssetId, AvatarLoadRequestId, ImportedAvatar, LoadImportedAvatarRequest,
+        LoadImportedAvatarResult, UserAssetPath, handle_load_imported_avatar_requests,
+    };
 
     fn entity(id: u32) -> Entity {
         Entity::from_raw_u32(id).expect("test entity index is valid")
@@ -624,5 +700,233 @@ mod tests {
         lifecycle.finish_unload();
         assert!(lifecycle.capabilities().is_none());
         assert_eq!(lifecycle.state(), AvatarLifecycleState::NoAvatar);
+    }
+
+    fn test_app() -> App {
+        use bevy::asset::AssetApp;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<bevy_vrm1::prelude::VrmAsset>()
+            .init_resource::<AvatarLifecycle>()
+            .add_message::<LoadImportedAvatarRequest>()
+            .add_message::<LoadImportedAvatarResult>()
+            .add_message::<LoadAvatarRequest>()
+            .add_message::<LoadAvatarResult>()
+            .add_message::<ReplaceAvatarRequest>()
+            .add_message::<ReplaceAvatarResult>()
+            .add_message::<UnloadAvatarRequest>()
+            .add_message::<UnloadAvatarResult>()
+            .add_systems(
+                Update,
+                (
+                    handle_load_imported_avatar_requests,
+                    apply_avatar_request_events,
+                    despawn_unloading_avatar,
+                )
+                    .chain(),
+            );
+        app
+    }
+
+    fn test_app_without_despawn() -> App {
+        use bevy::asset::AssetApp;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<bevy_vrm1::prelude::VrmAsset>()
+            .init_resource::<AvatarLifecycle>()
+            .add_message::<LoadImportedAvatarRequest>()
+            .add_message::<LoadImportedAvatarResult>()
+            .add_message::<LoadAvatarRequest>()
+            .add_message::<LoadAvatarResult>()
+            .add_message::<ReplaceAvatarRequest>()
+            .add_message::<ReplaceAvatarResult>()
+            .add_message::<UnloadAvatarRequest>()
+            .add_message::<UnloadAvatarResult>()
+            .add_systems(
+                Update,
+                (
+                    handle_load_imported_avatar_requests,
+                    apply_avatar_request_events,
+                )
+                    .chain(),
+            );
+        app
+    }
+
+    fn import_request(request_id: AvatarLoadRequestId, id: &str) -> LoadImportedAvatarRequest {
+        let id = AvatarAssetId::new(id);
+        let asset_path = UserAssetPath::avatar_model_path(&id).expect("test path is valid");
+        LoadImportedAvatarRequest {
+            request_id,
+            imported: ImportedAvatar::new(id, asset_path, "Test Model"),
+        }
+    }
+
+    fn load_to_ready(app: &mut App, request_id: AvatarLoadRequestId, id: &str) -> Entity {
+        app.world_mut()
+            .resource_mut::<Messages<LoadImportedAvatarRequest>>()
+            .write(import_request(request_id, id));
+        app.update();
+
+        let active_root = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .active_root()
+            .expect("active root after load");
+        app.world_mut()
+            .resource_mut::<AvatarLifecycle>()
+            .start_binding(active_root);
+        app.world_mut()
+            .resource_mut::<AvatarLifecycle>()
+            .finish_ready();
+        active_root
+    }
+
+    #[test]
+    fn avatar_replace_transitions_through_unloading() {
+        // Without the despawn system, the lifecycle stays in Unloading so we
+        // can observe the intermediate state and marker cleanup.
+        let mut app = test_app_without_despawn();
+        let first_root = load_to_ready(&mut app, 1, "first");
+
+        app.world_mut()
+            .resource_mut::<Messages<LoadImportedAvatarRequest>>()
+            .write(import_request(2, "second"));
+        app.update();
+
+        let lifecycle = app.world().resource::<AvatarLifecycle>();
+        assert_eq!(lifecycle.state(), AvatarLifecycleState::Unloading);
+        let active_root = lifecycle.active_root().expect("old root remains active");
+        let pending_root = lifecycle.pending_root().expect("new root is pending");
+        assert_eq!(active_root, first_root);
+        assert_ne!(active_root, pending_root);
+
+        let world = app.world();
+        assert!(!world.entity(active_root).contains::<ActiveAvatar>());
+        assert!(!world.entity(pending_root).contains::<ActiveAvatar>());
+    }
+
+    #[test]
+    fn avatar_replace_despawns_old_and_activates_new() {
+        let mut app = test_app();
+        let first_root = load_to_ready(&mut app, 1, "first");
+
+        app.world_mut()
+            .resource_mut::<Messages<LoadImportedAvatarRequest>>()
+            .write(import_request(2, "second"));
+        app.update();
+
+        let lifecycle = app.world().resource::<AvatarLifecycle>();
+        assert_eq!(lifecycle.state(), AvatarLifecycleState::Loading);
+        let second_root = lifecycle.active_root().expect("new active root");
+        assert_ne!(second_root, first_root);
+        assert!(lifecycle.pending_root().is_none());
+
+        let world = app.world();
+        assert!(!world.entities().contains(first_root));
+        assert!(world.entity(second_root).contains::<ActiveAvatar>());
+    }
+
+    #[test]
+    fn avatar_replace_coalesces_to_latest() {
+        let mut app = test_app();
+        let first_root = load_to_ready(&mut app, 1, "first");
+
+        // Two replacement requests in the same update: only the latest root
+        // should survive.
+        app.world_mut()
+            .resource_mut::<Messages<LoadImportedAvatarRequest>>()
+            .write(import_request(2, "second"));
+        app.world_mut()
+            .resource_mut::<Messages<LoadImportedAvatarRequest>>()
+            .write(import_request(3, "third"));
+        app.update();
+
+        let second_root = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .active_root()
+            .expect("replacement active");
+        assert_ne!(second_root, first_root);
+
+        let world = app.world_mut();
+        assert!(!world.entities().contains(first_root));
+        assert!(world.entity(second_root).contains::<ActiveAvatar>());
+
+        let mut query = world.query::<(Entity, &PendingAvatarLoad)>();
+        let pending: Vec<_> = query.iter(&world).collect();
+        assert_eq!(pending.len(), 1);
+        let (pending_entity, pending_load) = pending[0];
+        assert_eq!(pending_entity, second_root);
+        assert_eq!(pending_load.request_id, 3);
+    }
+
+    #[test]
+    fn avatar_replace_rapid_is_deterministic() {
+        let mut app = test_app();
+        let first_root = load_to_ready(&mut app, 1, "first");
+
+        for i in 2..=10 {
+            app.world_mut()
+                .resource_mut::<Messages<LoadImportedAvatarRequest>>()
+                .write(import_request(i, &format!("model{i}")));
+        }
+        app.update();
+
+        let active_root = app.world().resource::<AvatarLifecycle>().active_root();
+
+        let mut query = app.world_mut().query::<(Entity, &PendingAvatarLoad)>();
+        let pending: Vec<_> = query.iter(app.world()).collect();
+        assert_eq!(pending.len(), 1);
+        let (pending_root, pending_load) = pending[0];
+        assert_eq!(pending_load.request_id, 10);
+        assert_eq!(active_root, Some(pending_root));
+
+        let world = app.world_mut();
+        assert!(!world.entities().contains(first_root));
+        assert!(world.entity(pending_root).contains::<ActiveAvatar>());
+
+        // At no point were two roots active simultaneously.
+        let mut query = world.query_filtered::<Entity, With<ActiveAvatar>>();
+        let active_count = query.iter(&world).count();
+        assert_eq!(active_count, 1);
+    }
+
+    #[test]
+    fn avatar_replace_failure_leaves_empty() {
+        let mut app = test_app();
+        let first_root = load_to_ready(&mut app, 1, "first");
+
+        app.world_mut()
+            .resource_mut::<Messages<LoadImportedAvatarRequest>>()
+            .write(import_request(2, "second"));
+        app.update();
+
+        let second_root = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .active_root()
+            .expect("replacement root active");
+
+        // In real code the failing system removes the marker before calling
+        // fail(); simulate that here so the test reflects the cleanup contract.
+        app.world_mut()
+            .entity_mut(second_root)
+            .remove::<ActiveAvatar>();
+        app.world_mut()
+            .resource_mut::<AvatarLifecycle>()
+            .fail(AvatarLifecycleFailure::AssetLoadFailed);
+
+        let lifecycle = app.world().resource::<AvatarLifecycle>();
+        assert_eq!(lifecycle.state(), AvatarLifecycleState::Failed);
+        assert!(lifecycle.active_root().is_none());
+        assert!(lifecycle.pending_root().is_none());
+        assert!(lifecycle.capabilities().is_none());
+
+        let world = app.world();
+        assert!(!world.entities().contains(first_root));
+        assert!(!world.entity(second_root).contains::<ActiveAvatar>());
     }
 }
