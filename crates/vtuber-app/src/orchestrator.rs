@@ -28,6 +28,24 @@ pub struct Orchestrator {
     selected_camera: Option<usize>,
     /// Last error, if any.
     last_error: Option<OrchestratorError>,
+    /// Pipeline lifecycle state.
+    pipeline_state: PipelineState,
+}
+
+/// State of the tracking pipeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PipelineState {
+    /// Pipeline is idle.
+    #[default]
+    Idle,
+    /// Pipeline is starting up.
+    Starting,
+    /// Pipeline is running.
+    Running,
+    /// Pipeline is stopping.
+    Stopping,
+    /// Pipeline failed to start or crashed.
+    Failed,
 }
 
 /// State of an in-progress or completed import.
@@ -80,6 +98,7 @@ impl Default for Orchestrator {
             cameras: Vec::new(),
             selected_camera: None,
             last_error: None,
+            pipeline_state: PipelineState::Idle,
         }
     }
 }
@@ -177,23 +196,56 @@ impl Orchestrator {
 
     /// Start the tracking pipeline.
     fn start_pipeline(&mut self) {
+        if self.pipeline_state == PipelineState::Running
+            || self.pipeline_state == PipelineState::Starting
+        {
+            self.last_error = Some(OrchestratorError::PipelineAlreadyRunning);
+            return;
+        }
         if self.selected_camera.is_none() {
             self.last_error = Some(OrchestratorError::NoCameraSelected);
             return;
         }
         if self.imported_model.is_none() {
             self.last_error = Some(OrchestratorError::NoAvatarLoaded);
+            return;
         }
+        self.pipeline_state = PipelineState::Starting;
         // TODO: Actually start capture → inference → tracking workers.
+        // On success: pipeline_state = Running
+        // On failure: pipeline_state = Failed, set last_error
+        self.pipeline_state = PipelineState::Running;
     }
 
     /// Stop the tracking pipeline.
     fn stop_pipeline(&mut self) {
+        if self.pipeline_state == PipelineState::Idle
+            || self.pipeline_state == PipelineState::Stopping
+        {
+            return;
+        }
+        self.pipeline_state = PipelineState::Stopping;
         // TODO: Actually stop workers in reverse order.
+        self.pipeline_state = PipelineState::Idle;
+    }
+
+    /// Get the current pipeline state.
+    #[must_use]
+    pub fn pipeline_state(&self) -> PipelineState {
+        self.pipeline_state
     }
 
     /// Update the UI view model from current orchestrator state.
     pub fn update_view_model(&self, vm: &mut UiViewModel) {
+        // Lifecycle.
+        vm.lifecycle = match self.pipeline_state {
+            PipelineState::Idle => AppLifecycle::Idle,
+            PipelineState::Starting => AppLifecycle::Starting,
+            PipelineState::Running => AppLifecycle::Running,
+            PipelineState::Stopping => AppLifecycle::Stopping,
+            PipelineState::Failed => AppLifecycle::Failed,
+        };
+
         // Camera.
         vm.camera.available_cameras = self.cameras.clone();
         vm.camera.selected_index = self.selected_camera;

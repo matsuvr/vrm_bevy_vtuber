@@ -8,6 +8,12 @@
 /// UI action commands emitted by the UI layer.
 pub mod actions;
 
+/// Diagnostics snapshot for the UI.
+pub mod diagnostics;
+
+/// Error presenter — maps domain errors to user-facing messages.
+pub mod error_presenter;
+
 /// VRM 1.0 import and preflight inspection.
 pub mod import;
 
@@ -16,6 +22,9 @@ pub mod orchestrator;
 
 /// Placeholder for app subsystem.
 pub mod placeholder;
+
+/// Camera preview texture pipeline.
+pub mod preview;
 
 /// UI rendering module using bevy_egui.
 pub mod ui;
