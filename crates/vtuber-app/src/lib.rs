@@ -11,6 +11,9 @@ pub mod actions;
 /// VRM 1.0 import and preflight inspection.
 pub mod import;
 
+/// App orchestrator — processes UI actions and manages domain state.
+pub mod orchestrator;
+
 /// Placeholder for app subsystem.
 pub mod placeholder;
 

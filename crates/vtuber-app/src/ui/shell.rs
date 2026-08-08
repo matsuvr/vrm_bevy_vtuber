@@ -9,6 +9,7 @@
 use bevy::prelude::*;
 
 use crate::actions::UiAction;
+use crate::orchestrator::{Orchestrator, process_ui_actions_system};
 use crate::ui_model::UiViewModel;
 
 /// Plugin that sets up the egui-based UI shell.
@@ -22,6 +23,8 @@ impl Plugin for UiShellPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiState>()
             .init_resource::<UiViewModel>()
+            .init_resource::<Orchestrator>()
+            .add_systems(Update, process_ui_actions_system)
             .add_systems(Update, ui_stub_system);
     }
 }
