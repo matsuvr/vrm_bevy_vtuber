@@ -4595,7 +4595,7 @@ cargo test -p vtuber-avatar expression_capabilities
 
 #### M1-04-006: `AvatarCapabilities`公開snapshotを組み立てる
 
-状態: `PENDING`  
+状態: `DONE`  
 依存: `M1-04-005`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 

@@ -4,6 +4,7 @@
 //! avatar at a time. It exposes request events, typed results, and a
 //! read-only snapshot for the UI. No `bevy_vrm1` types are used here.
 
+use crate::capabilities::AvatarCapabilities;
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use std::time::{Duration, Instant};
@@ -63,7 +64,7 @@ impl std::error::Error for AvatarRequestError {}
 pub type AvatarRequestResult = Result<(), AvatarRequestError>;
 
 /// Read-only snapshot of the avatar lifecycle for UI consumption.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct AvatarLifecycleSnapshot {
     /// Current lifecycle state.
     pub state: AvatarLifecycleState,
@@ -71,6 +72,8 @@ pub struct AvatarLifecycleSnapshot {
     pub active_root: Option<Entity>,
     /// Entity waiting to replace the current avatar during a replace request.
     pub pending_root: Option<Entity>,
+    /// Capability snapshot of the active avatar, if binding has completed.
+    pub capabilities: Option<AvatarCapabilities>,
 }
 
 /// Request to load a new avatar into the active slot.
@@ -161,6 +164,7 @@ pub struct AvatarLifecycle {
     active_root: Option<Entity>,
     pending_root: Option<Entity>,
     load_started: Option<Instant>,
+    capabilities: Option<AvatarCapabilities>,
 }
 
 impl AvatarLifecycle {
@@ -194,6 +198,17 @@ impl AvatarLifecycle {
         self.load_started
     }
 
+    /// Capability snapshot of the currently active avatar, if binding has completed.
+    #[must_use]
+    pub fn capabilities(&self) -> Option<&AvatarCapabilities> {
+        self.capabilities.as_ref()
+    }
+
+    /// Sets or clears the capability snapshot.
+    pub(crate) fn set_capabilities(&mut self, caps: Option<AvatarCapabilities>) {
+        self.capabilities = caps;
+    }
+
     /// Returns `true` if the current load has exceeded the timeout deadline.
     #[must_use]
     pub fn is_load_timed_out(&self, now: Instant) -> bool {
@@ -208,6 +223,7 @@ impl AvatarLifecycle {
             state: self.state,
             active_root: self.active_root,
             pending_root: self.pending_root,
+            capabilities: self.capabilities.clone(),
         }
     }
 
@@ -221,6 +237,7 @@ impl AvatarLifecycle {
                 self.active_root = Some(root);
                 self.pending_root = None;
                 self.load_started = Some(Instant::now());
+                self.capabilities = None;
                 Ok(())
             }
             _ => Err(AvatarRequestError::InvalidState {
@@ -238,6 +255,7 @@ impl AvatarLifecycle {
             AvatarLifecycleState::Ready => {
                 self.state = AvatarLifecycleState::Unloading;
                 self.pending_root = None;
+                self.capabilities = None;
                 Ok(())
             }
             AvatarLifecycleState::NoAvatar
@@ -259,6 +277,7 @@ impl AvatarLifecycle {
             AvatarLifecycleState::Ready => {
                 self.state = AvatarLifecycleState::Unloading;
                 self.pending_root = Some(root);
+                self.capabilities = None;
                 Ok(())
             }
             AvatarLifecycleState::NoAvatar | AvatarLifecycleState::Failed => {
@@ -306,10 +325,12 @@ impl AvatarLifecycle {
             self.state = AvatarLifecycleState::Loading;
             self.active_root = Some(pending);
             self.load_started = Some(Instant::now());
+            self.capabilities = None;
         } else {
             self.state = AvatarLifecycleState::NoAvatar;
             self.active_root = None;
             self.load_started = None;
+            self.capabilities = None;
         }
     }
 
@@ -319,6 +340,7 @@ impl AvatarLifecycle {
         self.active_root = None;
         self.pending_root = None;
         self.load_started = None;
+        self.capabilities = None;
     }
 }
 
@@ -394,6 +416,8 @@ pub(crate) fn apply_avatar_request_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LookDirectionSet;
+    use crate::capabilities::{BlinkMode, BonePresence, GazeMode, MouthMode};
 
     fn entity(id: u32) -> Entity {
         Entity::from_raw_u32(id).expect("test entity index is valid")
@@ -524,5 +548,81 @@ mod tests {
         assert_eq!(cloned.active_root, Some(entity(99)));
         assert_eq!(lifecycle.state(), AvatarLifecycleState::Loading);
         assert_eq!(lifecycle.active_root(), Some(root));
+    }
+
+    fn sample_capabilities() -> AvatarCapabilities {
+        AvatarCapabilities {
+            bones: BonePresence {
+                head: true,
+                neck: true,
+                left_eye: true,
+                right_eye: true,
+                upper_chest: false,
+                chest: false,
+                spine: false,
+            },
+            blink: BlinkMode::PerEye,
+            mouth: MouthMode::Full,
+            gaze: GazeMode::ExpressionAndEyeBones,
+            look_directions: LookDirectionSet::default(),
+            spring_bone: true,
+            unknown_expressions: vec![],
+        }
+    }
+
+    #[test]
+    fn avatar_capability_snapshot_lifecycle_update() {
+        let mut lifecycle = AvatarLifecycle::new();
+        let root = entity(10);
+
+        lifecycle.request_load(root).unwrap();
+        lifecycle.start_binding(root);
+        assert!(lifecycle.capabilities().is_none());
+
+        let caps = sample_capabilities();
+        lifecycle.set_capabilities(Some(caps.clone()));
+        lifecycle.finish_ready();
+
+        assert_eq!(lifecycle.state(), AvatarLifecycleState::Ready);
+        let snapshot = lifecycle.snapshot();
+        assert_eq!(snapshot.capabilities, Some(caps));
+
+        // Model replacement clears the old snapshot.
+        lifecycle.request_replace(entity(11)).unwrap();
+        assert!(lifecycle.capabilities().is_none());
+        assert!(lifecycle.snapshot().capabilities.is_none());
+    }
+
+    #[test]
+    fn avatar_capability_snapshot_clears_on_failure() {
+        let mut lifecycle = AvatarLifecycle::new();
+        let root = entity(12);
+
+        lifecycle.request_load(root).unwrap();
+        lifecycle.start_binding(root);
+        lifecycle.set_capabilities(Some(sample_capabilities()));
+        lifecycle.fail(AvatarLifecycleFailure::BindingTimeout);
+
+        assert!(lifecycle.capabilities().is_none());
+        assert!(lifecycle.snapshot().capabilities.is_none());
+    }
+
+    #[test]
+    fn avatar_capability_snapshot_clears_on_unload() {
+        let mut lifecycle = AvatarLifecycle::new();
+        let root = entity(13);
+
+        lifecycle.request_load(root).unwrap();
+        lifecycle.start_binding(root);
+        lifecycle.set_capabilities(Some(sample_capabilities()));
+        lifecycle.finish_ready();
+        assert!(lifecycle.capabilities().is_some());
+
+        lifecycle.request_unload().unwrap();
+        assert!(lifecycle.capabilities().is_none());
+
+        lifecycle.finish_unload();
+        assert!(lifecycle.capabilities().is_none());
+        assert_eq!(lifecycle.state(), AvatarLifecycleState::NoAvatar);
     }
 }

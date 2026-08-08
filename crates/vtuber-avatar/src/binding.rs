@@ -12,6 +12,7 @@ use bevy_vrm1::prelude::*;
 use std::time::{Duration, Instant};
 
 use crate::bind::BindTriggered;
+use crate::capabilities::{AvatarCapabilities, BonePresence, ExpressionCapabilities};
 use crate::lifecycle::{
     ActiveAvatar, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
 };
@@ -146,7 +147,7 @@ pub struct BindingDeadline(Instant);
 /// Runs while the lifecycle is in `Binding`. On success it inserts
 /// [`AvatarBinding`] on the root and transitions the lifecycle to `Ready`. On
 /// failure it transitions to `Failed` with a typed error.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn bind_humanoid_bones(
     mut commands: Commands,
     mut lifecycle: ResMut<AvatarLifecycle>,
@@ -165,6 +166,9 @@ pub fn bind_humanoid_bones(
     >,
     bone_query: Query<(Option<&Transform>, Option<&RestTransform>)>,
     deadlines: Query<&BindingDeadline>,
+    expression_maps: Query<Option<&ExpressionEntityMap>>,
+    spring_roots: Query<Entity, With<SpringRoot>>,
+    parents: Query<&ChildOf>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Binding {
         return;
@@ -216,8 +220,29 @@ pub fn bind_humanoid_bones(
 
     match result {
         Ok(binding) => {
+            let expression_map = expression_maps.get(root_entity).ok().flatten();
+            let expression_caps = ExpressionCapabilities::from_map(expression_map);
+            let has_spring_bone = spring_roots
+                .iter()
+                .any(|entity| is_descendant(entity, root_entity, &parents));
+            let bones = BonePresence {
+                head: true,
+                neck: binding.neck.is_some(),
+                left_eye: binding.left_eye.is_some(),
+                right_eye: binding.right_eye.is_some(),
+                upper_chest: binding.upper_chest.is_some(),
+                chest: binding.chest.is_some(),
+                spine: binding.spine.is_some(),
+            };
+            let capabilities = AvatarCapabilities::from_bones_and_expression_capabilities(
+                bones,
+                &expression_caps,
+                has_spring_bone,
+            );
+
             commands.entity(root_entity).insert(binding);
             commands.entity(root_entity).remove::<BindingDeadline>();
+            lifecycle.set_capabilities(Some(capabilities));
             lifecycle.finish_ready();
         }
         Err(error) => {
@@ -319,6 +344,20 @@ fn resolve_optional_bone(
     }
 
     Some(entity)
+}
+
+/// Returns `true` if `entity` is a descendant of `ancestor` by walking parent
+/// links. Returns `false` if the entity has no parent or the query fails.
+fn is_descendant(entity: Entity, ancestor: Entity, parents: &Query<&ChildOf>) -> bool {
+    let mut current = entity;
+    while let Ok(parent) = parents.get(current) {
+        let parent_entity = parent.parent();
+        if parent_entity == ancestor {
+            return true;
+        }
+        current = parent_entity;
+    }
+    false
 }
 
 #[cfg(test)]
