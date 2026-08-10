@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use vtuber_core::types::{FrameSeq, MonoTimeNs, RawFaceObservation, VideoFrame};
+use vtuber_core::types::{FrameSeq, RawFaceObservation, VideoFrame};
 use vtuber_core::{LatestSlot, ReadResult, StopToken};
 
 use crate::controller::{ControlCommand, InferenceWorkerResult};
@@ -149,7 +149,7 @@ pub fn run_inference_worker(
                 pipeline.record_detector_run(frame.seq);
 
                 let start = Instant::now();
-                let started_at = MonoTimeNs(start.elapsed().as_nanos() as u64);
+                let started_at = vtuber_core::monotonic_now();
 
                 match preprocess_frame(buffers, &frame, params) {
                     Ok(tensor) => {
@@ -183,7 +183,7 @@ pub fn run_inference_worker(
                                     let decode_duration = decode_start.elapsed();
 
                                     let elapsed = start.elapsed();
-                                    let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
+                                    let finished_at = vtuber_core::monotonic_now();
                                     let observation = RawFaceObservation {
                                         source_seq: frame.seq,
                                         captured_at: frame.captured_at,
@@ -635,7 +635,7 @@ mod tests {
                     last_processed_seq = Some(frame.seq);
 
                     let start = Instant::now();
-                    let started_at = MonoTimeNs(start.elapsed().as_nanos() as u64);
+                    let started_at = vtuber_core::monotonic_now();
 
                     let InferenceContext {
                         runtime,
@@ -665,7 +665,7 @@ mod tests {
                                     }
                                     let infer_duration = infer_start.elapsed();
                                     let elapsed = start.elapsed();
-                                    let finished_at = MonoTimeNs(elapsed.as_nanos() as u64);
+                                    let finished_at = vtuber_core::monotonic_now();
                                     let observation = RawFaceObservation {
                                         source_seq: frame.seq,
                                         captured_at: frame.captured_at,

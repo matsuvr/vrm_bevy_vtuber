@@ -36,4 +36,6 @@ pub use pose::{
     NonFiniteInputError, PoseApplyMetrics, PoseClampSettings, PoseDistributionSettings,
     RawAxisDeltas, RestOrientationCache, RestOrientationError,
 };
-pub use unload::{ActiveControlFrame, ControlFrameError};
+pub use unload::{
+    ActiveControlFrame, ControlFrameError, set_active_control_frame, tag_control_frame,
+};

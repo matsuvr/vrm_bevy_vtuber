@@ -4,11 +4,14 @@
 //! VTuber lifecycle domain. `bevy_vrm1` types are used internally and are not
 //! re-exported from the crate facade.
 
+use bevy::app::AnimationSystems;
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 
 use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
+use crate::expression::apply_tracked_expressions;
+use crate::gaze::apply_tracked_eye_gaze;
 use crate::lifecycle::{
     AvatarLifecycle, LoadAvatarRequest, LoadAvatarResult, ReplaceAvatarRequest,
     ReplaceAvatarResult, UnloadAvatarRequest, UnloadAvatarResult, apply_avatar_request_events,
@@ -59,7 +62,24 @@ impl Plugin for VtuberAvatarPlugin {
             .add_systems(Update, clear_control_cache_on_lifecycle_change)
             .add_systems(Update, log_loaded_vrm)
             .add_systems(Update, log_head_bone)
-            .add_systems(PostUpdate, apply_tracked_head_pose)
+            .add_systems(
+                PostUpdate,
+                apply_tracked_head_pose
+                    .after(AnimationSystems)
+                    .before(VrmSystemSets::Constraints),
+            )
+            .add_systems(
+                PostUpdate,
+                apply_tracked_eye_gaze
+                    .after(VrmSystemSets::PropagateAfterConstraints)
+                    .before(VrmSystemSets::Expressions),
+            )
+            .add_systems(
+                PostUpdate,
+                apply_tracked_expressions
+                    .after(VrmSystemSets::GazeControl)
+                    .before(VrmSystemSets::Expressions),
+            )
             .add_systems(Update, reset_pose_metrics_on_lifecycle_change);
     }
 }

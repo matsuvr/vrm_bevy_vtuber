@@ -87,7 +87,7 @@ fn format_matches_preference(
     match effective {
         RequestedFormat::Any => true,
         RequestedFormat::Mjpeg => candidate == PixelFormat::Rgb8,
-        RequestedFormat::Yuyv => candidate == PixelFormat::Gray8,
+        RequestedFormat::Yuyv => candidate == PixelFormat::Bgr8,
     }
 }
 

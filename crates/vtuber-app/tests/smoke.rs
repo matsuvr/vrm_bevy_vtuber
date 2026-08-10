@@ -6,6 +6,7 @@
 use vtuber_app::actions::UiAction;
 use vtuber_app::orchestrator::Orchestrator;
 use vtuber_app::ui_model::*;
+use vtuber_camera::device::CameraDescriptor;
 
 /// Smoke test: full UI action flow.
 #[test]
@@ -15,6 +16,10 @@ fn smoke_ui_action_flow() {
 
     // 1. Refresh cameras.
     orch.process_action(&UiAction::RefreshCameras);
+    orch.set_camera_list(vec![CameraDescriptor {
+        id: "test:0".into(),
+        label: "Test camera".into(),
+    }]);
     orch.update_view_model(&mut vm);
     assert!(!vm.camera.available_cameras.is_empty());
 
@@ -54,6 +59,10 @@ fn smoke_view_model_reflects_state() {
 
     // After camera refresh + selection.
     orch.process_action(&UiAction::RefreshCameras);
+    orch.set_camera_list(vec![CameraDescriptor {
+        id: "test:0".into(),
+        label: "Test camera".into(),
+    }]);
     orch.process_action(&UiAction::SelectCamera { index: 0 });
     orch.update_view_model(&mut vm);
     assert!(!vm.camera.available_cameras.is_empty());
@@ -138,6 +147,10 @@ fn smoke_m107_acceptance_criteria() {
     orch.process_action(&UiAction::Start); // Fails: no camera.
     assert!(orch.last_error().is_some());
     orch.process_action(&UiAction::RefreshCameras);
+    orch.set_camera_list(vec![CameraDescriptor {
+        id: "test:0".into(),
+        label: "Test camera".into(),
+    }]);
     orch.process_action(&UiAction::SelectCamera { index: 0 });
     orch.process_action(&UiAction::DismissError);
     assert!(orch.last_error().is_none());

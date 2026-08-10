@@ -6,6 +6,8 @@
 //! prevent drift.
 
 use bevy::prelude::*;
+use vtuber_core::metrics::FixedStats;
+use vtuber_core::monotonic_now;
 
 use super::binding::RestOrientationCache;
 use super::distribution::{PoseDistributionSettings, apply_distributed_pose, distribute_pose};
@@ -14,7 +16,7 @@ use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
 use crate::unload::ActiveControlFrame;
 
 /// Metrics for the pose apply system, useful for diagnostics.
-#[derive(Resource, Debug, Default, Clone)]
+#[derive(Resource, Debug, Clone)]
 pub struct PoseApplyMetrics {
     /// Number of frames where the pose was successfully applied.
     pub frames_applied: u64,
@@ -26,6 +28,50 @@ pub struct PoseApplyMetrics {
     pub skipped_no_frame: u64,
     /// Number of frames skipped because the binding entity was stale.
     pub skipped_stale_entity: u64,
+    /// Source sequence of the most recently applied frame.
+    pub last_applied_source_seq: Option<vtuber_core::FrameSeq>,
+    /// Monotonic time when the most recent frame was applied.
+    pub last_applied_at: Option<vtuber_core::MonoTimeNs>,
+    /// Capture-to-apply latency of the most recently applied frame.
+    pub last_capture_to_apply_ms: Option<f64>,
+    /// Fixed-size capture-to-apply latency samples.
+    latency_samples: FixedStats,
+}
+
+impl Default for PoseApplyMetrics {
+    fn default() -> Self {
+        Self {
+            frames_applied: 0,
+            skipped_not_ready: 0,
+            skipped_generation_mismatch: 0,
+            skipped_no_frame: 0,
+            skipped_stale_entity: 0,
+            last_applied_source_seq: None,
+            last_applied_at: None,
+            last_capture_to_apply_ms: None,
+            latency_samples: FixedStats::new(256),
+        }
+    }
+}
+
+impl PoseApplyMetrics {
+    /// Number of capture-to-apply latency samples retained.
+    #[must_use]
+    pub fn latency_sample_count(&self) -> usize {
+        self.latency_samples.count()
+    }
+
+    /// p50 capture-to-apply latency in milliseconds.
+    #[must_use]
+    pub fn capture_to_apply_p50_ms(&self) -> f64 {
+        self.latency_samples.p50()
+    }
+
+    /// p95 capture-to-apply latency in milliseconds.
+    #[must_use]
+    pub fn capture_to_apply_p95_ms(&self) -> f64 {
+        self.latency_samples.p95()
+    }
 }
 
 /// System that applies tracked head pose to the active avatar's bones.
@@ -133,7 +179,18 @@ pub fn apply_tracked_head_pose(
         neck_transform.rotation = neck_rotation;
     }
 
+    let applied_at = monotonic_now();
+    let latency_ms = applied_at
+        .0
+        .checked_sub(frame.captured_at.0)
+        .map(|ns| ns as f64 / 1_000_000.0);
     metrics.frames_applied += 1;
+    metrics.last_applied_source_seq = Some(frame.source_seq);
+    metrics.last_applied_at = Some(applied_at);
+    metrics.last_capture_to_apply_ms = latency_ms;
+    if let Some(latency_ms) = latency_ms {
+        metrics.latency_samples.record(latency_ms);
+    }
 }
 
 /// System that resets pose metrics when the avatar lifecycle changes.

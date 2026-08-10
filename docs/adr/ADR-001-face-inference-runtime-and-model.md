@@ -69,3 +69,26 @@ TFLiteまたはONNXを読めることと、採用候補modelが実際に動く�
 ## Consequences
 
 model/runtime選定はblocking gateとなる。Gateを通るまで、UI、tracking core、VRM adapterを特定modelのtensor indexへ直接結合しない。`FaceInference`と`LandmarkSchemaId`を境界とし、model固有indexはschema adapterへ閉じ込める。
+
+## M1-08-013 resolution: 2D landmark pose adapter
+
+The production choice remains the manifest-listed `peppapig-98` ONNX model.
+Its output is image-space `(x, y, confidence)` data, not a metric 3D point
+cloud. The application therefore does not pass zero-filled `z` values to the
+3D Kabsch solver.
+
+The selected option is the second option from the task gate: a pure-Rust
+orthographic solver in `vtuber-tracking::pose::planar`. It fits yaw, pitch,
+roll, scale, and translation against a small synthetic, license-safe canonical
+face template. The adapter records representative WFLW-98 output indices
+`[16, 37, 46, 52, 63, 71, 76, 82]` in `assets/models/manifest.toml` and uses
+the design convention of positive image-right yaw, chin-up pitch, and clockwise
+image roll.
+
+This resolves the 2D/3D type mismatch and has deterministic synthetic sign
+tests. It does not by itself provide face detection or crop selection: the
+current artifact is a landmark model whose upstream usage expects a detected
+face crop. The Windows vertical gate therefore remains conditional/blocked
+until a manifest-tracked, pure-Rust-compatible detector/crop stage is supplied
+and verified on a real camera frame. No camera or production pose success is
+claimed from the current unit tests alone.

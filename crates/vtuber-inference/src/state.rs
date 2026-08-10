@@ -192,11 +192,7 @@ impl InferenceWorkerStatus {
 }
 
 fn now_nanos() -> u64 {
-    use std::time::SystemTime;
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
+    vtuber_core::monotonic_now().0
 }
 
 #[cfg(test)]

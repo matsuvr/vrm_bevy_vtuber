@@ -90,6 +90,17 @@ pub struct CaptureController {
     worker: Option<WorkerHandle<CaptureWorkerResult>>,
 }
 
+impl Drop for CaptureController {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker.stop();
+            // Closing the slot wakes a worker waiting for its next frame.
+            self.frame_slot.close();
+            let _ = worker.join();
+        }
+    }
+}
+
 /// Result returned by the capture worker when it finishes.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct CaptureWorkerResult {
@@ -211,8 +222,8 @@ impl CaptureController {
                 .state
                 .lock()
                 .expect("CaptureController state mutex poisoned");
-            if state.state == CaptureServiceState::Running
-                || state.state == CaptureServiceState::Reconnecting
+            if state.state != CaptureServiceState::Idle
+                && state.state != CaptureServiceState::Selected
             {
                 state.state = CaptureServiceState::Stopping;
             }

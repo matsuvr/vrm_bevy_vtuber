@@ -29,8 +29,38 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
             ui.label(format!("{:.1} Hz", diagnostics.inference_rate));
             ui.end_row();
 
+            ui.label("Tracking rate");
+            ui.label(format!("{:.1} Hz", diagnostics.tracking_rate));
+            ui.end_row();
+
+            ui.label("Capture worker");
+            ui.label(&diagnostics.capture_state);
+            ui.end_row();
+
+            ui.label("Inference worker");
+            ui.label(&diagnostics.inference_state);
+            ui.end_row();
+
             ui.label("Slot overwrites");
             ui.label(format!("{}", diagnostics.slot_overwrites));
+            ui.end_row();
+
+            ui.label("Capture-to-apply p50");
+            ui.label(
+                diagnostics
+                    .capture_to_apply_p50_ms
+                    .map(|value| format!("{value:.2} ms"))
+                    .unwrap_or_else(|| "(none)".to_string()),
+            );
+            ui.end_row();
+
+            ui.label("Capture-to-apply p95");
+            ui.label(
+                diagnostics
+                    .capture_to_apply_p95_ms
+                    .map(|value| format!("{value:.2} ms"))
+                    .unwrap_or_else(|| "(none)".to_string()),
+            );
             ui.end_row();
         });
     ui.separator();

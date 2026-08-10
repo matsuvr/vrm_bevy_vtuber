@@ -40,6 +40,10 @@ use crate::filter::{
     ExpressionRange, HeadFilterParams, HeadRotationFilter,
 };
 use crate::loss_recovery::{LossRecovery, LossRecoveryParams};
+use crate::pose::planar::{
+    CANONICAL_FACE_TEMPLATE, PlanarCorrespondence, PlanarLandmark, PlanarPoseError,
+    solve_planar_pose,
+};
 use crate::pose::{
     LandmarkSet, PoseError, quaternion_to_semantic_pose, semantic_pose_to_quaternion,
     solve_relative_pose,
@@ -184,6 +188,37 @@ pub fn compute_neutral_relative_pose(
     let neutral_set = landmarks_to_set(&neutral.landmarks);
     let current_set = landmarks_to_set(&observation.landmarks);
 
+    // The approved PeppaPig model emits image-space 2D points with a
+    // confidence channel. Never pass its z=0 values to the 3D Kabsch solver.
+    // The canonical template adapter is deliberately isolated to this schema
+    // and must be replaced if a future manifest selects another index map.
+    if observation.schema.0 == "peppapig-98" {
+        let neutral_pose =
+            planar_pose_for_landmarks(&neutral.landmarks).map_err(|error| HeadPoseFailure {
+                source_seq: observation.source_seq,
+                captured_at: observation.captured_at,
+                reason: map_planar_pose_error(error),
+            })?;
+        let current_pose =
+            planar_pose_for_landmarks(&observation.landmarks).map_err(|error| HeadPoseFailure {
+                source_seq: observation.source_seq,
+                captured_at: observation.captured_at,
+                reason: map_planar_pose_error(error),
+            })?;
+        let pose = HeadPose {
+            yaw_rad: current_pose.pose.yaw_rad - neutral_pose.pose.yaw_rad,
+            pitch_rad: current_pose.pose.pitch_rad - neutral_pose.pose.pitch_rad,
+            roll_rad: current_pose.pose.roll_rad - neutral_pose.pose.roll_rad,
+        };
+        return Ok(HeadPoseFrame {
+            source_seq: observation.source_seq,
+            captured_at: observation.captured_at,
+            produced_at,
+            pose,
+            confidence: (observation.face_confidence * current_pose.confidence).clamp(0.0, 1.0),
+        });
+    }
+
     let alignment = match solve_relative_pose(&neutral_set, &current_set) {
         Ok(a) => a,
         Err(err) => return fail(map_pose_error(err)),
@@ -240,6 +275,43 @@ fn map_pose_error(err: PoseError) -> PoseFailureReason {
         PoseError::DegeneratePointCloud
         | PoseError::ZeroWeight(_)
         | PoseError::ReflectionDetected => PoseFailureReason::DegeneratePointCloud,
+    }
+}
+
+fn planar_pose_for_landmarks(
+    landmarks: &[Landmark3],
+) -> Result<crate::pose::planar::PlanarPoseAlignment, PlanarPoseError> {
+    let correspondences = CANONICAL_FACE_TEMPLATE
+        .iter()
+        .map(|canonical| {
+            let landmark = landmarks.get(canonical.index).ok_or(
+                PlanarPoseError::InsufficientCorrespondences(landmarks.len()),
+            )?;
+            Ok(PlanarCorrespondence {
+                canonical: *canonical,
+                reference: PlanarLandmark {
+                    x: landmark.x,
+                    y: landmark.y,
+                    confidence: landmark.visibility,
+                },
+                current: PlanarLandmark {
+                    x: landmark.x,
+                    y: landmark.y,
+                    confidence: landmark.visibility,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, PlanarPoseError>>()?;
+    solve_planar_pose(&correspondences)
+}
+
+fn map_planar_pose_error(error: PlanarPoseError) -> PoseFailureReason {
+    match error {
+        PlanarPoseError::InsufficientCorrespondences(_) => PoseFailureReason::InsufficientLandmarks,
+        PlanarPoseError::InvalidInput | PlanarPoseError::NonFinite => {
+            PoseFailureReason::InvalidObservation
+        }
+        PlanarPoseError::Singular => PoseFailureReason::DegeneratePointCloud,
     }
 }
 

@@ -14,6 +14,9 @@ use vtuber_core::control::CalibrationSettings;
 use vtuber_core::types::{FrameSeq, HeadPose, Landmark3, LandmarkSchemaId, MonoTimeNs};
 
 use crate::calibration::CalibrationInput;
+use crate::pose::planar::{
+    CANONICAL_FACE_TEMPLATE, PlanarCorrespondence, PlanarLandmark, solve_planar_pose,
+};
 use crate::pose::{LandmarkSet, PoseError, solve_relative_pose};
 
 /// Why a single frame was rejected by the collector.
@@ -343,10 +346,44 @@ fn relative_head_pose(
     previous: &CalibrationInput,
     current: &CalibrationInput,
 ) -> Result<HeadPose, PoseError> {
+    if previous.schema.0 == "peppapig-98" && current.schema == previous.schema {
+        let previous_pose = planar_absolute_pose(&previous.landmarks)
+            .map_err(|_| PoseError::DegeneratePointCloud)?;
+        let current_pose = planar_absolute_pose(&current.landmarks)
+            .map_err(|_| PoseError::DegeneratePointCloud)?;
+        return Ok(HeadPose {
+            yaw_rad: current_pose.yaw_rad - previous_pose.yaw_rad,
+            pitch_rad: current_pose.pitch_rad - previous_pose.pitch_rad,
+            roll_rad: current_pose.roll_rad - previous_pose.roll_rad,
+        });
+    }
     let neutral = landmarks_to_set(&previous.landmarks);
     let current = landmarks_to_set(&current.landmarks);
     let alignment = solve_relative_pose(&neutral, &current)?;
     Ok(alignment.pose)
+}
+
+fn planar_absolute_pose(landmarks: &[Landmark3]) -> Result<HeadPose, ()> {
+    let points = CANONICAL_FACE_TEMPLATE
+        .iter()
+        .map(|canonical| {
+            let landmark = landmarks.get(canonical.index).ok_or(())?;
+            Ok(PlanarCorrespondence {
+                canonical: *canonical,
+                reference: PlanarLandmark {
+                    x: landmark.x,
+                    y: landmark.y,
+                    confidence: landmark.visibility,
+                },
+                current: PlanarLandmark {
+                    x: landmark.x,
+                    y: landmark.y,
+                    confidence: landmark.visibility,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, ()>>()?;
+    Ok(solve_planar_pose(&points).map_err(|_| ())?.pose)
 }
 
 fn landmarks_to_set(landmarks: &[Landmark3]) -> LandmarkSet {

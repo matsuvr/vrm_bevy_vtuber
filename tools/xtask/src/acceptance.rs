@@ -93,14 +93,30 @@ pub fn verify_models(manifest_path: &Path) -> Result<(), String> {
     let content =
         fs::read_to_string(manifest_path).map_err(|e| format!("cannot read manifest: {e}"))?;
 
+    let _ = content;
+    let root = manifest_path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            format!(
+                "cannot derive workspace root from {}",
+                manifest_path.display()
+            )
+        })?;
+    let descriptor = vtuber_app::model_catalog::load_production_descriptor(root)
+        .map_err(|error| format!("cannot load production descriptor: {error}"))?;
+    vtuber_inference::backend::tract::verify_model_file(&descriptor.path, &descriptor.sha256)
+        .map_err(|error| format!("production model verification failed: {error}"))?;
+
     println!("Model manifest: {}", manifest_path.display());
-    println!("Content preview (first 500 chars):");
-    println!("{}", &content[..content.len().min(500)]);
-    println!("...");
-    println!();
-    println!("To verify hashes, run:");
-    println!("  sha256sum <model-file>");
-    println!("and compare with manifest entries.");
+    println!("Production model: {}", descriptor.path.display());
+    println!("SHA-256: verified");
+    println!(
+        "Tensor: {:?} {}",
+        descriptor.input_shape, descriptor.input_dtype
+    );
+    println!("Schema: {}", descriptor.schema.0);
 
     Ok(())
 }

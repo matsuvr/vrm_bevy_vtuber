@@ -18,6 +18,7 @@ use crate::actions::UiAction;
 use crate::import::{self, ImportedModel, ModelImportError};
 use crate::ui::UiState;
 use crate::ui_model::*;
+use vtuber_camera::device::CameraDescriptor;
 
 /// A pending avatar load request waiting to be submitted to the lifecycle.
 ///
@@ -57,6 +58,27 @@ pub struct Orchestrator {
     next_load_request_id: u64,
     /// Mirror of the avatar lifecycle state, updated by the sync system.
     lifecycle_state: crate::ui_model::AvatarLifecycleState,
+    /// Whether capture should be running (set by Start/Stop actions).
+    capture_desired: bool,
+    /// Whether the capture system has acknowledged the current intent.
+    capture_ack: bool,
+    /// Whether a camera enumeration was explicitly requested.
+    camera_refresh_requested: bool,
+    /// Calibration command waiting for the tracking bridge.
+    calibration_request: Option<CalibrationRequest>,
+    /// Whether inference should be restarted after a recoverable worker error.
+    inference_retry_requested: bool,
+}
+
+/// Calibration intent passed from UI orchestration to the tracking domain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalibrationRequest {
+    /// Start a fresh neutral collection.
+    Begin,
+    /// Cancel and clear the current collection.
+    Cancel,
+    /// Retry after resetting the current collection.
+    Retry,
 }
 
 /// State of the tracking pipeline.
@@ -102,6 +124,14 @@ pub enum OrchestratorError {
     PipelineAlreadyRunning,
     /// Pipeline not running.
     PipelineNotRunning,
+    /// The avatar lifecycle rejected an imported model load request.
+    AvatarLoadRejected(String),
+    /// The avatar lifecycle entered a failed state while loading or binding.
+    AvatarLifecycleFailed(String),
+    /// Camera enumeration, opening, capture, or reconnect failed.
+    CameraFailed(String),
+    /// Inference model load, execution, or worker failure.
+    InferenceFailed(String),
 }
 
 impl std::fmt::Display for OrchestratorError {
@@ -112,6 +142,10 @@ impl std::fmt::Display for OrchestratorError {
             Self::NoAvatarLoaded => write!(f, "No avatar loaded"),
             Self::PipelineAlreadyRunning => write!(f, "Pipeline already running"),
             Self::PipelineNotRunning => write!(f, "Pipeline not running"),
+            Self::AvatarLoadRejected(msg) => write!(f, "Avatar load rejected: {msg}"),
+            Self::AvatarLifecycleFailed(msg) => write!(f, "Avatar lifecycle failed: {msg}"),
+            Self::CameraFailed(msg) => write!(f, "Camera failed: {msg}"),
+            Self::InferenceFailed(msg) => write!(f, "Inference failed: {msg}"),
         }
     }
 }
@@ -130,6 +164,11 @@ impl Default for Orchestrator {
             pending_load: None,
             next_load_request_id: 1,
             lifecycle_state: AvatarLifecycleState::None,
+            capture_desired: false,
+            capture_ack: true,
+            camera_refresh_requested: false,
+            calibration_request: None,
+            inference_retry_requested: false,
         }
     }
 }
@@ -151,7 +190,9 @@ impl Orchestrator {
                 self.current_screen = *screen;
             }
             UiAction::RefreshCameras => {
-                self.refresh_cameras();
+                // Camera enumeration is handled by the capture bridge system,
+                // never by the UI renderer or a fabricated device list.
+                self.camera_refresh_requested = true;
             }
             UiAction::SelectCamera { index } => {
                 self.select_camera(*index);
@@ -172,7 +213,28 @@ impl Orchestrator {
                 self.last_error = None;
             }
             UiAction::RetryAfterError => {
+                if matches!(self.last_error, Some(OrchestratorError::InferenceFailed(_))) {
+                    self.inference_retry_requested = true;
+                    self.last_error = None;
+                    if self.capture_desired {
+                        self.pipeline_state = PipelineState::Starting;
+                        // Capture is still owned by the current session; only
+                        // the inference worker needs to be restarted.
+                        self.capture_ack = true;
+                    }
+                }
                 self.retry_avatar_load();
+            }
+            UiAction::BeginCalibration => {
+                if self.pipeline_state == PipelineState::Running {
+                    self.calibration_request = Some(CalibrationRequest::Begin);
+                }
+            }
+            UiAction::CancelCalibration => {
+                self.calibration_request = Some(CalibrationRequest::Cancel);
+            }
+            UiAction::RetryCalibration if self.pipeline_state == PipelineState::Running => {
+                self.calibration_request = Some(CalibrationRequest::Retry);
             }
             _ => {
                 // Other actions handled by specific subsystems.
@@ -180,20 +242,15 @@ impl Orchestrator {
         }
     }
 
-    /// Refresh the list of available cameras.
-    fn refresh_cameras(&mut self) {
-        // TODO: Call actual camera enumeration when vtuber-camera is integrated.
-        // For now, provide a stub.
-        self.cameras = vec![
-            CameraDescriptor {
-                name: "Camera 0 (stub)".to_string(),
-                index: 0,
-            },
-            CameraDescriptor {
-                name: "Camera 1 (stub)".to_string(),
-                index: 1,
-            },
-        ];
+    /// Refresh the list of available cameras from an external source.
+    pub fn set_camera_list(&mut self, cameras: Vec<CameraDescriptor>) {
+        self.cameras = cameras;
+        // If the previously selected index is now out of range, clear it.
+        if let Some(idx) = self.selected_camera
+            && idx >= self.cameras.len()
+        {
+            self.selected_camera = None;
+        }
     }
 
     /// Select a camera by index.
@@ -277,10 +334,9 @@ impl Orchestrator {
             return;
         }
         self.pipeline_state = PipelineState::Starting;
-        // TODO: Actually start capture → inference → tracking workers.
-        // On success: pipeline_state = Running
-        // On failure: pipeline_state = Failed, set last_error
-        self.pipeline_state = PipelineState::Running;
+        self.capture_desired = true;
+        self.capture_ack = false;
+        self.inference_retry_requested = false;
     }
 
     /// Stop the tracking pipeline.
@@ -291,8 +347,9 @@ impl Orchestrator {
             return;
         }
         self.pipeline_state = PipelineState::Stopping;
-        // TODO: Actually stop workers in reverse order.
-        self.pipeline_state = PipelineState::Idle;
+        self.capture_desired = false;
+        self.capture_ack = false;
+        self.inference_retry_requested = false;
     }
 
     /// Get the current pipeline state.
@@ -320,8 +377,16 @@ impl Orchestrator {
             PipelineState::Failed => AppLifecycle::Failed,
         };
 
-        // Camera.
-        vm.camera.available_cameras = self.cameras.clone();
+        // Camera — convert from vtuber_camera descriptors to UI model descriptors.
+        vm.camera.available_cameras = self
+            .cameras
+            .iter()
+            .enumerate()
+            .map(|(i, c)| crate::ui_model::CameraDescriptor {
+                name: c.label.clone(),
+                index: i,
+            })
+            .collect();
         vm.camera.selected_index = self.selected_camera;
 
         // Avatar — imported model summary for display.
@@ -378,6 +443,63 @@ impl Orchestrator {
     #[must_use]
     pub fn asset_root(&self) -> &PathBuf {
         &self.asset_root
+    }
+
+    /// Whether capture should be running.
+    #[must_use]
+    pub fn capture_desired(&self) -> bool {
+        self.capture_desired
+    }
+
+    /// Whether the capture system has acknowledged the current intent.
+    #[must_use]
+    pub fn capture_ack(&self) -> bool {
+        self.capture_ack
+    }
+
+    /// Whether a fresh camera enumeration is pending.
+    #[must_use]
+    pub fn camera_refresh_requested(&self) -> bool {
+        self.camera_refresh_requested
+    }
+
+    /// Marks a camera enumeration request as handled.
+    pub fn clear_camera_refresh_request(&mut self) {
+        self.camera_refresh_requested = false;
+    }
+
+    /// Acknowledge the current capture state.
+    pub fn set_capture_ack(&mut self, ack: bool) {
+        self.capture_ack = ack;
+    }
+
+    /// Set the pipeline state (called by the capture bridge system).
+    pub fn set_pipeline_state(&mut self, state: PipelineState) {
+        self.pipeline_state = state;
+    }
+
+    /// Set the last error (called by the capture bridge system).
+    pub fn set_last_error(&mut self, error: Option<OrchestratorError>) {
+        self.last_error = error;
+    }
+
+    /// Get the selected camera descriptor, if any.
+    #[must_use]
+    pub fn selected_camera_descriptor(&self) -> Option<CameraDescriptor> {
+        self.selected_camera
+            .and_then(|idx| self.cameras.get(idx).cloned())
+    }
+
+    /// Takes the pending calibration intent, if any.
+    pub fn take_calibration_request(&mut self) -> Option<CalibrationRequest> {
+        self.calibration_request.take()
+    }
+
+    /// Takes a pending inference restart request.
+    pub fn take_inference_retry_request(&mut self) -> bool {
+        let requested = self.inference_retry_requested;
+        self.inference_retry_requested = false;
+        requested
     }
 }
 
@@ -445,12 +567,41 @@ pub fn sync_avatar_lifecycle_system(
     mut orchestrator: ResMut<Orchestrator>,
     lifecycle: Res<vtuber_avatar::lifecycle::AvatarLifecycle>,
     mut load_requests: MessageWriter<vtuber_avatar::LoadImportedAvatarRequest>,
+    mut load_results: MessageReader<vtuber_avatar::LoadImportedAvatarResult>,
     mut unload_requests: MessageWriter<vtuber_avatar::lifecycle::UnloadAvatarRequest>,
 ) {
     // 1. Mirror the lifecycle state into the orchestrator.
     let engine_state = lifecycle.state();
     let ui_state = map_avatar_lifecycle_state(engine_state);
     orchestrator.set_lifecycle_state(ui_state);
+
+    // Consume the request result so a malformed path or lifecycle rejection
+    // becomes a recoverable UI error instead of remaining invisible. Accepted
+    // requests are intentionally not treated as ready: readiness is driven by
+    // bevy_vrm1 initialization and humanoid binding below.
+    for result in load_results.read() {
+        if let vtuber_avatar::LoadImportedAvatarResult::Rejected { error, .. } = result {
+            let message = error.to_string();
+            orchestrator.set_last_error(Some(OrchestratorError::AvatarLoadRejected(message)));
+            orchestrator.set_lifecycle_state(AvatarLifecycleState::Failed);
+        }
+    }
+
+    // A load can also fail after acceptance, for example when the asset
+    // handle never initializes or binding times out. Preserve that typed
+    // reason for the UI instead of reducing every failure to `Failed`.
+    if engine_state == vtuber_avatar::lifecycle::AvatarLifecycleState::Failed
+        && !matches!(
+            orchestrator.last_error(),
+            Some(OrchestratorError::AvatarLoadRejected(_))
+        )
+    {
+        let message = lifecycle
+            .failure()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "avatar lifecycle failed without a recorded reason".to_string());
+        orchestrator.set_last_error(Some(OrchestratorError::AvatarLifecycleFailed(message)));
+    }
 
     // 2. Drain pending load requests.
     if let Some(pending) = orchestrator.take_pending_load_request() {
@@ -473,6 +624,9 @@ pub fn sync_avatar_lifecycle_system(
                     "failed to construct user asset path for import {}: {e}",
                     pending.model.id
                 );
+                orchestrator.set_lifecycle_state(AvatarLifecycleState::Failed);
+                orchestrator
+                    .set_last_error(Some(OrchestratorError::AvatarLoadRejected(e.to_string())));
             }
         }
     }
@@ -504,7 +658,18 @@ mod tests {
     fn orchestrator_refresh_cameras() {
         let mut orch = Orchestrator::default();
         orch.process_action(&UiAction::RefreshCameras);
-        // Cameras should be populated (stub returns 2).
+        // Refresh only signals enumeration; it must not manufacture devices.
+        assert!(orch.cameras.is_empty());
+        orch.set_camera_list(vec![
+            CameraDescriptor {
+                id: "test:0".into(),
+                label: "Test camera 0".into(),
+            },
+            CameraDescriptor {
+                id: "test:1".into(),
+                label: "Test camera 1".into(),
+            },
+        ]);
         assert_eq!(orch.cameras.len(), 2);
     }
 
@@ -512,6 +677,10 @@ mod tests {
     fn orchestrator_select_camera() {
         let mut orch = Orchestrator::default();
         orch.process_action(&UiAction::RefreshCameras);
+        orch.set_camera_list(vec![CameraDescriptor {
+            id: "test:0".into(),
+            label: "Test camera 0".into(),
+        }]);
         orch.process_action(&UiAction::SelectCamera { index: 0 });
         assert_eq!(orch.selected_camera, Some(0));
     }
@@ -520,6 +689,10 @@ mod tests {
     fn orchestrator_select_invalid_camera_ignored() {
         let mut orch = Orchestrator::default();
         orch.process_action(&UiAction::RefreshCameras);
+        orch.set_camera_list(vec![CameraDescriptor {
+            id: "test:0".into(),
+            label: "Test camera 0".into(),
+        }]);
         orch.process_action(&UiAction::SelectCamera { index: 99 });
         assert_eq!(orch.selected_camera, None);
     }
@@ -587,6 +760,16 @@ mod tests {
     fn orchestrator_update_view_model() {
         let mut orch = Orchestrator::default();
         orch.process_action(&UiAction::RefreshCameras);
+        orch.set_camera_list(vec![
+            CameraDescriptor {
+                id: "test:0".into(),
+                label: "Test camera 0".into(),
+            },
+            CameraDescriptor {
+                id: "test:1".into(),
+                label: "Test camera 1".into(),
+            },
+        ]);
         orch.process_action(&UiAction::SelectCamera { index: 0 });
 
         let mut vm = UiViewModel::default();
@@ -662,6 +845,28 @@ mod tests {
             ..Default::default()
         };
         orch.process_action(&UiAction::RetryAfterError);
+        assert!(orch.take_pending_load_request().is_none());
+    }
+
+    #[test]
+    fn orchestrator_retry_after_inference_failure_restarts_only_inference() {
+        let mut orch = Orchestrator {
+            imported_model: Some(stub_imported_model()),
+            capture_desired: true,
+            capture_ack: true,
+            pipeline_state: PipelineState::Failed,
+            last_error: Some(OrchestratorError::InferenceFailed("model failed".into())),
+            ..Default::default()
+        };
+
+        orch.process_action(&UiAction::RetryAfterError);
+
+        assert_eq!(orch.pipeline_state, PipelineState::Starting);
+        assert!(orch.capture_desired);
+        assert!(orch.capture_ack);
+        assert!(orch.last_error.is_none());
+        assert!(orch.take_inference_retry_request());
+        assert!(!orch.take_inference_retry_request());
         assert!(orch.take_pending_load_request().is_none());
     }
 

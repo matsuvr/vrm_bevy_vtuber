@@ -14,6 +14,22 @@ pub struct DiagnosticsSnapshot {
     pub capture_rate: f32,
     /// Inference rate.
     pub inference_rate: f32,
+    /// Tracking output rate, measured from unique source sequences.
+    pub tracking_rate: f32,
+    /// Current capture worker state.
+    pub capture_state: String,
+    /// Current inference worker state.
+    pub inference_state: String,
+    /// Last source sequence processed by inference.
+    pub inference_last_source_seq: Option<u64>,
+    /// Number of frames processed by inference.
+    pub inference_frames_processed: u64,
+    /// Number of duplicate inference frames suppressed.
+    pub inference_duplicates_suppressed: u64,
+    /// Number of input-slot overwrites observed by inference.
+    pub inference_input_overwrites: u64,
+    /// Last inference duration in milliseconds.
+    pub last_inference_ms: Option<f32>,
     /// Tracking state description.
     pub tracking_state: String,
     /// Slot overwrite count.
@@ -26,6 +42,17 @@ pub struct DiagnosticsSnapshot {
     pub camera_backend: Option<String>,
     /// Avatar capability summary.
     pub avatar_capabilities: Option<String>,
+    /// Number of avatar pose frames successfully applied.
+    pub avatar_frames_applied: u64,
+    /// Number of avatar pose frames skipped because the lifecycle/binding was
+    /// not ready.
+    pub avatar_frames_skipped: u64,
+    /// p50 capture-to-avatar-apply latency in milliseconds.
+    pub capture_to_apply_p50_ms: Option<f32>,
+    /// p95 capture-to-avatar-apply latency in milliseconds.
+    pub capture_to_apply_p95_ms: Option<f32>,
+    /// Last stable error code, if any.
+    pub last_error_code: Option<String>,
     /// Last error message, if any.
     pub last_error: Option<String>,
 }
@@ -34,7 +61,14 @@ impl DiagnosticsSnapshot {
     /// Check if any workers are currently active.
     #[must_use]
     pub fn has_active_workers(&self) -> bool {
-        self.capture_rate > 0.0 || self.inference_rate > 0.0
+        self.capture_rate > 0.0
+            || self.inference_rate > 0.0
+            || (!self.capture_state.is_empty()
+                && self.capture_state != "Idle"
+                && self.capture_state != "Selected")
+            || (!self.inference_state.is_empty()
+                && self.inference_state != "Idle"
+                && self.inference_state != "Stopping")
     }
 }
 

@@ -16,6 +16,8 @@ pub struct MockBackend {
     pub formats: Vec<CameraFormat>,
     /// Number of frames to produce before disconnecting.
     pub disconnect_after: Option<u64>,
+    /// IDs opened by the backend, useful for selection-contract tests.
+    pub opened_devices: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Default for MockBackend {
@@ -33,6 +35,7 @@ impl Default for MockBackend {
                 format: PixelFormat::Rgb8,
             }],
             disconnect_after: None,
+            opened_devices: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 }
@@ -44,9 +47,18 @@ impl CameraBackend for MockBackend {
 
     fn open(
         &self,
-        _descriptor: &CameraDescriptor,
+        descriptor: &CameraDescriptor,
         _request: &CameraRequest,
     ) -> Result<Box<dyn CameraStream>, CameraError> {
+        if !self.descriptors.iter().any(|d| d.id == descriptor.id) {
+            return Err(CameraError::OpenFailed(format!(
+                "unknown mock device {}",
+                descriptor.id
+            )));
+        }
+        if let Ok(mut opened) = self.opened_devices.lock() {
+            opened.push(descriptor.id.clone());
+        }
         Ok(Box::new(MockStream {
             format: self.formats.first().copied().unwrap_or(CameraFormat {
                 width: 640,
@@ -137,5 +149,31 @@ mod tests {
         assert!(stream.next_frame(&stop).is_ok());
         let err = stream.next_frame(&stop).unwrap_err();
         assert!(matches!(err, CameraError::Disconnected));
+    }
+
+    #[test]
+    fn mock_opens_the_selected_device() {
+        let backend = MockBackend {
+            descriptors: vec![
+                CameraDescriptor {
+                    id: "mock-0".into(),
+                    label: "First".into(),
+                },
+                CameraDescriptor {
+                    id: "mock-1".into(),
+                    label: "Second".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let descriptor = backend.descriptors[1].clone();
+        let _stream = backend
+            .open(&descriptor, &CameraRequest::default())
+            .expect("selected mock device should open");
+        let opened = backend
+            .opened_devices
+            .lock()
+            .expect("test mutex is healthy");
+        assert_eq!(opened.as_slice(), ["mock-1"]);
     }
 }

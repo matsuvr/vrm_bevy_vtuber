@@ -84,6 +84,8 @@ pub struct AvatarLifecycleSnapshot {
     pub capabilities: Option<AvatarCapabilities>,
     /// Generation of the active or in-progress avatar instance.
     pub generation: AvatarGeneration,
+    /// Failure reason when the lifecycle is in `Failed`.
+    pub failure: Option<AvatarLifecycleFailure>,
 }
 
 /// Request to load a new avatar into the active slot.
@@ -161,6 +163,18 @@ pub enum AvatarLifecycleFailure {
     AssetLoadFailed,
 }
 
+impl std::fmt::Display for AvatarLifecycleFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingRequiredBone { bone } => {
+                write!(f, "required humanoid bone is missing: {bone}")
+            }
+            Self::BindingTimeout => f.write_str("avatar binding timed out"),
+            Self::AssetLoadFailed => f.write_str("VRM asset failed to load"),
+        }
+    }
+}
+
 /// Maximum time to wait for a VRM asset to initialize before treating it as failed.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -175,6 +189,7 @@ pub struct AvatarLifecycle {
     pending_root: Option<Entity>,
     load_started: Option<Instant>,
     capabilities: Option<AvatarCapabilities>,
+    failure: Option<AvatarLifecycleFailure>,
     current_generation: AvatarGeneration,
     next_generation: u64,
 }
@@ -187,6 +202,7 @@ impl Default for AvatarLifecycle {
             pending_root: None,
             load_started: None,
             capabilities: None,
+            failure: None,
             current_generation: AvatarGeneration::default(),
             next_generation: 1,
         }
@@ -230,6 +246,12 @@ impl AvatarLifecycle {
         self.capabilities.as_ref()
     }
 
+    /// Failure reason for the current failed load, if any.
+    #[must_use]
+    pub fn failure(&self) -> Option<&AvatarLifecycleFailure> {
+        self.failure.as_ref()
+    }
+
     /// Sets or clears the capability snapshot.
     pub(crate) fn set_capabilities(&mut self, caps: Option<AvatarCapabilities>) {
         self.capabilities = caps;
@@ -269,6 +291,7 @@ impl AvatarLifecycle {
             pending_root: self.pending_root,
             capabilities: self.capabilities.clone(),
             generation: self.current_generation,
+            failure: self.failure.clone(),
         }
     }
 
@@ -283,6 +306,7 @@ impl AvatarLifecycle {
                 self.pending_root = None;
                 self.load_started = Some(Instant::now());
                 self.capabilities = None;
+                self.failure = None;
                 self.current_generation = AvatarGeneration(self.next_generation);
                 self.next_generation += 1;
                 Ok(())
@@ -303,6 +327,7 @@ impl AvatarLifecycle {
                 self.state = AvatarLifecycleState::Unloading;
                 self.pending_root = None;
                 self.capabilities = None;
+                self.failure = None;
                 Ok(())
             }
             AvatarLifecycleState::NoAvatar
@@ -333,6 +358,7 @@ impl AvatarLifecycle {
                 self.state = AvatarLifecycleState::Unloading;
                 self.pending_root = Some(root);
                 self.capabilities = None;
+                self.failure = None;
                 Ok(())
             }
             AvatarLifecycleState::NoAvatar | AvatarLifecycleState::Failed => {
@@ -381,21 +407,24 @@ impl AvatarLifecycle {
             self.active_root = Some(pending);
             self.load_started = Some(Instant::now());
             self.capabilities = None;
+            self.failure = None;
         } else {
             self.state = AvatarLifecycleState::NoAvatar;
             self.active_root = None;
             self.load_started = None;
             self.capabilities = None;
+            self.failure = None;
         }
     }
 
     /// Records a failure and clears any in-progress avatar.
-    pub fn fail(&mut self, _error: AvatarLifecycleFailure) {
+    pub fn fail(&mut self, error: AvatarLifecycleFailure) {
         self.state = AvatarLifecycleState::Failed;
         self.active_root = None;
         self.pending_root = None;
         self.load_started = None;
         self.capabilities = None;
+        self.failure = Some(error);
     }
 }
 
@@ -603,12 +632,17 @@ mod tests {
         lifecycle.request_load(root).unwrap();
         lifecycle.fail(AvatarLifecycleFailure::AssetLoadFailed);
         assert_eq!(lifecycle.state(), AvatarLifecycleState::Failed);
+        assert_eq!(
+            lifecycle.failure(),
+            Some(&AvatarLifecycleFailure::AssetLoadFailed)
+        );
         assert!(lifecycle.active_root().is_none());
 
         // A new load can be attempted after failure.
         let next = entity(5);
         assert!(lifecycle.request_load(next).is_ok());
         assert_eq!(lifecycle.active_root(), Some(next));
+        assert!(lifecycle.failure().is_none());
     }
 
     #[test]

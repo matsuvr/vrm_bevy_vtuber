@@ -12,6 +12,7 @@ pub fn render_live_screen(
     vm: &UiViewModel,
     ui_state: &mut super::UiState,
     preview: &PreviewState,
+    preview_texture: Option<bevy_egui::egui::TextureId>,
 ) {
     ui.heading("Live");
     ui.separator();
@@ -80,8 +81,15 @@ pub fn render_live_screen(
     }
 
     if preview.visible {
-        // Preview placeholder - actual texture rendering would go here.
-        ui.label("(Preview texture would appear here)");
+        if let Some(texture) = preview_texture {
+            let available = ui.available_width().max(160.0);
+            ui.image((
+                texture,
+                bevy_egui::egui::vec2(available, available * 9.0 / 16.0),
+            ));
+        } else {
+            ui.label("Waiting for camera frames…");
+        }
     }
     ui.separator();
 

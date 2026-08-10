@@ -19,7 +19,10 @@ thiserror = "2"
 anyhow = "=1.0.103"
 
 [features]
-default = []
+# The accepted production path is the pure-Rust tract ONNX backend. TFLite
+# support remains compiled for provenance/evaluation fixtures, but is not
+# selected by the production model catalog.
+default = ["onnx"]
 onnx = ["dep:tract-onnx", "dep:tract-core"]
 
 [dev-dependencies]

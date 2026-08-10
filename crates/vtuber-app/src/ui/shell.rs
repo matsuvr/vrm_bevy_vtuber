@@ -7,10 +7,19 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
 use crate::actions::UiAction;
+use crate::avatar_bridge::{publish_control_frame_system, sync_avatar_diagnostics};
+use crate::capture_runtime::{
+    CaptureRuntime, LatestVideoFrame, capture_bridge_system, read_latest_frame,
+    sync_capture_diagnostics, update_preview_texture_system,
+};
 use crate::diagnostics::DiagnosticsSnapshot;
 use crate::error_presenter::ErrorPresenter;
+use crate::inference_runtime::{
+    InferenceProjectRoot, InferenceRuntime, inference_bridge_system, read_inference_output_system,
+};
 use crate::orchestrator::{Orchestrator, process_ui_actions_system, sync_avatar_lifecycle_system};
 use crate::preview::PreviewState;
+use crate::tracking_runtime::{TrackingRuntime, tracking_bridge_system};
 use crate::ui_model::{Screen, UiViewModel};
 
 use super::diagnostics::render_diagnostics_screen;
@@ -37,6 +46,20 @@ impl Plugin for UiShellPlugin {
             .init_resource::<DiagnosticsSnapshot>()
             .init_resource::<ErrorPresenter>()
             .init_resource::<super::file_dialog::FileDialogState>()
+            .init_resource::<CaptureRuntime>()
+            .init_resource::<LatestVideoFrame>();
+
+        let frame_slot = app.world().resource::<CaptureRuntime>().frame_slot();
+        let project_root = app
+            .world()
+            .get_resource::<InferenceProjectRoot>()
+            .map(|root| root.0.clone())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        app.insert_resource(InferenceRuntime::new(
+            frame_slot,
+            project_root,
+        ))
+            .init_resource::<TrackingRuntime>()
             // Action processing then lifecycle sync, chained in Update.
             .add_systems(
                 Update,
@@ -44,8 +67,42 @@ impl Plugin for UiShellPlugin {
                     .chain(),
             )
             .add_systems(Update, sync_error_presenter)
+            // Capture bridge: connects orchestrator intent to real camera.
+            .add_systems(
+                Update,
+                (
+                    capture_bridge_system,
+                    read_latest_frame,
+                    update_preview_texture_system,
+                    sync_capture_diagnostics,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                Update,
+                (inference_bridge_system, read_inference_output_system)
+                    .chain()
+                    .after(capture_bridge_system),
+            )
+            .add_systems(Update, tracking_bridge_system.after(read_inference_output_system))
+            .add_systems(Update, publish_control_frame_system.after(tracking_bridge_system))
+            .add_systems(Update, sync_avatar_diagnostics.after(publish_control_frame_system))
+            .add_systems(Last, shutdown_workers_on_exit)
             // egui rendering in EguiPrimaryContextPass.
             .add_systems(EguiPrimaryContextPass, ui_render_system);
+    }
+}
+
+/// Performs the explicit reverse-order shutdown required by the worker
+/// ownership contract when Bevy is closing the application.
+fn shutdown_workers_on_exit(
+    mut exit_messages: MessageReader<AppExit>,
+    mut inference: ResMut<InferenceRuntime>,
+    mut capture: ResMut<CaptureRuntime>,
+) {
+    if exit_messages.read().next().is_some() {
+        inference.stop_model();
+        capture.shutdown();
     }
 }
 
@@ -87,8 +144,14 @@ fn is_deduplicatable(action: &UiAction) -> bool {
 fn sync_error_presenter(
     orchestrator: Res<Orchestrator>,
     mut error_presenter: ResMut<ErrorPresenter>,
+    mut diagnostics: ResMut<DiagnosticsSnapshot>,
 ) {
     error_presenter.update(orchestrator.last_error());
+    diagnostics.last_error = orchestrator.last_error().map(ToString::to_string);
+    diagnostics.last_error_code = orchestrator
+        .last_error()
+        .map(crate::error_presenter::present_error)
+        .map(|presentation| presentation.code.to_string());
 }
 
 /// System that renders the UI using egui.
@@ -102,6 +165,10 @@ fn ui_render_system(
     preview: Res<PreviewState>,
     mut file_dialog: ResMut<super::file_dialog::FileDialogState>,
 ) -> Result {
+    let preview_texture = preview
+        .image_handle
+        .as_ref()
+        .and_then(|handle| contexts.image_id(handle.id()));
     let ctx = contexts.ctx_mut()?;
 
     // Poll file dialog.
@@ -144,7 +211,9 @@ fn ui_render_system(
                 Screen::Setup => {
                     render_setup_screen(ui, &view_model, &mut ui_state, &mut file_dialog)
                 }
-                Screen::Live => render_live_screen(ui, &view_model, &mut ui_state, &preview),
+                Screen::Live => {
+                    render_live_screen(ui, &view_model, &mut ui_state, &preview, preview_texture)
+                }
                 Screen::Diagnostics => render_diagnostics_screen(ui, &view_model, &diagnostics),
             });
         });

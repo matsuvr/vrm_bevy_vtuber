@@ -6,7 +6,16 @@
 
 use std::collections::HashMap;
 
+use bevy::prelude::*;
+use bevy_vrm1::prelude::{ExpressionEntityMap, ModifyExpressions, VrmExpression};
+
+use crate::expression::blink::{RawBlinkInput, map_blink_with_fallback};
 use crate::expression::command::ExpressionCommand;
+use crate::expression::command::build_frame_commands;
+use crate::expression::mouth::{RawMouthInput, map_mouth_with_fallback};
+use crate::gaze::expression::{RawGazeInput, map_gaze_to_expressions};
+use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
+use crate::unload::ActiveControlFrame;
 
 /// Default epsilon for change detection.
 pub const DEFAULT_CHANGE_EPSILON: f32 = 0.01;
@@ -146,6 +155,91 @@ pub fn coalesce_commands(command_lists: &[Vec<ExpressionCommand>]) -> Vec<Expres
         .into_iter()
         .map(|(name, weight)| ExpressionCommand { name, weight })
         .collect()
+}
+
+/// Applies one coalesced expression update to the active VRM root.
+///
+/// The system only emits [`ModifyExpressions`] for names present in the
+/// runtime-generated [`ExpressionEntityMap`]. Unsupported capabilities are
+/// therefore a normal no-op rather than a runtime error.
+pub fn apply_tracked_expressions(
+    mut commands: Commands,
+    lifecycle: Res<AvatarLifecycle>,
+    control_frame: Res<ActiveControlFrame>,
+    expression_maps: Query<&ExpressionEntityMap>,
+    mut tracker: Local<ExpressionStateTracker>,
+) {
+    if lifecycle.state() != AvatarLifecycleState::Ready {
+        tracker.force_reset();
+        return;
+    }
+    let Some(root) = lifecycle.active_root() else {
+        tracker.force_reset();
+        return;
+    };
+    let Some(frame) = control_frame.frame.as_ref() else {
+        return;
+    };
+    let Ok(expression_map) = expression_maps.get(root) else {
+        tracker.force_reset();
+        return;
+    };
+    let Some(capabilities) = lifecycle.capabilities() else {
+        return;
+    };
+
+    let blink = map_blink_with_fallback(
+        &RawBlinkInput {
+            left: frame.expressions.blink_left,
+            right: frame.expressions.blink_right,
+            combined: frame
+                .expressions
+                .blink_left
+                .max(frame.expressions.blink_right),
+        },
+        capabilities.blink,
+    );
+    let mouth = map_mouth_with_fallback(
+        &RawMouthInput {
+            openness: frame.expressions.aa,
+            aa: frame.expressions.aa,
+            ih: frame.expressions.ih,
+            ou: frame.expressions.ou,
+            ee: frame.expressions.ee,
+            oh: frame.expressions.oh,
+        },
+        capabilities.mouth,
+    );
+    let gaze = frame
+        .gaze
+        .map(|gaze| {
+            map_gaze_to_expressions(
+                &RawGazeInput {
+                    yaw_rad: gaze.yaw_rad,
+                    pitch_rad: gaze.pitch_rad,
+                },
+                &capabilities.look_directions,
+                &Default::default(),
+            )
+        })
+        .unwrap_or_default();
+    let built = build_frame_commands(frame, capabilities, &blink, &mouth, &gaze);
+    let available = built.into_iter().filter(|command| {
+        expression_map
+            .0
+            .contains_key(&VrmExpression::from(command.name.as_str()))
+    });
+    let available: Vec<ExpressionCommand> = available.collect();
+    let Some(changed) = tracker.compute_commands(&available, control_frame.generation.0) else {
+        return;
+    };
+
+    commands.trigger(ModifyExpressions::from_iter(
+        root,
+        changed
+            .into_iter()
+            .map(|command| (VrmExpression::from(command.name.as_str()), command.weight)),
+    ));
 }
 
 #[cfg(test)]

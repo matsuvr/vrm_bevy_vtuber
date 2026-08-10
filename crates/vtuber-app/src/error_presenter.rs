@@ -50,6 +50,27 @@ pub fn present_error(error: &crate::orchestrator::OrchestratorError) -> ErrorPre
             user_message: "The tracking pipeline is not running.".to_string(),
             suggested_actions: vec![UiAction::DismissError],
         },
+        OrchestratorError::AvatarLoadRejected(_) => ErrorPresentation {
+            code: "AVATAR_LOAD_REJECTED",
+            user_message: "The avatar could not be loaded. Check the model and try again."
+                .to_string(),
+            suggested_actions: vec![UiAction::RetryAfterError, UiAction::DismissError],
+        },
+        OrchestratorError::AvatarLifecycleFailed(_) => ErrorPresentation {
+            code: "AVATAR_LIFECYCLE_FAILED",
+            user_message: "The avatar failed during loading or binding. Try again.".to_string(),
+            suggested_actions: vec![UiAction::RetryAfterError, UiAction::DismissError],
+        },
+        OrchestratorError::CameraFailed(_) => ErrorPresentation {
+            code: "CAMERA_FAILED",
+            user_message: "The camera could not be started or was disconnected.".to_string(),
+            suggested_actions: vec![UiAction::RefreshCameras, UiAction::DismissError],
+        },
+        OrchestratorError::InferenceFailed(_) => ErrorPresentation {
+            code: "INFERENCE_FAILED",
+            user_message: "The face tracking model failed to load or run.".to_string(),
+            suggested_actions: vec![UiAction::RetryAfterError, UiAction::DismissError],
+        },
     }
 }
 

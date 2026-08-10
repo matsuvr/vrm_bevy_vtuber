@@ -59,6 +59,8 @@ notes = ["Legacy float32 model evaluated as TFLite fallback; also blocked by tra
 [[models]]
 name = "Peppa_Pig_Face_Landmark student 256x256"
 runtime = "tract-onnx 0.23.4"
+input_name = "input"
+schema = "peppapig-98"
 source = "https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/436_Peppa_Pig_Face_Landmark/resources.tar.gz"
 upstream = "https://github.com/610265158/Peppa_Pig_Face_Landmark"
 upstream_license = "Apache-2.0"
@@ -70,7 +72,8 @@ sha256 = "73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A"
 purpose = "ONNX face landmark detector fallback validated against tract-onnx 0.23.4"
 input = { shape = [1, 3, 256, 256], dtype = "float32", layout = "NCHW", mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225], description = "ImageNet normalization, RGB" }
 output = { names = ["/Concat_1"], shape = [1, 98, 3], dtype = "float32", description = "98 facial landmarks with visibility/confidence in third channel" }
+pose = { method = "canonical_orthographic_2d", template = "synthetic-face-v1", representative_indices = [16, 37, 46, 52, 63, 71, 76, 82], coordinate_system = "normalized image x-right y-down; positive yaw right, pitch chin-up, roll clockwise" }
 notes = [
     "Selected as production ONNX fallback after MediaPipe TFLite models failed to load in tract-tflite 0.23.4 due to unsupported float16 ADD operator.",
-    "Output landmarks are image-space (x, y, confidence); full pose solving will require an additional face detector crop stage.",
+    "Output landmarks are image-space (x, y, confidence); this artifact is landmark-only and requires a verified face detector crop stage for real-camera production use.",
 ]

@@ -43,6 +43,12 @@ impl PreviewState {
     pub fn toggle_mirrored(&mut self) {
         self.mirrored = !self.mirrored;
     }
+
+    /// Returns the minimum interval between preview texture uploads.
+    #[must_use]
+    pub fn update_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f32(1.0 / self.target_fps.max(1) as f32)
+    }
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 pub mod bone;
 pub mod expression;
 pub mod mode;
+pub mod system;
 
 pub use bone::{
     EyeBoneGazeSettings, MissingEyePolicy, compute_eye_bone_local_rotation,
@@ -17,3 +18,4 @@ pub use expression::{
 pub use mode::{
     GazeModeSelection, select_gaze_mode, supports_expression_gaze, supports_eye_bone_gaze,
 };
+pub use system::apply_tracked_eye_gaze;

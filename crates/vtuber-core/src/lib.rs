@@ -20,6 +20,8 @@ pub mod observation;
 pub mod slot;
 /// Worker stop token.
 pub mod stop;
+/// Process-wide monotonic clock.
+pub mod time;
 /// Deterministic worker supervision helpers.
 pub mod worker;
 
@@ -27,5 +29,6 @@ pub use control::{CalibrationError, CalibrationSettings};
 pub use observation::RawExpressionObservation;
 pub use slot::{LatestSlot, ReadResult};
 pub use stop::StopToken;
+pub use time::now as monotonic_now;
 pub use types::*;
 pub use worker::{WorkerHandle, WorkerResult};

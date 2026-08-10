@@ -2,10 +2,8 @@
 //!
 //! The native `nokhwa::Camera` object is constructed, opened, used, and
 //! dropped entirely within the capture worker thread. It is never sent across
-//! threads. The `unsafe impl Send` on [`MsmfStream`] is safe because the
-//! camera is only ever accessed from the single capture worker thread.
-
-#![allow(unsafe_code)]
+//! threads. The stream is deliberately not `Send`; it never crosses the
+//! capture worker boundary.
 
 use nokhwa::Camera;
 use nokhwa::pixel_format::RgbFormat;
@@ -43,10 +41,19 @@ impl CameraBackend for MsmfBackend {
 
         Ok(devices
             .into_iter()
-            .enumerate()
-            .map(|(i, info)| CameraDescriptor {
-                id: format!("msmf:{i}"),
-                label: info.human_name(),
+            .map(|info| {
+                let index = match info.index() {
+                    CameraIndex::Index(index) => *index,
+                    CameraIndex::String(index) => index.parse::<u32>().unwrap_or(0),
+                };
+                // The numeric index is needed to open the current device, but
+                // the descriptor also carries backend identity fields so a
+                // persisted preference is never just an index.
+                let id = format!("msmf:{index}:{}:{}", info.description(), info.misc());
+                CameraDescriptor {
+                    id,
+                    label: info.human_name(),
+                }
             })
             .collect())
     }
@@ -94,10 +101,11 @@ impl CameraBackend for MsmfBackend {
     }
 }
 
-/// Parse the MSMF index from a descriptor id like `"msmf:0"`.
+/// Parse the MSMF index from a descriptor id like `"msmf:0:<identity>"`.
 fn parse_msmf_index(id: &str) -> Result<usize, CameraError> {
     let idx_str = id
         .strip_prefix("msmf:")
+        .and_then(|value| value.split(':').next())
         .ok_or_else(|| CameraError::OpenFailed(format!("not an MSMF descriptor id: {id}")))?;
     idx_str
         .parse::<usize>()
@@ -171,21 +179,13 @@ fn map_nokhwa_error(e: nokhwa::NokhwaError) -> CameraError {
 
 /// An opened MSMF camera stream.
 ///
-/// # Safety
-///
-/// `nokhwa::Camera` is auto-trait `!Send` but on Windows MSMF the underlying
-/// Media Foundation objects are only accessed from the single capture worker
-/// thread. No other thread touches this camera.
+/// The native camera is constructed, used, and dropped on the capture worker.
 pub struct MsmfStream {
     camera: Camera,
     format: CameraFormat,
     seq: u64,
     source_format: FrameFormat,
 }
-
-// SAFETY: The camera is only ever accessed from the capture worker thread.
-// No other thread holds a reference to this struct while the camera is alive.
-unsafe impl Send for MsmfStream {}
 
 impl CameraStream for MsmfStream {
     fn actual_format(&self) -> CameraFormat {
@@ -207,10 +207,7 @@ impl CameraStream for MsmfStream {
         })?;
 
         self.seq += 1;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        let now = vtuber_core::monotonic_now().0;
 
         let (data, pixel_format, stride) = decode_frame(&buffer, self.source_format, &self.format)?;
 

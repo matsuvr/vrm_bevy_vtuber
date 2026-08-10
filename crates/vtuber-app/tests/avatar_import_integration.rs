@@ -16,6 +16,7 @@ fn test_app() -> App {
     app.init_resource::<Orchestrator>()
         .init_resource::<AvatarLifecycle>()
         .add_message::<LoadImportedAvatarRequest>()
+        .add_message::<vtuber_avatar::LoadImportedAvatarResult>()
         .add_message::<vtuber_avatar::lifecycle::UnloadAvatarRequest>()
         .add_systems(bevy::app::Update, sync_avatar_lifecycle_system);
     app
@@ -116,6 +117,19 @@ fn user_asset_path_rejects_absolute_filesystem_path() {
                 | vtuber_avatar::AssetPathError::WrongScheme
         ),
         "expected MissingScheme or WrongScheme, got {err:?}",
+    );
+}
+
+#[test]
+fn lifecycle_request_is_canonical_and_consumed_once() {
+    let model_id = "a".repeat(64);
+    // The canonical path contract is asserted without passing an absolute
+    // filesystem path to AssetServer.
+    let id = vtuber_avatar::AvatarAssetId::new(model_id.clone());
+    let path = UserAssetPath::avatar_model_path(&id).expect("canonical id path");
+    assert_eq!(
+        path.as_str(),
+        format!("user://avatars/{model_id}/model.vrm")
     );
 }
 

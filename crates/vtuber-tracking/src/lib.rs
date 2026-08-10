@@ -45,6 +45,10 @@ pub use pipeline::{
     HeadPoseFailure, HeadPoseFrame, PipelineConfig, PipelineConfigError, PipelineUpdate,
     PoseFailureReason, TrackingPipeline, compute_neutral_relative_pose,
 };
+pub use pose::planar::{
+    CANONICAL_FACE_TEMPLATE, CanonicalFacePoint, PlanarCorrespondence, PlanarLandmark,
+    PlanarPoseAlignment, PlanarPoseError, solve_planar_pose,
+};
 pub use pose::{LandmarkSet, PoseAlignment, PoseError, WeightedPoint, solve_relative_pose};
 pub use state_machine::{
     StateMachineConfigError, StateMachineParams, StateTransitionResult, TrackingAction,

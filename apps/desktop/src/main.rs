@@ -9,6 +9,7 @@ use bevy::asset::io::{AssetSourceBuilder, AssetSourceBuilders};
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use vtuber_app::import;
+use vtuber_app::inference_runtime::InferenceProjectRoot;
 use vtuber_app::orchestrator::Orchestrator;
 use vtuber_app::ui::UiShellPlugin;
 use vtuber_avatar::{
@@ -58,6 +59,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugins(EguiPlugin::default())
         .add_plugins(VtuberAvatarPlugin)
+        .insert_resource(InferenceProjectRoot(resource_root()))
         .add_plugins(UiShellPlugin)
         .insert_resource(Orchestrator::new(managed_root));
 
@@ -79,6 +81,24 @@ fn main() {
     }
 
     app.run();
+}
+
+/// Locates packaged model resources without depending on the process cwd.
+fn resource_root() -> PathBuf {
+    let mut candidates = Vec::new();
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(parent) = executable.parent()
+    {
+        candidates.push(parent.to_path_buf());
+        candidates.push(parent.join("resources"));
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    candidates
+        .into_iter()
+        .find(|root| root.join("assets/models/manifest.toml").is_file())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Returns the application-managed asset root directory.

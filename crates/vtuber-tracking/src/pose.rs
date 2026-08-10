@@ -9,6 +9,9 @@ use thiserror::Error;
 
 use vtuber_core::types::HeadPose;
 
+/// Image-space landmark pose adapter.
+pub mod planar;
+
 /// Minimum number of points required by the Kabsch solver.
 pub const MIN_LANDMARK_POINTS: usize = 3;
 

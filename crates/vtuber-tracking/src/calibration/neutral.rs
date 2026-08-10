@@ -167,7 +167,8 @@ impl NeutralReference {
         }
 
         let median_set = landmarks_to_set(&landmarks);
-        if is_degenerate(&median_set) {
+        let is_planar = schema.0 == "peppapig-98";
+        if !is_planar && is_degenerate(&median_set) {
             return Err(CalibrationError::DegeneratePointCloud);
         }
 
@@ -177,7 +178,11 @@ impl NeutralReference {
             return Err(CalibrationError::DegeneratePointCloud);
         }
 
-        let head_spread = head_pose_spread(samples, &median_set)?;
+        let head_spread = if is_planar {
+            HeadPose::default()
+        } else {
+            head_pose_spread(samples, &median_set)?
+        };
         let max_head_component = head_spread
             .yaw_rad
             .max(head_spread.pitch_rad)
@@ -199,7 +204,11 @@ impl NeutralReference {
             });
         }
 
-        let head_pose = median_head_pose(samples, &median_set)?;
+        let head_pose = if is_planar {
+            HeadPose::default()
+        } else {
+            median_head_pose(samples, &median_set)?
+        };
         let confidence_baseline = median_confidence(samples);
 
         Ok(NeutralProfile {

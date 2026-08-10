@@ -198,12 +198,25 @@ impl InferenceController {
     ///
     /// This consumes the controller. After this call returns, no worker thread
     /// is running and the output slot is closed.
-    pub fn shutdown(mut self) -> InferenceMetrics {
+    pub fn shutdown(self) -> InferenceMetrics {
+        self.shutdown_inner(true)
+    }
+
+    /// Stops and joins the worker without closing the externally-owned input
+    /// frame slot. This is used when capture and inference share one slot and
+    /// the application must support Stop/Start without rebuilding capture.
+    pub fn shutdown_preserving_input(self) -> InferenceMetrics {
+        self.shutdown_inner(false)
+    }
+
+    fn shutdown_inner(mut self, close_input: bool) -> InferenceMetrics {
         let result = if let Some(worker) = self.worker.take() {
             worker.stop();
             // Closing the frame slot wakes the worker if it is blocked waiting
             // for a frame, so shutdown completes promptly.
-            self.frame_slot.close();
+            if close_input {
+                self.frame_slot.close();
+            }
             worker.join()
         } else {
             WorkerResult::Completed(InferenceWorkerResult::default())

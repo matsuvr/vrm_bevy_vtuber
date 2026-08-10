@@ -20,7 +20,7 @@ use crate::runtime::FaceInference;
 /// The returned object is owned by the worker thread; it is constructed here
 /// and never moved to the caller thread.
 pub fn load_model_runtime(descriptor: &ModelDescriptor) -> Result<Box<dyn FaceInference>> {
-    verify_hash(&descriptor.path, &descriptor.sha256)?;
+    verify_model_file(&descriptor.path, &descriptor.sha256)?;
 
     match descriptor.format {
         ModelFormat::Tflite => Ok(Box::new(TfliteRuntime::new(descriptor)?)),
@@ -29,7 +29,8 @@ pub fn load_model_runtime(descriptor: &ModelDescriptor) -> Result<Box<dyn FaceIn
     }
 }
 
-fn verify_hash(path: &Path, expected_sha256: &str) -> Result<()> {
+/// Verifies a model file against the SHA-256 recorded in its manifest.
+pub fn verify_model_file(path: &Path, expected_sha256: &str) -> Result<()> {
     let bytes = std::fs::read(path)
         .map_err(|e| InferenceError::LoadFailed(format!("failed to read model file: {e}")))?;
     let actual = sha256_hex(&bytes);
@@ -84,10 +85,90 @@ impl TfliteRuntime {
 }
 
 impl FaceInference for TfliteRuntime {
-    fn infer(&self, _tensor: &[f32], _input_shape: &[usize; 4]) -> Result<RawFaceObservation> {
-        Err(InferenceError::ExecutionFailed(
-            "TFLite inference not yet implemented".into(),
-        ))
+    fn infer(&self, tensor: &[f32], input_shape: &[usize; 4]) -> Result<RawFaceObservation> {
+        use tract_tflite::prelude::*;
+        use vtuber_core::types::{FrameSeq, MonoTimeNs, NormalizedRect};
+
+        let input = tract_ndarray::Array::from_shape_vec(
+            (
+                input_shape[0],
+                input_shape[1],
+                input_shape[2],
+                input_shape[3],
+            ),
+            tensor.to_vec(),
+        )
+        .map_err(|e| InferenceError::ExecutionFailed(format!("invalid input tensor: {e}")))?;
+        let result = self
+            .model
+            .run(tvec!(input.into_tensor().into_tvalue()))
+            .map_err(|e| InferenceError::ExecutionFailed(format!("{e:?}")))?;
+        let output = result
+            .first()
+            .ok_or_else(|| InferenceError::ExecutionFailed("model returned no outputs".into()))?
+            .to_plain_array_view::<f32>()
+            .map_err(|e| InferenceError::ExecutionFailed(format!("output is not f32: {e:?}")))?;
+        let shape = output.shape();
+        if shape.len() != 3 || shape[0] != 1 || shape[2] != 3 {
+            return Err(InferenceError::OutputShapeMismatch {
+                expected: vec![1, 98, 3],
+                actual: shape.to_vec(),
+            });
+        }
+        let count = shape[1];
+        let mut landmarks = Vec::with_capacity(count);
+        for index in 0..count {
+            let x = output[[0, index, 0]];
+            let y = output[[0, index, 1]];
+            let confidence = output[[0, index, 2]].clamp(0.0, 1.0);
+            if !x.is_finite() || !y.is_finite() || !confidence.is_finite() {
+                return Err(InferenceError::InvalidOutputValue {
+                    index,
+                    value: if !x.is_finite() {
+                        x
+                    } else if !y.is_finite() {
+                        y
+                    } else {
+                        confidence
+                    },
+                });
+            }
+            landmarks.push(vtuber_core::types::Landmark3 {
+                x,
+                y,
+                z: 0.0,
+                visibility: confidence,
+            });
+        }
+        let expressions = crate::decode::expressions::decode_expressions(
+            None,
+            None,
+            Some(&landmarks),
+            self.schema,
+            1.0,
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+        Ok(RawFaceObservation {
+            source_seq: FrameSeq(0),
+            captured_at: MonoTimeNs(0),
+            inference_started_at: MonoTimeNs(0),
+            inference_finished_at: MonoTimeNs(0),
+            face_confidence: 1.0,
+            landmarks,
+            blendshapes: None,
+            expressions,
+            roi: NormalizedRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                rotation_rad: 0.0,
+            },
+            schema: self.schema,
+        })
     }
 
     fn schema_id(&self) -> LandmarkSchemaId {

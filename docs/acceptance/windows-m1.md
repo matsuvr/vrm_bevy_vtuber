@@ -1,8 +1,8 @@
 # Windows M1 Acceptance Report
 
-**Status:** NOT_RUN  
-**Date:** _pending_  
-**Commit SHA:** _pending_  
+**Status:** BLOCKED — automated tests/builds pass; Windows GUI/camera/soak protocol is NOT RUN and M1-08-013 has a correctness blocker  
+**Date:** 2026-08-10  
+**Commit SHA:** `01dce2753ef483069c0eb83f7b740b3814e65349` (working tree contains uncommitted changes)  
 **Binary:** `vtuber-desktop` (release profile)
 
 ---
@@ -11,35 +11,49 @@
 
 | Item | Value |
 |------|-------|
-| OS | Windows 11 _version_ |
-| CPU | _model_ |
-| GPU | _model + driver version_ |
-| RAM | _amount_ |
-| Screen | _resolution_ |
-| Camera 1 | _device name + descriptor_ |
-| Camera 2 (if available) | _device name + descriptor_ |
+| OS | Windows 11 Pro 10.0.26200 (build 26200) |
+| CPU | NOT RECORDED — no hardware claim |
+| GPU | NOT RECORDED — no hardware claim |
+| RAM | NOT RECORDED — no hardware claim |
+| Screen | NOT RECORDED — no hardware claim |
+| Camera 1 | NOT RUN — no physical camera descriptor recorded |
+| Camera 2 (if available) | NOT RUN |
 | Build profile | release |
-| Rust toolchain | _from rust-toolchain.toml_ |
-| Binary SHA-256 | _sha256sum of vtuber-desktop.exe_ |
+| Rust toolchain | rustc 1.97.1 / cargo 1.97.1 |
+| Binary SHA-256 | `2C4ED40CDBB1B4E7DC39F55B62AF3875433D50943C0A5855BCD45FA2A6198BB9` |
 
 ### Model Manifest
 
 | # | Model Name | Source | License | SHA-256 | VRM Version | Notes |
 |---|-----------|--------|---------|---------|-------------|-------|
-| 1 | _name_ | _source_ | _license_ | _hash_ | 1.0 | _notes_ |
-| 2 | _name_ | _source_ | _license_ | _hash_ | 1.0 | _notes_ |
-| 3 | _name_ | _source_ | _license_ | _hash_ | 1.0 | _notes_ |
+| 1 | Peppa_Pig_Face_Landmark student 256x256 | upstream GitHub + PINTO model zoo | Apache-2.0 | `73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A` | n/a | Landmark-only ONNX; detector/crop still required |
+| 2 | — | — | — | — | n/a | NOT RUN |
+| 3 | — | — | — | — | n/a | NOT RUN |
 
 ---
 
 ## 2. Test Matrix
 
+Automated verification completed on the environment above:
+
+- `cargo fmt --all -- --check`
+- `cargo check -p vtuber-desktop`
+- `cargo clippy -p vtuber-app -p vtuber-avatar -p vtuber-camera -p vtuber-tracking --all-targets -- -D warnings`
+- `cargo clippy -p vtuber-inference --all-targets -- -D warnings`
+- `cargo run -p xtask -- acceptance verify assets/models/manifest.toml`
+- `cargo test --workspace --no-fail-fast`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo build -p vtuber-desktop --release`
+
+The GUI import, physical MSMF camera, model crop/detection, VRM motion, and
+30-minute soak protocol below were not run in this agent session.
+
 | Row | Model | Camera | Protocol | Result | Notes |
 |-----|-------|--------|----------|--------|-------|
-| 1 | Model 1 | Camera 1 | Full | _PASS/FAIL/SKIP_ | |
-| 2 | Model 2 | Camera 1 | Full | _PASS/FAIL/SKIP_ | |
-| 3 | Model 3 | Camera 1 | Full | _PASS/FAIL/SKIP_ | |
-| 4 | Model 1 | Camera 2 | Full | _PASS/FAIL/SKIP_ | _if available_ |
+| 1 | Model 1 | Camera 1 | Full | NOT RUN | Physical camera and GUI protocol unavailable in this session |
+| 2 | Model 2 | Camera 1 | Full | NOT RUN | No manifest model |
+| 3 | Model 3 | Camera 1 | Full | NOT RUN | No manifest model |
+| 4 | Model 1 | Camera 2 | Full | NOT RUN | No physical camera inventory |
 
 Skip conditions:
 - Camera 2 not available → rows 4+ marked SKIP with reason
@@ -150,16 +164,16 @@ Skip conditions:
 
 | Metric | Target | Actual | Result |
 |--------|--------|--------|--------|
-| Render FPS | ≥ 30 | _tbd_ | |
-| Tracking Hz | ≥ 15 | _tbd_ | |
-| p50 capture-to-apply | — | _tbd_ | |
-| p95 capture-to-apply | ≤ 180ms | _tbd_ | |
-| Queue depth | ≤ 1 | _tbd_ | |
-| Slot overwrite count | — | _tbd_ | |
+| Render FPS | ≥ 30 | NOT RUN | |
+| Tracking Hz | ≥ 15 | NOT RUN | |
+| p50 capture-to-apply | — | NOT RUN | |
+| p95 capture-to-apply | ≤ 180ms | NOT RUN | |
+| Queue depth | ≤ 1 | NOT RUN | |
+| Slot overwrite count | — | NOT RUN | |
 
 ### 5.3 Raw Data
 
-_Metrics CSV/JSON artifact path: _pending__
+_Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 ---
 
@@ -196,15 +210,15 @@ _Metrics CSV/JSON artifact path: _pending__
 
 | # | Criterion | Target | Actual | Verdict |
 |---|-----------|--------|--------|---------|
-| 1 | Render FPS | ≥ 30 | _tbd_ | |
-| 2 | Tracking Hz | ≥ 15 | _tbd_ | |
-| 3 | p95 capture-to-apply | ≤ 180ms | _tbd_ | |
-| 4 | Queue depth | ≤ 1 | _tbd_ | |
-| 5 | No memory/latency increase | stable | _tbd_ | |
-| 6 | No process crash | 0 crashes | _tbd_ | |
-| 7 | Report saved | yes | _tbd_ | |
+| 1 | Render FPS | ≥ 30 | NOT RUN | NOT RUN |
+| 2 | Tracking Hz | ≥ 15 | NOT RUN | NOT RUN |
+| 3 | p95 capture-to-apply | ≤ 180ms | NOT RUN | NOT RUN |
+| 4 | Queue depth | ≤ 1 | NOT RUN | NOT RUN |
+| 5 | No memory/latency increase | stable | NOT RUN | NOT RUN |
+| 6 | No process crash | 0 crashes | NOT RUN | NOT RUN |
+| 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** _PASS / FAIL / CONDITIONAL_
+**Overall Gate:** BLOCKED — the automated checks pass, but the physical Windows protocol was not run and the current landmark-only model still lacks a verified detector/crop stage.
 
 ---
 
@@ -212,11 +226,12 @@ _Metrics CSV/JSON artifact path: _pending__
 
 | # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
 |---|---------|----------|----------|-------------|---------------|
-| | | | | | |
+| 1 | Production Peppa model is landmark-only; camera frames are not yet transformed by a verified face detector/crop stage | correctness | High | Add and verify the model-matched detector/crop artifact and preprocessing contract before accepting M1-08-013 | Yes |
+| 2 | Physical Windows GUI, MSMF camera, VRM motion, and 30-minute soak were not run in this session | test-environment | High | Execute the Windows acceptance protocol on target hardware | Yes |
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment
 
-**M1-09 Go/No-Go Decision:** _pending_
+**M1-09 Go/No-Go Decision:** HOLD — M1-08-013/019 are not accepted; macOS work remains explicitly deferred.
 
 ---
 
@@ -224,12 +239,12 @@ Categories: correctness, compatibility, performance, hardware-specific, test-env
 
 | Artifact | SHA-256 | Path |
 |----------|---------|------|
-| vtuber-desktop.exe | _hash_ | target/release/vtuber-desktop.exe |
-| Model 1 | _hash_ | _path_ |
-| Model 2 | _hash_ | _path_ |
-| Model 3 | _hash_ | _path_ |
-| Metrics CSV | _hash_ | _path_ |
-| Soak metrics | _hash_ | _path_ |
+| vtuber-desktop.exe | `2C4ED40CDBB1B4E7DC39F55B62AF3875433D50943C0A5855BCD45FA2A6198BB9` | target/release/vtuber-desktop.exe |
+| Model 1 | `73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A` | assets/models/peppapig_student_1x3x256x256.onnx |
+| Model 2 | — | not present |
+| Model 3 | — | not present |
+| Metrics CSV | — | not generated — protocol not run |
+| Soak metrics | — | not generated — protocol not run |
 
 ---
 

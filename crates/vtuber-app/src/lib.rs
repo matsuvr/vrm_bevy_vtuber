@@ -8,6 +8,12 @@
 /// UI action commands emitted by the UI layer.
 pub mod actions;
 
+/// Bridge from tracking control frames to the active avatar generation.
+pub mod avatar_bridge;
+
+/// Capture runtime — camera backend lifecycle and frame transport.
+pub mod capture_runtime;
+
 /// Diagnostics snapshot for the UI.
 pub mod diagnostics;
 
@@ -16,6 +22,12 @@ pub mod error_presenter;
 
 /// VRM 1.0 import and preflight inspection.
 pub mod import;
+
+/// Application bridge for the pure-Rust face inference worker.
+pub mod inference_runtime;
+
+/// Manifest-driven inference model catalog.
+pub mod model_catalog;
 
 /// App orchestrator — processes UI actions and manages domain state.
 pub mod orchestrator;
@@ -35,3 +47,6 @@ pub mod ui;
 
 /// UI view models — immutable snapshots for rendering the UI.
 pub mod ui_model;
+
+/// Main-thread bridge from inference observations to tracking state.
+pub mod tracking_runtime;

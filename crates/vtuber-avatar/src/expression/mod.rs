@@ -14,4 +14,6 @@ pub use command::{ExpressionCommand, ExpressionCommandBuilder, ExpressionCommand
 pub use mouth::{
     RawMouthInput, is_valid_mouth_preset, map_mouth_to_expressions, map_mouth_with_fallback,
 };
-pub use system::{DEFAULT_CHANGE_EPSILON, ExpressionStateTracker, coalesce_commands};
+pub use system::{
+    DEFAULT_CHANGE_EPSILON, ExpressionStateTracker, apply_tracked_expressions, coalesce_commands,
+};
