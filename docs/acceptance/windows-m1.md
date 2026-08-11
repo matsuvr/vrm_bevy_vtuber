@@ -97,6 +97,14 @@ acceptance protocol. The 60-second neutral run, face out/return protocol,
 directional movement, edge protocol, and three Stop/Start repetitions remain
 NOT RUN.
 
+To make the remaining manual timing reproducible, the diagnostic now provides
+a guided CUI mode. It prints each phase and a one-second countdown for the
+last three seconds; the mode itself remains NOT RUN in this report:
+
+```text
+cargo run -p xtask -- face-pipeline-smoke --camera 0 --guided-protocol --json
+```
+
 | Row | Model | Camera | Protocol | Result | Notes |
 |-----|-------|--------|----------|--------|-------|
 | 1 | Model 1 | Camera 1 | Full | NOT RUN | Physical camera and GUI protocol unavailable in this session |

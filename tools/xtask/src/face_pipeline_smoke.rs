@@ -1,5 +1,6 @@
 //! Windows-only camera to composite-inference diagnostic command.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,7 @@ pub fn print_help() {
     println!("  --pipeline <id>          Production pipeline id");
     println!("  --project-root <path>    Workspace/project root (default: current directory)");
     println!("  --snapshot <path>        Save one captured frame as a local JPEG");
+    println!("  --guided-protocol        Print timed prompts for the full camera protocol");
     println!("  --json                   Emit one bounded JSON summary");
     println!("  -h, --help               Show this help");
     println!();
@@ -59,6 +61,7 @@ struct Options {
     pipeline: Option<String>,
     project_root: PathBuf,
     snapshot: Option<PathBuf>,
+    guided_protocol: bool,
     json: bool,
     help: bool,
 }
@@ -72,6 +75,7 @@ impl Options {
             project_root: std::env::current_dir()
                 .map_err(|error| format!("cannot resolve project root: {error}"))?,
             snapshot: None,
+            guided_protocol: false,
             json: false,
             help: false,
         };
@@ -109,6 +113,7 @@ impl Options {
                     options.snapshot =
                         Some(PathBuf::from(required_value(args, index, "--snapshot")?));
                 }
+                "--guided-protocol" => options.guided_protocol = true,
                 other => return Err(format!("unknown face-pipeline-smoke option `{other}`")),
             }
             index += 1;
@@ -122,6 +127,159 @@ fn required_value(args: &[String], index: usize, option: &str) -> Result<String,
         .cloned()
         .filter(|value| !value.starts_with('-'))
         .ok_or_else(|| format!("{option} requires a value"))
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GuidedAction {
+    None,
+    StopCapture,
+    StartCapture,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GuidedPhase {
+    label: &'static str,
+    duration: Duration,
+    action: GuidedAction,
+}
+
+struct GuidedProtocol {
+    phases: Vec<GuidedPhase>,
+    phase_index: usize,
+    phase_deadline: Duration,
+    announced: bool,
+    last_countdown: Option<u64>,
+    completed: bool,
+}
+
+impl GuidedProtocol {
+    fn new() -> Self {
+        let mut phases = vec![GuidedPhase {
+            label: "顔を中央に置き、neutralで正面を向く",
+            duration: Duration::from_secs(60),
+            action: GuidedAction::None,
+        }];
+        for cycle in 1..=5 {
+            phases.push(GuidedPhase {
+                label: match cycle {
+                    1 => "顔を完全に画面外へ出す（1/5）",
+                    2 => "顔を完全に画面外へ出す（2/5）",
+                    3 => "顔を完全に画面外へ出す（3/5）",
+                    4 => "顔を完全に画面外へ出す（4/5）",
+                    _ => "顔を完全に画面外へ出す（5/5）",
+                },
+                duration: Duration::from_secs(5),
+                action: GuidedAction::None,
+            });
+            phases.push(GuidedPhase {
+                label: "顔を中央へ戻す",
+                duration: Duration::from_secs(5),
+                action: GuidedAction::None,
+            });
+        }
+        phases.extend([
+            GuidedPhase {
+                label: "通常範囲で左を向く",
+                duration: Duration::from_secs(6),
+                action: GuidedAction::None,
+            },
+            GuidedPhase {
+                label: "通常範囲で右を向く",
+                duration: Duration::from_secs(6),
+                action: GuidedAction::None,
+            },
+            GuidedPhase {
+                label: "通常範囲で上を向く",
+                duration: Duration::from_secs(6),
+                action: GuidedAction::None,
+            },
+            GuidedPhase {
+                label: "通常範囲で下を向く",
+                duration: Duration::from_secs(6),
+                action: GuidedAction::None,
+            },
+            GuidedPhase {
+                label: "顔を画面端近くへ移動する",
+                duration: Duration::from_secs(8),
+                action: GuidedAction::None,
+            },
+        ]);
+        for cycle in 1..=3 {
+            phases.push(GuidedPhase {
+                label: match cycle {
+                    1 => "captureを停止中（1/3）",
+                    2 => "captureを停止中（2/3）",
+                    _ => "captureを停止中（3/3）",
+                },
+                duration: Duration::from_secs(3),
+                action: GuidedAction::StopCapture,
+            });
+            phases.push(GuidedPhase {
+                label: "captureを再開中。顔を中央へ戻す",
+                duration: Duration::from_secs(8),
+                action: GuidedAction::StartCapture,
+            });
+        }
+        Self {
+            phase_deadline: phases[0].duration,
+            phases,
+            phase_index: 0,
+            announced: false,
+            last_countdown: None,
+            completed: false,
+        }
+    }
+
+    fn total_duration(&self) -> Duration {
+        self.phases.iter().map(|phase| phase.duration).sum()
+    }
+
+    fn tick(&mut self, elapsed: Duration) -> Option<GuidedAction> {
+        if self.completed {
+            return None;
+        }
+        while elapsed >= self.phase_deadline {
+            self.phase_index += 1;
+            if self.phase_index >= self.phases.len() {
+                self.completed = true;
+                println!("[guided] 全protocol完了");
+                flush_stdout();
+                return None;
+            }
+            self.phase_deadline += self.phases[self.phase_index].duration;
+            self.announced = false;
+            self.last_countdown = None;
+        }
+
+        let phase = self.phases[self.phase_index];
+        let mut action = None;
+        if !self.announced {
+            println!(
+                "[guided +{:03}s] {}（{}秒）",
+                elapsed.as_secs(),
+                phase.label,
+                phase.duration.as_secs()
+            );
+            flush_stdout();
+            self.announced = true;
+            action = Some(phase.action);
+        }
+        let remaining = self.phase_deadline.saturating_sub(elapsed).as_secs();
+        if remaining <= 3 && self.last_countdown != Some(remaining) {
+            println!("[guided] 残り{remaining}秒");
+            flush_stdout();
+            self.last_countdown = Some(remaining);
+        }
+        action
+    }
+
+    fn is_complete(&self) -> bool {
+        self.completed
+    }
+}
+
+fn flush_stdout() {
+    let _ = std::io::stdout().flush();
 }
 
 #[cfg(target_os = "windows")]
@@ -202,7 +360,12 @@ fn run_windows(options: Options) -> Result<(), String> {
     });
 
     let started = Instant::now();
-    let deadline = started + options.duration;
+    let mut guided = options.guided_protocol.then(GuidedProtocol::new);
+    let deadline = started
+        + guided
+            .as_ref()
+            .map(GuidedProtocol::total_duration)
+            .unwrap_or(options.duration);
     let mut output_generation = 0u64;
     let mut frame_generation = 0u64;
     let mut snapshot_written = false;
@@ -211,6 +374,18 @@ fn run_windows(options: Options) -> Result<(), String> {
     let mut pose_stats = PoseStats::default();
 
     while Instant::now() < deadline {
+        if let Some(protocol) = guided.as_mut()
+            && let Some(action) = protocol.tick(started.elapsed())
+        {
+            match action {
+                GuidedAction::None => {}
+                GuidedAction::StopCapture => capture.stop(),
+                GuidedAction::StartCapture => capture
+                    .select_and_start(device.clone(), CameraRequest::default())
+                    .map_err(|error| format!("guided capture restart failed: {error}"))?,
+            }
+        }
+
         if let Some(snapshot_path) = options.snapshot.as_deref()
             && !snapshot_written
         {
@@ -256,9 +431,10 @@ fn run_windows(options: Options) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    if options.snapshot.is_some() && !snapshot_written {
-        return Err("snapshot requested but no camera frame was published".into());
-    }
+    let snapshot_missing = options.snapshot.is_some() && !snapshot_written;
+    let guided_incomplete = guided
+        .as_ref()
+        .is_some_and(|protocol| !protocol.is_complete());
 
     let camera_state = capture.state();
     inference_worker.stop();
@@ -295,6 +471,12 @@ fn run_windows(options: Options) -> Result<(), String> {
         println!("{}", summary.to_json());
     } else {
         summary.print_text();
+    }
+    if snapshot_missing {
+        return Err("snapshot requested but no camera frame was published".into());
+    }
+    if guided_incomplete {
+        return Err("guided protocol did not complete before capture stopped".into());
     }
     Ok(())
 }

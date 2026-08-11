@@ -7033,7 +7033,7 @@ cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 **実装指示**
 
 - main desktop appへ接続する前に、既存Windows MSMF captureとcomposite runtimeだけを直結するdiagnostic commandを作る。
-- command例は`cargo run -p xtask -- face-pipeline-smoke ...`とし、camera descriptor、duration、pipeline ID、optional JSON outputを受け取る。
+- command例は`cargo run -p xtask -- face-pipeline-smoke ...`とし、camera descriptor、duration、pipeline ID、optional JSON outputを受け取る。`--guided-protocol`ではCUIが各操作の開始時刻と残り3秒を表示し、neutral、face loss/recovery、方向、edge、capture Stop/Startを定刻で案内する。
 - command内でcapture controllerとcomposite inference workerを正規のthread ownership規約どおり起動し、終了時にinference→captureの順でstop／joinする。
 - avatar、Bevy renderer、eguiを起動しない。これによりdetector／crop／landmark blockerをapp integrationから分離する。
 - console／bounded JSON summaryへ次を記録する。
