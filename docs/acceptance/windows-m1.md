@@ -1,6 +1,6 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — software gates and the still-image detector probe pass; the MSMF probe still saw no face, so the full face-in-frame protocol is NOT RUN
+**Status:** BLOCKED — the 20-second MSMF face-in-frame probe passes through 98 landmarks and planar pose; the required full manual protocol is NOT RUN
 **Date:** 2026-08-11
 **Commit SHA:** see `git rev-parse HEAD` for the commit containing this report
 **Binary:** `vtuber-desktop` (release profile)
@@ -16,11 +16,11 @@
 | GPU | NOT RECORDED — no hardware claim |
 | RAM | NOT RECORDED — no hardware claim |
 | Screen | NOT RECORDED — no hardware claim |
-| Camera 1 | NOT RUN — no physical camera descriptor recorded |
+| Camera 1 | c922 Pro Stream Webcam — MSMF index 0 |
 | Camera 2 (if available) | NOT RUN |
 | Build profile | release |
 | Rust toolchain | rustc 1.97.1 / cargo 1.97.1 |
-| Binary SHA-256 | `2C4ED40CDBB1B4E7DC39F55B62AF3875433D50943C0A5855BCD45FA2A6198BB9` |
+| Binary SHA-256 | `DDF88B6A1F6449A1371AF9E1E57FFA62DDBBD959B549BADFB56DF3E90D49AAF5` |
 
 ### Model Manifest
 
@@ -74,10 +74,28 @@ and detector decode can detect a face in a still image. It does not substitute
 for the live camera composite gate because it does not exercise crop,
 landmark, or planar-pose output.
 
-This is a real MSMF capture and composite-runtime run, but it is not a face
-success: no face was present in the sampled view. The 60-second neutral run,
-face out/return protocol, directional movement, edge protocol, and three
-Stop/Start repetitions remain NOT RUN.
+The first live MSMF run returned no face even though the captured frame showed
+the user. A post-fix run found that the landmark model emitted visibility
+values above 1.0; the ONNX landmark decoder now clamps visibility to the
+engine contract `[0,1]`. The resulting 20-second C922 run was:
+
+```text
+cargo run -p xtask -- face-pipeline-smoke --camera 0 --duration 20 --snapshot <temp>/vrm-c922-snapshot-after-fix.jpg --json
+format: 1280x720 @ 30/1 Rgb8
+frames_captured: 593
+face_count/no_face_count: 6/0
+detector_hz/landmark_hz: 0.293/0.293
+detector_confidence: 0.610928
+finite_landmarks: 98
+finite_pose_count: 5
+pose yaw/pitch/roll ranges: [-1.402699,0.477511] [-1.695925,2.557055] [-1.651763,0.366612]
+stage_error: none
+```
+
+This is a basic live face-in-frame success, not completion of the full
+acceptance protocol. The 60-second neutral run, face out/return protocol,
+directional movement, edge protocol, and three Stop/Start repetitions remain
+NOT RUN.
 
 | Row | Model | Camera | Protocol | Result | Notes |
 |-----|-------|--------|----------|--------|-------|
@@ -277,7 +295,7 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 | 6 | No process crash | 0 crashes | NOT RUN | NOT RUN |
 | 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** BLOCKED — the still-image detector probe, detector/crop/landmark software gate, and real MSMF no-face run pass, but a face-in-frame run yielding finite 98 landmarks and planar pose has not been completed.
+**Overall Gate:** BLOCKED — the still-image detector probe and 20-second MSMF face-in-frame run pass, but the required full manual camera protocol and GUI/VRM/soak checks have not been completed.
 
 ---
 
@@ -285,7 +303,7 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 | # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
 |---|---------|----------|----------|-------------|---------------|
-| 1 | The 10-second MSMF probe captured frames but observed no face, while the still-image detector probe succeeded; detector→crop→landmark→pose could not be measured live | test-environment | High | Place a face in the selected camera view and execute the full M1-08-013-009 protocol | Yes |
+| 1 | The basic 20-second MSMF probe passes, but the full face-in-frame protocol has not been run | test-environment | High | Execute the 60-second neutral, loss/recovery, movement, edge, and Stop/Start protocol | Yes |
 | 2 | Physical Windows GUI, VRM motion, and 30-minute soak were not run in this session | test-environment | High | Execute the Windows acceptance protocol on target hardware | Yes |
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment

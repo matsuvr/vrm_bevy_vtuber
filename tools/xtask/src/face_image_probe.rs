@@ -4,20 +4,35 @@ use std::path::Path;
 use std::sync::Arc;
 
 use image::ImageReader;
-use vtuber_core::types::{FrameSeq, MonoTimeNs, PixelFormat, VideoFrame};
+use vtuber_core::types::{
+    FrameSeq, Landmark3, LandmarkSchemaId, MonoTimeNs, PixelFormat, VideoFrame,
+};
 use vtuber_inference::detector::{
     DetectorDecodeOutcome, UltraFaceDetector, UltraFacePreprocessBuffers, decode_detections,
+    select_primary_face,
+};
+use vtuber_inference::{
+    CompositeFrameInference, FaceCropPreprocessBuffers, FaceCropTransform, FrameFaceInference,
+    FrameInferenceOutcome, LandmarkCoordinateEncoding, LandmarkStage, OnnxRuntime,
+    ProductionLandmarkStage,
 };
 
 /// Runs the detector against one decoded still image.
 pub fn run(args: &[String]) -> Result<(), String> {
-    let Some(path) = args.first() else {
+    let mut image_path = None;
+    let mut composite = false;
+    for arg in args {
+        match arg.as_str() {
+            "--composite" => composite = true,
+            value if value.starts_with('-') => return Err(format!("unknown option `{value}`")),
+            value if image_path.is_none() => image_path = Some(value),
+            value => return Err(format!("unexpected argument `{value}`")),
+        }
+    }
+    let Some(path) = image_path else {
         print_help();
         return Err("face-image-probe requires an image path".into());
     };
-    if args.len() > 1 {
-        return Err(format!("unexpected argument `{}`", args[1]));
-    }
 
     let path = Path::new(path);
     let project_root =
@@ -79,7 +94,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     println!("  image: {}", path.display());
     println!("  dimensions: {width}x{height}");
     println!("  pipeline: {}", pipeline.id);
-    match outcome {
+    match &outcome {
         DetectorDecodeOutcome::NoFace => {
             println!("  result: NO_FACE");
         }
@@ -99,7 +114,131 @@ pub fn run(args: &[String]) -> Result<(), String> {
             }
         }
     }
+
+    if composite {
+        let primary = match &outcome {
+            DetectorDecodeOutcome::Detections(detections) => select_primary_face(detections, None),
+            DetectorDecodeOutcome::NoFace => None,
+        };
+        let mut runtime =
+            CompositeFrameInference::from_pipeline_descriptor(&pipeline, &artifact_root)
+                .map_err(|error| format!("composite runtime load failed: {error}"))?;
+        let outcome = runtime
+            .infer_frame(&frame)
+            .map_err(|error| format!("composite inference failed: {error}"))?;
+        let timing = runtime.take_timing();
+        match outcome {
+            FrameInferenceOutcome::NoFace => println!("  composite: NO_FACE timing={timing:?}"),
+            FrameInferenceOutcome::Face(observation) => println!(
+                "  composite: FACE_DETECTED landmarks={} confidence={:.4} roi=({:.4},{:.4},{:.4},{:.4}) timing={:?}",
+                observation.landmarks.len(),
+                observation.face_confidence,
+                observation.roi.x,
+                observation.roi.y,
+                observation.roi.width,
+                observation.roi.height,
+                timing,
+            ),
+        }
+        if let Some(detection) = primary {
+            print_landmark_stage_diagnostics(&frame, detection, &pipeline, &artifact_root)?;
+        }
+    }
     Ok(())
+}
+
+fn print_landmark_stage_diagnostics(
+    frame: &VideoFrame,
+    detection: vtuber_inference::detector::FaceDetection,
+    pipeline: &vtuber_inference::FacePipelineDescriptor,
+    artifact_root: &Path,
+) -> Result<(), String> {
+    let transform = FaceCropTransform::from_detector_box(
+        frame.width,
+        frame.height,
+        &detection.rect,
+        pipeline.crop,
+    )
+    .map_err(|error| format!("diagnostic crop failed: {error}"))?;
+    let mut crop_buffers = FaceCropPreprocessBuffers::new(pipeline.crop.output_size)
+        .map_err(|error| format!("diagnostic crop buffers failed: {error}"))?;
+    let tensor = crop_buffers
+        .preprocess(frame, &transform, &pipeline.landmarks.input, pipeline.crop)
+        .map_err(|error| format!("diagnostic crop preprocessing failed: {error}"))?;
+    let input_shape: [usize; 4] = pipeline
+        .landmarks
+        .input
+        .shape
+        .clone()
+        .try_into()
+        .map_err(|_| "diagnostic landmark input shape is not rank four".to_string())?;
+    let schema = match pipeline.landmarks.schema.as_deref() {
+        Some("peppapig-98") => LandmarkSchemaId("peppapig-98"),
+        Some(other) => return Err(format!("unsupported diagnostic landmark schema `{other}`")),
+        None => return Err("diagnostic landmark schema is missing".into()),
+    };
+    let landmark_path = artifact_root.join(&pipeline.landmarks.file);
+    let runtime = OnnxRuntime::new(landmark_path, schema)
+        .map_err(|error| format!("diagnostic landmark runtime load failed: {error}"))?;
+    let mut stage = ProductionLandmarkStage::new(runtime);
+    let mut landmarks = stage
+        .infer_landmarks(tensor, input_shape)
+        .map_err(|error| format!("diagnostic landmark inference failed: {error}"))?;
+    print_landmark_stats("raw crop output", &landmarks);
+
+    let encoding = pipeline
+        .landmarks
+        .landmark_coordinate_encoding
+        .as_deref()
+        .and_then(LandmarkCoordinateEncoding::parse)
+        .ok_or_else(|| "diagnostic landmark coordinate encoding is invalid".to_string())?;
+    transform
+        .map_landmarks_to_source_normalized(&mut landmarks, encoding)
+        .map_err(|error| format!("diagnostic landmark mapping failed: {error}"))?;
+    print_landmark_stats("mapped source output", &landmarks);
+    Ok(())
+}
+
+fn print_landmark_stats(label: &str, landmarks: &[Landmark3]) {
+    let finite = landmarks
+        .iter()
+        .filter(|landmark| {
+            landmark.x.is_finite()
+                && landmark.y.is_finite()
+                && landmark.z.is_finite()
+                && landmark.visibility.is_finite()
+        })
+        .count();
+    let min_x = landmarks
+        .iter()
+        .map(|landmark| landmark.x)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = landmarks
+        .iter()
+        .map(|landmark| landmark.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = landmarks
+        .iter()
+        .map(|landmark| landmark.y)
+        .fold(f32::INFINITY, f32::min);
+    let max_y = landmarks
+        .iter()
+        .map(|landmark| landmark.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let mean_visibility = if landmarks.is_empty() {
+        0.0
+    } else {
+        landmarks
+            .iter()
+            .map(|landmark| landmark.visibility)
+            .sum::<f32>()
+            / landmarks.len() as f32
+    };
+    println!(
+        "  {label}: count={} finite={} x=[{min_x:.4},{max_x:.4}] y=[{min_y:.4},{max_y:.4}] mean_visibility={mean_visibility:.4}",
+        landmarks.len(),
+        finite
+    );
 }
 
 /// Prints command usage.
@@ -107,5 +246,6 @@ pub fn print_help() {
     println!("face-image-probe - run the production UltraFace detector on one image");
     println!();
     println!("USAGE:");
-    println!("  cargo run -p xtask -- face-image-probe <image-path>");
+    println!("  cargo run -p xtask -- face-image-probe <image-path> [--composite]");
+    println!("  --composite  Continue through crop and Peppa 98-landmark inference");
 }

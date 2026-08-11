@@ -92,9 +92,13 @@ runtime are now implemented and covered by fixed-input golden/replay tests. A
 Windows MSMF diagnostic command is also available. A still-image probe on a
 user-supplied 800x533 JPEG detected one face at confidence 0.9999, confirming
 the detector artifact, RGBA8 preprocessing, and output decoder. The Windows
-vertical gate remains blocked until a face-in-frame camera run produces finite
-98 landmarks and a finite planar pose; the current camera run observed no face
-and makes no production pose success claim.
+vertical gate initially returned `NO_FACE` despite the captured C922 frame
+containing a face. The cause was landmark-model visibility values above the
+engine contract; the ONNX landmark decoder now clamps that channel to `[0,1]`,
+matching the generic decoder contract. A subsequent 20-second C922 run
+produced 6 face observations, 98 finite landmarks, and 5 finite planar poses
+with no stage error. The full manual camera protocol remains pending, so the
+parent gate is not yet accepted.
 
 ## M1-08-013-002 exact UltraFace probe result
 

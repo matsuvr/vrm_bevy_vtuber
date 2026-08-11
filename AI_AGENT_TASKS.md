@@ -6563,7 +6563,9 @@ cargo run -p vtuber-desktop --release
 
 不足しているもの:
 
-- fixed inputとWindows実cameraでface-in-frameからfinite landmarks／head poseを得るend-to-end gate
+- fixed inputとWindows実cameraで、required loss/recovery、movement、edge、Stop/Start protocolを含むfull end-to-end gate
+
+20秒のC922 MSMF probeでは、face 6件、98 finite landmarks、finite planar pose 5件を確認済み。初回の `NO_FACE` はlandmark visibility値の範囲外をONNX decoderがclampしていなかった実装不備で、修正済み。
 
 ### fixed direction
 
@@ -7012,15 +7014,17 @@ cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 
 #### M1-08-013-009: Windows full-frame camera probeでparent gateを解除する
 
-状態: `BLOCKED`（diagnostic実装済み、face-in-frame実機protocol待ち）
+状態: `IN_PROGRESS`（20秒face-in-frame pass、full実機protocol待ち）
 依存: `M1-08-013-008`
 親参照: M1-08-013、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
 
 - `tools/xtask/src/face_pipeline_smoke.rs`
+- `tools/xtask/src/face_image_probe.rs`
 - `tools/xtask/src/main.rs`
 - `tools/xtask/Cargo.toml`
+- `crates/vtuber-inference/src/runtime.rs`
 - `crates/vtuber-inference/src/diagnostic.rs（必要なら）`
 - `docs/acceptance/windows-m1.md`
 - `docs/adr/ADR-001-face-inference-runtime-and-model.md`

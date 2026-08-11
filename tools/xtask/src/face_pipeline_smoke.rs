@@ -1,7 +1,10 @@
 //! Windows-only camera to composite-inference diagnostic command.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+use image::{DynamicImage, ImageBuffer, ImageFormat, Luma, Rgb, Rgba};
+use vtuber_core::types::{PixelFormat, VideoFrame};
 
 #[cfg(target_os = "windows")]
 use vtuber_inference::{InferenceMetrics, InferenceStage};
@@ -41,6 +44,7 @@ pub fn print_help() {
     println!("  --duration <seconds>     Capture duration (default: 60)");
     println!("  --pipeline <id>          Production pipeline id");
     println!("  --project-root <path>    Workspace/project root (default: current directory)");
+    println!("  --snapshot <path>        Save one captured frame as a local JPEG");
     println!("  --json                   Emit one bounded JSON summary");
     println!("  -h, --help               Show this help");
     println!();
@@ -54,6 +58,7 @@ struct Options {
     duration: Duration,
     pipeline: Option<String>,
     project_root: PathBuf,
+    snapshot: Option<PathBuf>,
     json: bool,
     help: bool,
 }
@@ -66,6 +71,7 @@ impl Options {
             pipeline: None,
             project_root: std::env::current_dir()
                 .map_err(|error| format!("cannot resolve project root: {error}"))?,
+            snapshot: None,
             json: false,
             help: false,
         };
@@ -97,6 +103,11 @@ impl Options {
                     index += 1;
                     options.project_root =
                         PathBuf::from(required_value(args, index, "--project-root")?);
+                }
+                "--snapshot" => {
+                    index += 1;
+                    options.snapshot =
+                        Some(PathBuf::from(required_value(args, index, "--snapshot")?));
                 }
                 other => return Err(format!("unknown face-pipeline-smoke option `{other}`")),
             }
@@ -193,11 +204,27 @@ fn run_windows(options: Options) -> Result<(), String> {
     let started = Instant::now();
     let deadline = started + options.duration;
     let mut output_generation = 0u64;
+    let mut frame_generation = 0u64;
+    let mut snapshot_written = false;
     let mut latest_observation = None;
     let mut neutral_observation = None;
     let mut pose_stats = PoseStats::default();
 
     while Instant::now() < deadline {
+        if let Some(snapshot_path) = options.snapshot.as_deref()
+            && !snapshot_written
+        {
+            match frame_slot.try_read_after(frame_generation) {
+                Some(ReadResult::New(frame)) => {
+                    frame_generation = frame_slot.generation();
+                    save_snapshot(&frame, snapshot_path)?;
+                    println!("Saved snapshot: {}", snapshot_path.display());
+                    snapshot_written = true;
+                }
+                Some(ReadResult::Closed) | None => {}
+            }
+        }
+
         match output_slot.try_read_after(output_generation) {
             Some(ReadResult::New(observation)) => {
                 output_generation = output_slot.generation();
@@ -227,6 +254,10 @@ fn run_windows(options: Options) -> Result<(), String> {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+
+    if options.snapshot.is_some() && !snapshot_written {
+        return Err("snapshot requested but no camera frame was published".into());
     }
 
     let camera_state = capture.state();
@@ -266,6 +297,50 @@ fn run_windows(options: Options) -> Result<(), String> {
         summary.print_text();
     }
     Ok(())
+}
+
+fn save_snapshot(frame: &VideoFrame, path: &Path) -> Result<(), String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| "snapshot path must use a .jpg or .jpeg extension".to_string())?;
+    if extension != "jpg" && extension != "jpeg" {
+        return Err("snapshot output must use a .jpg or .jpeg extension".into());
+    }
+
+    let image = match frame.format {
+        PixelFormat::Rgb8 => {
+            ImageBuffer::<Rgb<u8>, _>::from_raw(frame.width, frame.height, frame.data.to_vec())
+                .map(DynamicImage::ImageRgb8)
+        }
+        PixelFormat::Bgr8 => {
+            let mut rgb = frame.data.to_vec();
+            for pixel in rgb.chunks_exact_mut(3) {
+                pixel.swap(0, 2);
+            }
+            ImageBuffer::<Rgb<u8>, _>::from_raw(frame.width, frame.height, rgb)
+                .map(DynamicImage::ImageRgb8)
+        }
+        PixelFormat::Rgba8 => {
+            ImageBuffer::<Rgba<u8>, _>::from_raw(frame.width, frame.height, frame.data.to_vec())
+                .map(DynamicImage::ImageRgba8)
+        }
+        PixelFormat::Gray8 => {
+            ImageBuffer::<Luma<u8>, _>::from_raw(frame.width, frame.height, frame.data.to_vec())
+                .map(DynamicImage::ImageLuma8)
+        }
+    }
+    .ok_or_else(|| {
+        format!(
+            "camera frame buffer does not match {}x{} {:?}",
+            frame.width, frame.height, frame.format
+        )
+    })?;
+
+    image
+        .save_with_format(path, ImageFormat::Jpeg)
+        .map_err(|error| format!("snapshot write failed for {}: {error}", path.display()))
 }
 
 #[cfg(target_os = "windows")]

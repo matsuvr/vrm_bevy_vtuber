@@ -220,8 +220,28 @@ fn decode_landmarks(
             x,
             y,
             z: 0.0,
-            visibility: conf,
+            visibility: conf.clamp(0.0, 1.0),
         });
     }
     Ok(landmarks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_landmarks;
+
+    #[test]
+    fn landmark_runtime_clamps_model_visibility_to_contract() {
+        let mut values = vec![0.5_f32; 98 * 3];
+        values[2] = 1.25;
+        values[5] = -0.25;
+        let output = tract_core::ndarray::Array::from_shape_vec((1, 98, 3), values)
+            .expect("test output shape is valid")
+            .into_dyn();
+
+        let landmarks = decode_landmarks(output.view()).expect("test output decodes");
+
+        assert_eq!(landmarks[0].visibility, 1.0);
+        assert_eq!(landmarks[1].visibility, 0.0);
+    }
 }
