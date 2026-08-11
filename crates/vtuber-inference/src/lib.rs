@@ -37,7 +37,12 @@ pub mod state;
 pub mod worker;
 
 pub use controller::{ControlCommand, InferenceController, InferenceWorkerResult};
-pub use descriptor::{ChannelOrder, ModelDescriptor, ModelFormat, Normalization, RuntimeSettings};
+pub use descriptor::{
+    ChannelOrder, CropInterpolation, CropOutsideFill, DetectorPostprocessConfig, FaceCropConfig,
+    FacePipelineDescriptor, InputValueDomain, ModelArtifactDescriptor, ModelDescriptor,
+    ModelFormat, ModelRole, Normalization, NormalizationContract, OutputTensorContract,
+    RuntimeSettings, TensorContract, TensorLayout,
+};
 pub use error::{InferenceError, Result};
 pub use metrics::{DropCounters, InferenceMetrics, InferenceStage, StageTimingSnapshot};
 pub use runtime::FaceInference;

@@ -1,12 +1,11 @@
 # AI_AGENT_TASKS.md
 
-基準日: 2026-08-04
-subtask細分化改訂日: 2026-08-07
-Windows縦断再計画改訂日: 2026-08-09
-M1-08-013 blocker突破計画改訂日: 2026-08-11
+基準日: 2026-08-04  
+subtask細分化改訂日: 2026-08-07  
+Windows縦断再計画改訂日: 2026-08-09  
 対象: Windows 11を現在の開発・受入対象、macOSを保留中の次期対象、VRM 1.0、Bevy 0.19.0、`bevy_vrm1`
 
-このファイルは`DESIGN.md`を実装単位へ分割する。親task ID（`G0-XX`、`M1-XX`、`Q2-XX`、`R3-XX`）は既存の進捗・PR・履歴を維持するため変更しない。実際のコーディングエージェントへの委嘱単位は、通常は`M1-02-001`、correctness blockerのrepair branchでは`M1-08-013-001`のようなleaf subtask IDとする。
+このファイルは`DESIGN.md`を実装単位へ分割する。親task ID（`G0-XX`、`M1-XX`、`Q2-XX`、`R3-XX`）は既存の進捗・PR・履歴を維持するため変更しない。実際のコーディングエージェントへの委嘱単位は、`M1-02-001`のようなsubtask IDとする。
 
 ---
 
@@ -14,51 +13,35 @@ M1-08-013 blocker突破計画改訂日: 2026-08-11
 
 ### 0.1 進捗引継ぎ
 
-基準日: 2026-08-11
+基準日: 2026-08-09  
 repository基準: `main`が少なくとも次を含むこと。
 
 - `4f7a4e7cc5ff3dacdd221c9c6d7b7f75df1636b8`: M1-08 acceptance基盤・report・metrics scaffold
 - `f69c41d52c261a3e246384f84ae5174f6d4a73da`: `bevy_egui`によるSetup／Live／Diagnostics GUI補完
-- `ab6b0b6daf9536c6e595f7e6e97c6c7168adc501`: GUI importからmanaged asset／avatar lifecycleへの接続
-- `0c5294703485f0658a3cdf9bc0e9253f903af46a`: dev-only synthetic tracking
-- `01dce2753ef483069c0eb83f7b740b3814e65349`: Windows MSMF camera backend
-- `bf32be62cb1b5f386b18dd7215d8b3195272d923`: inference／tracking runtime、planar pose、diagnostics、monotonic timing等を含む現在の基準
-
-確認済みrelease binary SHA-256:
-
-```text
-2C4ED40CDBB1B4E7DC39F55B62AF3875433D50943C0A5855BCD45FA2A6198BB9
-```
 
 | 範囲 | 状態 | 扱い |
 | --- | --- | --- |
 | `G0-01`〜`M1-06` | `LEGACY_PROGRESS` | 既存実装を正とし、親task全体を再実装しない。不足修正時だけ該当subtaskを監査して差分を実装する。 |
 | `M1-07` | `LEGACY_PROGRESS` | action／view-model／orchestrator境界と`bevy_egui 0.41.1` GUIが実装済み。GUI frameworkを再選定・再実装しない。 |
-| `M1-08-001`〜`M1-08-008` | `LEGACY_PROGRESS` | acceptance用の文書・matrix・metrics基盤まで実装済み。ただしWindows物理受入は未実施であり、PASSと解釈しない。 |
-| `M1-08-009`〜`M1-08-012` | `DONE` | GUI import、avatar lifecycle、synthetic tracking、Windows camera契約、capture／preview接続まで実装・自動検証済み。 |
-| `M1-08-013` | `BLOCKED` | Peppa 98点landmark modelへ渡すfull-frame face detector／crop段が欠落。planar pose solver自体は実装済み。repair leaf `M1-08-013-001`〜`009`で解除する。 |
-| `M1-08-014`〜`M1-08-017` | `PENDING` | worker、tracking、avatar bridge、diagnostics、shutdownの既存実装を捨てず、二段推論pipelineへ適合させて実機監査する。 |
-| `M1-08-018`〜`M1-08-019` | `PENDING` | Windows functional／recovery／latency／30分soakを実施してfinal gateを閉じる。 |
+| `M1-08-001`〜`M1-08-008` | `LEGACY_PROGRESS` | acceptance用の文書・matrix・metrics基盤まで実装済み。ただし`docs/acceptance/windows-m1.md`は`NOT_RUN`であり、Windows縦断動作を証明していない。 |
+| `M1-08-009`〜`M1-08-012` | `DONE` | GUI、avatar lifecycle、Windows camera契約、実capture／preview接続を実装・自動検証済み。物理Windows受入は未実施。 |
+| `M1-08-013` | `BLOCKED` | 98点landmark-only model用のpure-Rust 2D pose solverは実装済みだが、実cameraへ渡す検証済みface detector／crop段が未接続。 |
+| `M1-08-014`〜`M1-08-019` | `PENDING` | M1-08-013 correctness gate解除後に、production worker接続、実pipeline受入、latency／soak、Windows final gateを再開する。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
-
-現在の次実行単位は**`M1-08-013-002`**であり、exact artifact不足により `BLOCKED` で停止している。`M1-08-013`本体をもう一度丸ごと委嘱してはならない。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
 ### 0.2 軽量コーディングエージェントへの委嘱単位
 
-- 一回の依頼では、必ず一つのleaf subtask IDだけを指定する。
-- 通常の実行単位は`M1-02-001`形式とする。
-- 既存subtaskがcorrectness blockerへ到達した場合だけ、そのIDを親gateとして`M1-08-013-001`形式のrepair leafを追加できる。既存の`M1-08-014`以降をrenumberしない。
-- blocker parent自体（現在は`M1-08-013`）を軽量agentへ再委嘱しない。repair leafを番号順に一件ずつ委嘱する。
-- agentは`AGENTS.md`、親taskの目的・制約・受入条件、指定leaf、指定された`DESIGN.md`／ADR節だけを読む。隣接leafを先回りしない。
+- 一回の依頼では、必ず一つのsubtask IDだけを指定する。
+- agentは`AGENTS.md`、親taskの目的・制約・受入条件、指定subtask、指定された`DESIGN.md`節だけを読む。隣接subtaskを先回りしない。
 - 最初に現repositoryを検索し、既存type、file、test、命名を再利用する。文書の候補pathと実repositoryが異なる場合、同じ責務の既存fileを優先し、重複実装を作らない。
 - 原則として確認質問をせず、既存設計とcodeから最小の妥当な判断を行い、仮定を完了報告へ記録する。secret、実hardware、権利不明asset等が本質的に不足する場合だけ`BLOCKED`として具体的な不足を報告する。
 - subtask外のrefactor、dependency update、format変更、UI改善を行わない。必要性を発見した場合は「後続候補」として報告するだけにする。
-- 一つのleafは単一責務で、可能なら1〜5 source files＋対応testに収める。generated file、manifest、lockfileはこの目安から除く。
-- 作業終了時に、指定leafの完了条件を一項目ずつ照合する。未達が一つでもあれば`DONE`と報告しない。
+- 一つのsubtaskは単一責務で、可能なら1〜5 source files＋対応testに収める。generated file、manifest、lockfileはこの目安から除く。
+- 作業終了時に、指定subtaskの完了条件を一項目ずつ照合する。未達が一つでもあれば`DONE`と報告しない。
 - agentはcommit、push、PR作成を明示指示なしに行わない。
 
 ### 0.3 subtask index
@@ -80,7 +63,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-05` | `M1-05-001`〜`M1-05-008` | 8 | `LEGACY_PROGRESS` |
 | `M1-06` | `M1-06-001`〜`M1-06-009` | 9 | `LEGACY_PROGRESS` |
 | `M1-07` | `M1-07-001`〜`M1-07-009` | 9 | `LEGACY_PROGRESS`＋GUI補完済み |
-| `M1-08` | top-level `M1-08-001`〜`019`、repair `M1-08-013-001`〜`009` | 19 + repair 9 | `BLOCKED`（009〜012 done、013 repair中） |
+| `M1-08` | `M1-08-001`〜`M1-08-019` | 19 | `BLOCKED`（001〜008 legacy、009〜012 done、013 blocked） |
 | `M1-09` | `M1-09-001`〜`M1-09-008` | 8 | `DEFERRED` |
 | `Q2-01` | `Q2-01-001`〜`Q2-01-008` | 8 | `PENDING` |
 | `Q2-02` | `Q2-02-001`〜`Q2-02-008` | 8 | `PENDING` |
@@ -94,10 +77,8 @@ repository基準: `main`が少なくとも次を含むこと。
 使用可能な状態は`LEGACY_PROGRESS`、`PENDING`、`IN_PROGRESS`、`DONE`、`BLOCKED`、`DEFERRED`である。
 
 - `DEFERRED`は、実装不要という意味ではなく、platform／hardware等の明示された再開条件を待つ状態である。
-- `BLOCKED` parentのrepair leafは`PENDING`→`IN_PROGRESS`→`DONE`と進める。全required leaf完了後だけparentを`DONE`へ変更する。
-- repair leafが新たなcorrectness blockerへ到達した場合、既存番号を変えず末尾に次のleafを追加する。候補を無断で別runtimeへ切り替えない。
 - `M1-09`やmacOS依存subtaskをWindows agentが勝手に`DONE`へ変更してはならない。
-- 実作業時に文書を更新する場合、原則として指定leafの`状態`だけを変更する。親task IDや他subtaskの番号・順序を変更しない。
+- 実作業時に文書を更新する場合、原則として指定subtaskの`状態`だけを変更する。親task IDや他subtaskの番号・順序を変更しない。
 
 ### 0.5 委嘱prompt template
 
@@ -114,14 +95,12 @@ Do not commit, push, or open a PR unless explicitly instructed. End with: status
 
 ### 0.6 Windows-first gateと実行順
 
-1. 現在は`M1-08-013-001`から`M1-08-013-009`まで番号順に進める。
-2. detector候補は、まず**UltraFace RFB-320 ONNX**へ固定してexactな`tract-onnx 0.23.4`互換性を検証する。`M1-08-013-002`で失敗した場合はoperator、model SHA-256、再現commandを残して停止し、同じleaf内で別runtimeへ切り替えない。
-3. `M1-08-013-009`がPASSし、full camera frameからface detection→crop→98 landmarks→finite head poseまで再現できた場合だけ、parent `M1-08-013`を`DONE`へ変更する。
-4. その後は`M1-08-014`〜`M1-08-019`を進める。既存worker／tracking／avatar bridge／diagnostics／shutdownを再実装せず、composite pipeline対応と実機監査の差分だけを行う。
-5. `M1-08-019`が`PASS`またはcorrectness blockerのない明示的`CONDITIONAL PASS`になるまでは、Q2の機能追加・最適化・packagingを始めない。
-6. `M1-09`はmacOS実機へ移るまで`DEFERRED`とし、Windows agentへ委嘱しない。
-7. Windows gate後はQ2のWindows部分だけを開始できる。macOS固有実装、両OS比較、macOS packageは引き続き`M1-09`へ依存する。
-8. `docs/acceptance/windows-m1.md`が`NOT_RUN`／`BLOCKED`のままなら、M1-08を完了扱いにしない。
+1. 現在は`M1-08-009`から番号順に進め、`M1-08-019`でWindows縦断gateを閉じる。
+2. `M1-08-019`が`PASS`またはcorrectness blockerのない明示的`CONDITIONAL PASS`になるまでは、Q2の機能追加・最適化・packagingを始めない。
+3. `M1-09`はmacOS実機へ移るまで`DEFERRED`とし、Windows agentへ委嘱しない。
+4. Windows gate後は、Q2のWindows部分だけを開始できる。macOS固有実装、両OS比較、macOS packageは引き続き`M1-09`へ依存する。
+5. Q2実施中もWindowsとmacOSのcore APIを意図なく分岐させない。Windows固有コードは`vtuber-camera`等のplatform adapterへ局所化する。
+6. `docs/acceptance/windows-m1.md`が`NOT_RUN`のままなら、M1-08を完了扱いにしない。
 
 ---
 
@@ -159,18 +138,7 @@ G0-02 + G0-03 + G0-08
 
 M1-03 + M1-06
  └─ M1-07 ─ M1-08-001..008 (legacy acceptance scaffold)
-                    └─ M1-08-009..012 (DONE)
-                         └─ M1-08-013 (BLOCKED gate)
-                              └─ M1-08-013-001
-                                  ─ M1-08-013-002
-                                  ─ M1-08-013-003
-                                  ─ M1-08-013-004
-                                  ─ M1-08-013-005
-                                  ─ M1-08-013-006
-                                  ─ M1-08-013-007
-                                  ─ M1-08-013-008
-                                  ─ M1-08-013-009
-                                       └─ M1-08-014 ─ ... ─ M1-08-019
+                    └─ M1-08-009 ─ ... ─ M1-08-019 (Windows vertical gate)
 
 M1-08-019 Windows gate PASS
  ├─ Q2-01 Windows implementation／evaluation
@@ -192,8 +160,8 @@ M1-08-019 PASS
 # Gate 0 — 不確実性を先に潰す
 
 ## G0-01: workspace、toolchain、品質基盤
-状態: `LEGACY_PROGRESS`
-実行単位: `G0-01-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `G0-01-NNN`  
 重点参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 
@@ -254,8 +222,8 @@ cargo deny check
 
 #### G0-01-001: root workspace manifestを固定する
 
-状態: `LEGACY_PROGRESS`
-依存: `なし`
+状態: `LEGACY_PROGRESS`  
+依存: `なし`  
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 **変更候補**
@@ -294,8 +262,8 @@ cargo check --workspace
 
 #### G0-01-002: workspace crate skeletonを揃える
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01-001`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01-001`  
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 **変更候補**
@@ -340,8 +308,8 @@ cargo test --workspace --no-fail-fast
 
 #### G0-01-003: toolchain、format、lint policyを固定する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01-002`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01-002`  
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 **変更候補**
@@ -383,8 +351,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### G0-01-004: license／dependency policy skeletonを作る
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01-003`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01-003`  
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 **変更候補**
@@ -424,8 +392,8 @@ cargo run -p xtask -- --help
 
 #### G0-01-005: `vtuber-core`の最小placeholder契約を定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01-004`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01-004`  
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 **変更候補**
@@ -465,8 +433,8 @@ cargo tree -p vtuber-core
 
 #### G0-01-006: root READMEへcrate責務とdependency directionを書く
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01-005`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01-005`  
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 **変更候補**
@@ -504,8 +472,8 @@ python -m compileall tools 2>/dev/null || true
 
 #### G0-01-007: Windows／macOS CI skeletonを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01-006`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01-006`  
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 **変更候補**
@@ -544,8 +512,8 @@ cargo test --workspace
 
 #### G0-01-008: Gate 0 workspace baselineを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01-007`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01-007`  
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
 **変更候補**
@@ -585,8 +553,8 @@ cargo deny check
 ```
 
 ## G0-02: Bevy 0.19 + pinned bevy_vrm1 baseline
-状態: `LEGACY_PROGRESS`
-実行単位: `G0-02-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `G0-02-NNN`  
 重点参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 
@@ -643,8 +611,8 @@ VRM sampleを表示し、head bone capabilityを確認する
 
 #### G0-02-001: Bevyとbevy_vrm1のversion／featureを固定する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 **変更候補**
@@ -686,8 +654,8 @@ cargo check -p vtuber-desktop
 
 #### G0-02-002: 最小Bevy desktop appを起動する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02-001`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02-001`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 **変更候補**
@@ -726,8 +694,8 @@ cargo clippy -p vtuber-desktop --all-targets -- -D warnings
 
 #### G0-02-003: `VrmPlugin`とbaseline sceneを登録する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02-002`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02-002`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 **変更候補**
@@ -767,8 +735,8 @@ cargo clippy -p vtuber-avatar -p vtuber-desktop --all-targets -- -D warnings
 
 #### G0-02-004: VRM 1.0 sample fixtureとprovenanceを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02-003`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02-003`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 **変更候補**
@@ -808,8 +776,8 @@ cargo check -p vtuber-desktop
 
 #### G0-02-005: `VrmHandle`でsampleをloadする
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02-004`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02-004`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 **変更候補**
@@ -848,8 +816,8 @@ cargo test -p vtuber-avatar
 
 #### G0-02-006: `Initialized`とhead bone capabilityを観測する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02-005`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02-005`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 **変更候補**
@@ -888,8 +856,8 @@ cargo clippy -p vtuber-avatar --all-targets -- -D warnings
 
 #### G0-02-007: baseline debug／release profileを設定する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02-006`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02-006`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 **変更候補**
@@ -927,8 +895,8 @@ cargo build -p vtuber-desktop --release
 
 #### G0-02-008: Bevy／bevy_vrm1 baselineを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02-007`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02-007`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§19、§26
 
 **変更候補**
@@ -967,8 +935,8 @@ cargo clippy -p vtuber-avatar -p vtuber-desktop --all-targets -- -D warnings
 ```
 
 ## G0-03: user asset sourceとVRM 1.0 preflight
-状態: `LEGACY_PROGRESS`
-実行単位: `G0-03-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `G0-03-NNN`  
 重点参照: DESIGN.md §17、§20.1、§21.1
 
 
@@ -1025,8 +993,8 @@ cargo clippy -p vtuber-avatar -p vtuber-desktop --all-targets -- -D warnings
 
 #### G0-03-001: VRM import domain typesとtyped errorsを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1065,8 +1033,8 @@ cargo clippy -p vtuber-avatar --all-targets -- -D warnings
 
 #### G0-03-002: project data directoryとnamed asset source `user`を用意する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03-001`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03-001`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1106,8 +1074,8 @@ cargo check -p vtuber-desktop
 
 #### G0-03-003: 入力pathのfilesystem検証を実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03-002`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03-002`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1146,8 +1114,8 @@ cargo clippy -p vtuber-avatar --all-targets -- -D warnings
 
 #### G0-03-004: streaming SHA-256とatomic import copyを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03-003`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03-003`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1186,8 +1154,8 @@ cargo clippy -p vtuber-avatar --all-targets -- -D warnings
 
 #### G0-03-005: GLB containerと`VRMC_vrm`をtolerant preflightする
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03-004`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03-004`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1226,8 +1194,8 @@ cargo clippy -p vtuber-avatar --all-targets -- -D warnings
 
 #### G0-03-006: humanoid必須bone、external URI、meta summaryを検査する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03-005`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03-005`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1266,8 +1234,8 @@ cargo test -p vtuber-avatar preflight_external_uri
 
 #### G0-03-007: import manifestとcache idempotencyを完成させる
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03-006`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03-006`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1306,8 +1274,8 @@ cargo test -p vtuber-avatar import_idempotency
 
 #### G0-03-008: CLIまたはfile-drop import requestを接続する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03-007`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03-007`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1347,8 +1315,8 @@ cargo test -p vtuber-app import_request
 
 #### G0-03-009: VRM import adversarial testsと総合検証を追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03-008`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03-008`  
 親参照: DESIGN.md §17、§20.1、§21.1
 
 **変更候補**
@@ -1386,8 +1354,8 @@ cargo clippy -p vtuber-avatar -p vtuber-desktop --all-targets -- -D warnings
 ```
 
 ## G0-04: Windows／macOS camera smoke
-状態: `LEGACY_PROGRESS`
-実行単位: `G0-04-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `G0-04-NNN`  
 重点参照: DESIGN.md §4.3、§13、§21.4
 
 
@@ -1442,8 +1410,8 @@ macOS手動:
 
 #### G0-04-001: nokhwaをOS別featureで追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01`  
 親参照: DESIGN.md §4.3、§13、§21.4
 
 **変更候補**
@@ -1482,8 +1450,8 @@ cargo check -p vtuber-camera
 
 #### G0-04-002: camera domain typesとbackend非依存APIを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-04-001`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-04-001`  
 親参照: DESIGN.md §4.3、§13、§21.4
 
 **変更候補**
@@ -1522,8 +1490,8 @@ cargo clippy -p vtuber-camera --all-targets -- -D warnings
 
 #### G0-04-003: macOS camera permission初期化を隔離する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-04-002`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-04-002`  
 親参照: DESIGN.md §4.3、§13、§21.4
 
 **変更候補**
@@ -1562,8 +1530,8 @@ cargo test -p vtuber-camera permission
 
 #### G0-04-004: device enumerationを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-04-003`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-04-003`  
 親参照: DESIGN.md §4.3、§13、§21.4
 
 **変更候補**
@@ -1602,8 +1570,8 @@ cargo run -p xtask -- camera list --help
 
 #### G0-04-005: deterministic format selectionをpure functionで実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-04-004`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-04-004`  
 親参照: DESIGN.md §4.3、§13、§21.4
 
 **変更候補**
@@ -1642,8 +1610,8 @@ cargo clippy -p vtuber-camera --all-targets -- -D warnings
 
 #### G0-04-006: 10-frame capture smokeをworker内ownershipで実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-04-005`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-04-005`  
 親参照: DESIGN.md §4.3、§13、§21.4
 
 **変更候補**
@@ -1682,8 +1650,8 @@ cargo run -p xtask -- camera smoke --help
 
 #### G0-04-007: hardware-free test doubleとignored hardware testを整える
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-04-006`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-04-006`  
 親参照: DESIGN.md §4.3、§13、§21.4
 
 **変更候補**
@@ -1722,8 +1690,8 @@ cargo test -p vtuber-camera -- --ignored --list
 
 #### G0-04-008: Windows／macOS camera smoke結果を記録する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-04-007`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-04-007`  
 親参照: DESIGN.md §4.3、§13、§21.4
 
 **変更候補**
@@ -1760,8 +1728,8 @@ cargo test -p vtuber-camera -- --ignored
 ```
 
 ## G0-05: face model provenanceとpure-Rust runtime gate
-状態: `LEGACY_PROGRESS`
-実行単位: `G0-05-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `G0-05-NNN`  
 重点参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 
@@ -1807,8 +1775,8 @@ TFLiteがblockerの場合:
 
 #### G0-05-001: model manifest schemaを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01`  
 親参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 **変更候補**
@@ -1847,8 +1815,8 @@ cargo clippy -p vtuber-inference --all-targets -- -D warnings
 
 #### G0-05-002: model fetch／verify xtaskを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-05-001`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-05-001`  
 親参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 **変更候補**
@@ -1887,8 +1855,8 @@ cargo run -p xtask -- model --help
 
 #### G0-05-003: TFLite tensor／operator inventory probeを作る
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-05-002`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-05-002`  
 親参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 **変更候補**
@@ -1927,8 +1895,8 @@ cargo run -p xtask -- model inspect --help
 
 #### G0-05-004: tract-tflite load／optimize／run probeを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-05-003`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-05-003`  
 親参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 **変更候補**
@@ -1967,8 +1935,8 @@ cargo clippy -p vtuber-inference --all-targets -- -D warnings
 
 #### G0-05-005: fixed golden inputのpreprocessを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-05-004`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-05-004`  
 親参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 **変更候補**
@@ -2007,8 +1975,8 @@ cargo clippy -p vtuber-inference --all-targets -- -D warnings
 
 #### G0-05-006: golden inference outputとtoleranceを固定する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-05-005`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-05-005`  
 親参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 **変更候補**
@@ -2047,8 +2015,8 @@ cargo test -p vtuber-inference golden -- --nocapture
 
 #### G0-05-007: unsupported operator時の分岐記録を整える
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-05-006`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-05-006`  
 親参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 **変更候補**
@@ -2088,8 +2056,8 @@ cargo run -p xtask -- model inspect --help
 
 #### G0-05-008: model provenance gateを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-05-007`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-05-007`  
 親参照: DESIGN.md §3、§10.3、§14.2〜§14.4、§25 R1
 
 **変更候補**
@@ -2130,8 +2098,8 @@ cargo clippy -p vtuber-inference -p xtask --all-targets -- -D warnings
 ```
 
 ## G0-06: canonical coordinateとhead pose proof
-状態: `LEGACY_PROGRESS`
-実行単位: `G0-06-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `G0-06-NNN`  
 重点参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 
@@ -2174,8 +2142,8 @@ cargo test -p vtuber-core coordinate
 
 #### G0-06-001: canonical coordinate／pose typesを固定する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01`  
 親参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 **変更候補**
@@ -2214,8 +2182,8 @@ cargo clippy -p vtuber-core --all-targets -- -D warnings
 
 #### G0-06-002: stable landmark subset contractを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-06-001`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-06-001`  
 親参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 **変更候補**
@@ -2254,8 +2222,8 @@ cargo clippy -p vtuber-tracking --all-targets -- -D warnings
 
 #### G0-06-003: weighted centeringとcovariance計算を実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-06-002`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-06-002`  
 親参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 **変更候補**
@@ -2293,8 +2261,8 @@ cargo clippy -p vtuber-tracking --all-targets -- -D warnings
 
 #### G0-06-004: SVDとreflection correctionを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-06-003`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-06-003`  
 親参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 **変更候補**
@@ -2333,8 +2301,8 @@ cargo test -p vtuber-tracking kabsch_degenerate
 
 #### G0-06-005: rotation matrixからsemantic head poseへ変換する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-06-004`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-06-004`  
 親参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 **変更候補**
@@ -2373,8 +2341,8 @@ cargo test -p vtuber-core coordinate
 
 #### G0-06-006: synthetic point cloud fixture generatorを作る
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-06-005`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-06-005`  
 親参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 **変更候補**
@@ -2412,8 +2380,8 @@ cargo test -p vtuber-tracking pose_synthetic -- --nocapture
 
 #### G0-06-007: noise、missing point、degeneracyの数値testを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-06-006`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-06-006`  
 親参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 **変更候補**
@@ -2450,8 +2418,8 @@ cargo test -p vtuber-tracking pose --no-fail-fast
 
 #### G0-06-008: coordinate／head pose proofを文書化して総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-06-007`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-06-007`  
 親参照: DESIGN.md §11.4〜§11.6、§15.1〜§15.3、§21.1
 
 **変更候補**
@@ -2490,8 +2458,8 @@ cargo clippy -p vtuber-core -p vtuber-tracking --all-targets -- -D warnings
 ```
 
 ## G0-07: LatestSlotとworker shutdown proof
-状態: `LEGACY_PROGRESS`
-実行単位: `G0-07-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `G0-07-NNN`  
 重点参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 
@@ -2528,8 +2496,8 @@ capacity 1のdata pathと、停止可能なworker controllerを先に完成さ�
 
 #### G0-07-001: `LatestSlot<T>`のAPIとstateを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-01`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-01`  
 親参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 **変更候補**
@@ -2567,8 +2535,8 @@ cargo clippy -p vtuber-core --all-targets -- -D warnings
 
 #### G0-07-002: publish／overwrite semanticsを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-07-001`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-07-001`  
 親参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 **変更候補**
@@ -2605,8 +2573,8 @@ cargo test -p vtuber-core latest_slot_overwrite
 
 #### G0-07-003: timeout waitとclose wake-upを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-07-002`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-07-002`  
 親参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 **変更候補**
@@ -2644,8 +2612,8 @@ cargo test -p vtuber-core latest_slot_wait -- --nocapture
 
 #### G0-07-004: LatestSlot metrics snapshotを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-07-003`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-07-003`  
 親参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 **変更候補**
@@ -2683,8 +2651,8 @@ cargo test -p vtuber-core latest_slot_metrics
 
 #### G0-07-005: bounded worker control channelとstatus contractを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-07-004`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-07-004`  
 親参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 **変更候補**
@@ -2722,8 +2690,8 @@ cargo clippy -p vtuber-core --all-targets -- -D warnings
 
 #### G0-07-006: generic worker supervisor test doubleを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-07-005`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-07-005`  
 親参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 **変更候補**
@@ -2761,8 +2729,8 @@ cargo test -p vtuber-core worker_supervisor -- --nocapture
 
 #### G0-07-007: LatestSlot stress testを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-07-006`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-07-006`  
 親参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 **変更候補**
@@ -2799,8 +2767,8 @@ cargo test -p vtuber-core latest_slot_stress -- --nocapture
 
 #### G0-07-008: shutdown proofを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-07-007`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-07-007`  
 親参照: DESIGN.md §12、§20.2〜§20.3、§21.1
 
 **変更候補**
@@ -2838,8 +2806,8 @@ cargo clippy -p vtuber-core --all-targets -- -D warnings
 ```
 
 ## G0-08: bevy_vrm1 compatibility gate
-状態: `LEGACY_PROGRESS`
-実行単位: `G0-08-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `G0-08-NNN`  
 重点参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 
@@ -2893,8 +2861,8 @@ cargo clippy -p vtuber-core --all-targets -- -D warnings
 
 #### G0-08-001: compatibility model inventoryとreport entryを作る
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-02、G0-03`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-02、G0-03`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 **変更候補**
@@ -2933,8 +2901,8 @@ cargo check -p vtuber-desktop
 
 #### G0-08-002: compatibility harnessでimport／load／Initializedを自動確認する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-08-001`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-08-001`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 **変更候補**
@@ -2973,8 +2941,8 @@ cargo run -p xtask -- vrm-compat --help
 
 #### G0-08-003: humanoid boneとExpression capabilityを収集する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-08-002`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-08-002`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 **変更候補**
@@ -3012,8 +2980,8 @@ cargo test -p vtuber-avatar compatibility_capabilities -- --ignored
 
 #### G0-08-004: MToon／outline／material casesを目視検証可能にする
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-08-003`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-08-003`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 **変更候補**
@@ -3052,8 +3020,8 @@ cargo run -p vtuber-desktop -- --help
 
 #### G0-08-005: SpringBone、lookAt type、optional-field variantsを検査する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-08-004`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-08-004`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 **変更候補**
@@ -3091,8 +3059,8 @@ cargo test -p vtuber-avatar compatibility_vrm_features -- --ignored
 
 #### G0-08-006: known failureを最小fixture／regression testへ縮小する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-08-005`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-08-005`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 **変更候補**
@@ -3130,8 +3098,8 @@ cargo test -p vtuber-avatar compatibility_regression -- --nocapture
 
 #### G0-08-007: Windows／macOS compatibility reportを埋める
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-08-006`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-08-006`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 **変更候補**
@@ -3168,8 +3136,8 @@ cargo run -p xtask -- vrm-compat --help
 
 #### G0-08-008: fork patch要否を決定しADR-002を更新する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-08-007`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-08-007`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§21.3、§25 R2
 
 **変更候補**
@@ -3207,8 +3175,8 @@ cargo clippy -p vtuber-avatar -p vtuber-desktop --all-targets -- -D warnings
 ```
 
 ## M1-01: production capture service
-状態: `LEGACY_PROGRESS`
-実行単位: `M1-01-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `M1-01-NNN`  
 重点参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 
@@ -3245,8 +3213,8 @@ camera lifecycle、capture worker、metrics、reconnectを実装する。
 
 #### M1-01-001: `CaptureController`のpublic contractとstateを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-04、G0-07`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-04、G0-07`  
 親参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 **変更候補**
@@ -3285,8 +3253,8 @@ cargo clippy -p vtuber-camera --all-targets -- -D warnings
 
 #### M1-01-002: capture worker startup／resource ownershipを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-01-001`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-01-001`  
 親参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 **変更候補**
@@ -3323,8 +3291,8 @@ cargo test -p vtuber-camera capture_worker_startup
 
 #### M1-01-003: capture loopと`LatestSlot<VideoFrame>` publishを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-01-002`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-01-002`  
 親参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 **変更候補**
@@ -3363,8 +3331,8 @@ cargo test -p vtuber-core latest_slot
 
 #### M1-01-004: capture／decode timingとmetricsを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-01-003`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-01-003`  
 親参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 **変更候補**
@@ -3402,8 +3370,8 @@ cargo test -p vtuber-camera capture_metrics
 
 #### M1-01-005: 明示stop／joinとdrop fallbackを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-01-004`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-01-004`  
 親参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 **変更候補**
@@ -3441,8 +3409,8 @@ cargo test -p vtuber-camera capture_shutdown -- --nocapture
 
 #### M1-01-006: bounded reconnect state machineを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-01-005`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-01-005`  
 親参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 **変更候補**
@@ -3480,8 +3448,8 @@ cargo test -p vtuber-camera reconnect_state
 
 #### M1-01-007: device removal／device selection変更を処理する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-01-006`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-01-006`  
 親参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 **変更候補**
@@ -3520,8 +3488,8 @@ cargo test -p vtuber-camera device_switch
 
 #### M1-01-008: production capture serviceを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-01-007`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-01-007`  
 親参照: DESIGN.md §12、§13、§20.2〜§20.3
 
 **変更候補**
@@ -3560,8 +3528,8 @@ cargo test -p vtuber-camera -- --ignored
 ```
 
 ## M1-02: production inference worker
-状態: `LEGACY_PROGRESS`
-実行単位: `M1-02-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `M1-02-NNN`  
 重点参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 
@@ -3598,8 +3566,8 @@ cargo test -p vtuber-camera -- --ignored
 
 #### M1-02-001: inference worker contract／state／statusを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-01、G0-05`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-01、G0-05`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3638,8 +3606,8 @@ cargo clippy -p vtuber-inference --all-targets -- -D warnings
 
 #### M1-02-002: worker startup内でmodel runtimeをconstructする
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-001`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-001`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3677,8 +3645,8 @@ cargo test -p vtuber-inference worker_model_startup
 
 #### M1-02-003: preprocess buffersをworker内で再利用する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-002`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-002`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3716,8 +3684,8 @@ cargo test -p vtuber-inference preprocess_reuse
 
 #### M1-02-004: 最新frame consumeとduplicate suppressionを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-003`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-003`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3754,8 +3722,8 @@ cargo test -p vtuber-inference latest_frame_consumption -- --nocapture
 
 #### M1-02-005: detector cadenceとROI stateを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-004`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-004`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3794,8 +3762,8 @@ cargo test -p vtuber-inference roi_state
 
 #### M1-02-006: landmark output decodeを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-005`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-005`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3833,8 +3801,8 @@ cargo test -p vtuber-inference landmark_decode
 
 #### M1-02-007: basic blink／mouth raw observationを抽出する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-006`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-006`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3873,8 +3841,8 @@ cargo test -p vtuber-core observation
 
 #### M1-02-008: inference timing／drop accountingを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-007`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-007`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3912,8 +3880,8 @@ cargo test -p vtuber-inference inference_metrics
 
 #### M1-02-009: typed failure、stop、joinを完成させる
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-008`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-008`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3953,8 +3921,8 @@ cargo test -p vtuber-inference worker_failure
 
 #### M1-02-010: production inference workerを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02-009`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02-009`  
 親参照: DESIGN.md §12、§14、§20.1〜§20.3
 
 **変更候補**
@@ -3992,8 +3960,8 @@ cargo clippy -p vtuber-inference --all-targets -- -D warnings
 ```
 
 ## M1-03: calibration、filter、loss recovery
-状態: `LEGACY_PROGRESS`
-実行単位: `M1-03-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `M1-03-NNN`  
 重点参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 
@@ -4028,8 +3996,8 @@ raw observationを安定した`AvatarControlFrame`へ変換する。
 
 #### M1-03-001: calibration settingsとsession stateを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-02、G0-06`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-02、G0-06`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4068,8 +4036,8 @@ cargo clippy -p vtuber-tracking --all-targets -- -D warnings
 
 #### M1-03-002: calibration sample collectorを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-001`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-001`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4107,8 +4075,8 @@ cargo test -p vtuber-tracking calibration_collector
 
 #### M1-03-003: neutral referenceを集約／検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-002`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-002`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4146,8 +4114,8 @@ cargo test -p vtuber-tracking neutral_reference
 
 #### M1-03-004: neutral-relative head pose生成を接続する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-003`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-003`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4185,8 +4153,8 @@ cargo test -p vtuber-tracking neutral_relative_pose
 
 #### M1-03-005: head rotation filterをquaternion中心で実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-004`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-004`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4224,8 +4192,8 @@ cargo test -p vtuber-tracking head_filter
 
 #### M1-03-006: blink／mouth normalizationを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-005`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-005`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4263,8 +4231,8 @@ cargo test -p vtuber-tracking expression_normalization
 
 #### M1-03-007: confidence hysteresisを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-006`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-006`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4302,8 +4270,8 @@ cargo test -p vtuber-tracking confidence_hysteresis
 
 #### M1-03-008: tracking state machineを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-007`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-007`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4341,8 +4309,8 @@ cargo test -p vtuber-tracking tracking_state_machine
 
 #### M1-03-009: loss hold、neutral decay、recovery blendを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-008`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-008`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4380,8 +4348,8 @@ cargo test -p vtuber-tracking loss_recovery
 
 #### M1-03-010: `AvatarControlFrame` assemblyとdeterministic replayを完成させる
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03-009`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03-009`  
 親参照: DESIGN.md §11.5〜§11.8、§15、§18.1
 
 **変更候補**
@@ -4421,8 +4389,8 @@ cargo clippy -p vtuber-core -p vtuber-tracking --all-targets -- -D warnings
 ```
 
 ## M1-04: avatar lifecycleとcapability discovery
-状態: `LEGACY_PROGRESS`
-実行単位: `M1-04-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `M1-04-NNN`  
 重点参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 
@@ -4459,8 +4427,8 @@ cargo clippy -p vtuber-core -p vtuber-tracking --all-targets -- -D warnings
 
 #### M1-04-001: `VtuberAvatarPlugin`とlifecycle domainを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `G0-03、G0-08`
+状態: `LEGACY_PROGRESS`  
+依存: `G0-03、G0-08`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4500,8 +4468,8 @@ cargo clippy -p vtuber-avatar --all-targets -- -D warnings
 
 #### M1-04-002: import resultから`VrmHandle` rootをspawnする
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04-001`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04-001`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4539,8 +4507,8 @@ cargo check -p vtuber-desktop
 
 #### M1-04-003: `Initialized`／load failureを一度だけ観測する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04-002`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04-002`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4578,8 +4546,8 @@ cargo test -p vtuber-avatar avatar_initialized_once
 
 #### M1-04-004: required／optional humanoid bone bindingを作る
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04-003`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04-003`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4617,8 +4585,8 @@ cargo test -p vtuber-avatar humanoid_binding
 
 #### M1-04-005: Expression capability discoveryを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04-004`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04-004`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4656,8 +4624,8 @@ cargo test -p vtuber-avatar expression_capabilities
 
 #### M1-04-006: `AvatarCapabilities`公開snapshotを組み立てる
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04-005`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04-005`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4695,8 +4663,8 @@ cargo test -p vtuber-avatar avatar_capability_snapshot
 
 #### M1-04-007: single-active avatar replacementを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04-006`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04-006`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4734,8 +4702,8 @@ cargo test -p vtuber-avatar avatar_replace
 
 #### M1-04-008: unload cleanupとstale control rejectionを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04-007`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04-007`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4773,8 +4741,8 @@ cargo test -p vtuber-avatar avatar_unload_cleanup
 
 #### M1-04-009: avatar lifecycle／capabilityを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04-008`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04-008`  
 親参照: DESIGN.md §16.1〜§16.4、§16.11、§17.4
 
 **変更候補**
@@ -4812,8 +4780,8 @@ cargo clippy -p vtuber-avatar -p vtuber-desktop --all-targets -- -D warnings
 ```
 
 ## M1-05: tracked head／neck pose integration
-状態: `LEGACY_PROGRESS`
-実行単位: `M1-05-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `M1-05-NNN`  
 重点参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 
@@ -4851,8 +4819,8 @@ cargo clippy -p vtuber-avatar -p vtuber-desktop --all-targets -- -D warnings
 
 #### M1-05-001: semantic pose adapterの入力／出力契約を定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03、M1-04`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03、M1-04`  
 親参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 **変更候補**
@@ -4890,8 +4858,8 @@ cargo test -p vtuber-avatar pose_semantics
 
 #### M1-05-002: root／bone rest orientation cacheをbindingへ追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-05-001`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-05-001`  
 親参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 **変更候補**
@@ -4929,8 +4897,8 @@ cargo test -p vtuber-avatar pose_rest_cache
 
 #### M1-05-003: semantic poseからVRM model-space quaternionへ変換する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-05-002`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-05-002`  
 親参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 **変更候補**
@@ -4967,8 +4935,8 @@ cargo test -p vtuber-avatar model_space_pose
 
 #### M1-05-004: model-space deltaをbone-local deltaへ共役変換する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-05-003`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-05-003`  
 親参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 **変更候補**
@@ -5006,8 +4974,8 @@ cargo test -p vtuber-avatar local_pose_conjugation
 
 #### M1-05-005: head／neck distributionとrange clampを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-05-004`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-05-004`  
 親参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 **変更候補**
@@ -5045,8 +5013,8 @@ cargo test -p vtuber-avatar pose_distribution
 
 #### M1-05-006: tracked pose apply systemを正しいscheduleへ登録する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-05-005`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-05-005`  
 親参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 **変更候補**
@@ -5085,8 +5053,8 @@ cargo check -p vtuber-desktop
 
 #### M1-05-007: loss／neutral frameとavatar unloadをpose systemへ接続する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-05-006`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-05-006`  
 親参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 **変更候補**
@@ -5124,8 +5092,8 @@ cargo test -p vtuber-avatar pose_lifecycle
 
 #### M1-05-008: non-identity rest synthetic integration testを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-05-007`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-05-007`  
 親参照: DESIGN.md §11.6、§16.5〜§16.7、ADR-004
 
 **変更候補**
@@ -5162,8 +5130,8 @@ cargo clippy -p vtuber-avatar --all-targets -- -D warnings
 ```
 
 ## M1-06: blink、mouth、gaze integration
-状態: `LEGACY_PROGRESS`
-実行単位: `M1-06-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `M1-06-NNN`  
 重点参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 
@@ -5198,8 +5166,8 @@ Expression capabilityに応じてblink／mouth／gazeを適用する。
 
 #### M1-06-001: per-frame expression command builderを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-04、M1-05`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-04、M1-05`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5236,8 +5204,8 @@ cargo test -p vtuber-avatar expression_command
 
 #### M1-06-002: blink capability fallbackを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-06-001`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-06-001`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5275,8 +5243,8 @@ cargo test -p vtuber-avatar blink_mapping
 
 #### M1-06-003: mouth preset mappingと`aa` fallbackを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-06-002`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-06-002`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5314,8 +5282,8 @@ cargo test -p vtuber-avatar mouth_mapping
 
 #### M1-06-004: gaze mode selectionをcapabilityから決定する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-06-003`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-06-003`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5353,8 +5321,8 @@ cargo test -p vtuber-avatar gaze_mode
 
 #### M1-06-005: gaze expression mappingを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-06-004`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-06-004`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5392,8 +5360,8 @@ cargo test -p vtuber-avatar gaze_expression_mapping
 
 #### M1-06-006: eye bone gaze fallbackを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-06-005`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-06-005`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5431,8 +5399,8 @@ cargo test -p vtuber-avatar eye_bone_gaze
 
 #### M1-06-007: expression event coalescingとchange epsilonを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-06-006`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-06-006`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5469,8 +5437,8 @@ cargo test -p vtuber-avatar expression_coalescing
 
 #### M1-06-008: VRM schedule orderingと禁止path guardを追加する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-06-007`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-06-007`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5509,8 +5477,8 @@ cargo check -p vtuber-desktop
 
 #### M1-06-009: blink／mouth／gaze integrationを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-06-008`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-06-008`  
 親参照: DESIGN.md §11.7〜§11.8、§16.8〜§16.9、ADR-004
 
 **変更候補**
@@ -5548,8 +5516,8 @@ cargo clippy -p vtuber-avatar -p vtuber-desktop --all-targets -- -D warnings
 ```
 
 ## M1-07: desktop UI、preview、diagnostics
-状態: `LEGACY_PROGRESS`
-実行単位: `M1-07-NNN`
+状態: `LEGACY_PROGRESS`  
+実行単位: `M1-07-NNN`  
 重点参照: DESIGN.md §13.6、§18、§20
 
 
@@ -5587,8 +5555,8 @@ setupからlive動作までを一つのdesktop appとして操作可能にする
 
 #### M1-07-001: UI action／view model boundaryを定義する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-03、M1-06`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-03、M1-06`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5627,8 +5595,8 @@ cargo clippy -p vtuber-app --all-targets -- -D warnings
 
 #### M1-07-002: `bevy_egui` shellとSetup／Live／Diagnostics画面を作る
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07-001`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07-001`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5668,8 +5636,8 @@ cargo test -p vtuber-app ui
 
 #### M1-07-003: Setup画面へavatar importとcamera selectionを接続する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07-002`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07-002`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5708,8 +5676,8 @@ cargo check -p vtuber-desktop
 
 #### M1-07-004: Start／Stop lifecycle orchestrationを接続する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07-003`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07-003`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5747,8 +5715,8 @@ cargo test -p vtuber-app lifecycle_orchestration
 
 #### M1-07-005: calibration UIとstate feedbackを接続する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07-004`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07-004`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5786,8 +5754,8 @@ cargo test -p vtuber-app calibration_ui
 
 #### M1-07-006: camera preview texture pipelineを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07-005`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07-005`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5826,8 +5794,8 @@ cargo check -p vtuber-desktop
 
 #### M1-07-007: DiagnosticsへFPS／latency／drop／stateを表示する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07-006`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07-006`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5865,8 +5833,8 @@ cargo test -p vtuber-app diagnostics_snapshot
 
 #### M1-07-008: recoverable error UXを実装する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07-007`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07-007`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5904,8 +5872,8 @@ cargo test -p vtuber-app error_presenter
 
 #### M1-07-009: desktop UI vertical smokeを総合検証する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07-008`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07-008`  
 親参照: DESIGN.md §13.6、§18、§20
 
 **変更候補**
@@ -5944,68 +5912,30 @@ cargo clippy -p vtuber-app -p vtuber-desktop --all-targets -- -D warnings
 ```
 
 ## M1-08: Windows vertical implementation and acceptance
-状態: `BLOCKED`
-実行単位: top-level `M1-08-NNN`、blocker repair `M1-08-013-NNN`
-重点参照: DESIGN.md §3、§6、§11、§14〜§17、§20〜§21、§24、ADR-001、docs/PERFORMANCE_TEST_PLAN.md
+状態: `IN_PROGRESS`  
+実行単位: `M1-08-NNN`  
+重点参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
+
 
 依存: M1-07
 
-### 2026-08-11 blocker突破再計画
+### 2026-08-09再計画
 
-`M1-08-009`〜`M1-08-012`と、その後に実装されたworker／tracking／avatar bridge／diagnostics／shutdownの基盤は保持する。現在のcorrectness blockerは一つに絞られている。
+`M1-08-001`〜`M1-08-008`はacceptance scaffoldとしてcommit済みだが、実repositoryには次の縦断未接続点が残る。
 
-```text
-Windows full camera frame
-  → face detector 〔欠落〕
-  → stable square crop 〔欠落〕
-  → Peppa 98-point landmark ONNX 〔実装済み〕
-  → planar pose solver 〔実装済み〕
-  → TrackingPipeline／avatar bridge 〔基盤実装済み〕
-```
+- GUI import成功が`LoadImportedAvatarRequest`へ接続されず、選択したVRMがlifecycle経由で表示されない。
+- camera一覧とStart／Stopがorchestrator stubのままで、実MSMF capture workerを操作しない。
+- `CameraBackend::open`が選択deviceを受け取らず、capture workerでもdeviceが未使用である。
+- `TfliteRuntime::infer`が未実装である。
+- 現ONNX fallbackは98点2D landmarkを`z = 0`で返し、現行3D Kabschへ直接投入すると退化する。
+- capture→inference→calibration／tracking→`ActiveControlFrame`→avatar適用のapp-level wiringがない。
+- `docs/acceptance/windows-m1.md`は`NOT_RUN`である。
 
-Peppa upstream自身もface detectorとlandmark detectorを別段として扱っており、landmark modelだけをfull frameへ直接適用する設計ではない。したがって、Peppa modelやplanar solverを捨てて別の大規模stackへ移るのではなく、pure-Rustで検証可能なdetector／crop段を前置する。
-
-### detectorの固定第一候補
-
-第一候補を**UltraFace RFB-320 ONNX**に固定する。
-
-- authoritative model entry: ONNX Model Zoo `validated/vision/body_analysis/ultraface`
-- upstream implementation: `Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB`
-- license: MIT
-- file: `version-RFB-320.onnx`
-- exact SHA-256: `34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017`
-- exact size: `1,270,727` bytes
-- optional official model-with-test-data SHA-256: `628d0dd3e0288adb821f211e13d4e97f6d6f4527237339606732dffa6f19d381`
-- optional official model-with-test-data size: `2,015,397` bytes
-- ONNX opset: 9
-- input: `[1, 3, 240, 320]` F32 NCHW RGB
-- preprocess: `(pixel - 127) / 128`
-- outputs: scores `[1, 4420, 2]`、boxes `[1, 4420, 4]`
-- initial postprocess: score threshold `0.7`、NMS IoU `0.3`
-- pure-Rust feasibility evidence: 別projectでUltraFace RFB-320を`tract-onnx 0.22`からload／runしている実装例が存在する。ただし本projectの合格根拠にはせず、`tract-onnx 0.23.4`でexact artifactを再検証する。
-
-参照先:
-
-- `https://github.com/onnx/models/tree/main/validated/vision/body_analysis/ultraface`
-- `https://github.com/onnx/models/blob/main/ONNX_HUB_MANIFEST.json`
-- `https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB`
-- `https://github.com/imazen/zensally/blob/43d8ec2776416ee5822266dac3db56bad21e190f/crates/zensally-tract/src/ultraface.rs`
-- `https://github.com/610265158/Peppa_Pig_Face_Landmark`
-
-### blocker突破の原則
-
-- runtimeは引き続きpure Rust、`tract-onnx 0.23.4`とする。
-- MediaPipe TFLite、Python sidecar、OpenCV、ONNX Runtime、native C／C++へ切り替えない。
-- UltraFaceのexact probeが失敗した場合、同じleafで別modelやruntimeへ逃げない。operator／shape／model hashを記録して新repair leafを追加する。
-- detectorとlandmarkのmodel artifact、前処理、後処理、crop変換はmanifest-drivenにする。
-- runtime起動時にnetwork downloadしない。取得はdevelopment commandでtemp download→size／SHA検証→atomic renameとする。
-- detectorを省略するframeでもlandmark inferenceまで省略してはならない。detector cadenceはROI更新頻度であり、全pipelineのskip頻度ではない。
-- no-faceはtyped outcomeであり、runtime errorとして数えない。
-- `M1-08-013`本体はgate ownerであり、軽量agentへ直接委嘱しない。
+したがって`M1-08-001`〜`M1-08-008`を完了証明とは扱わず、`M1-08-009`〜`M1-08-019`で実際のWindows縦断経路を構築・試験する。最終gateは`M1-08-019`を正とする。
 
 ### 目的
 
-Windows 11で、GUIからのVRM import、実camera capture、detector→crop→landmarkのpure-Rust推論、calibration／tracking、`bevy_vrm1` avatar適用を一本につなぎ、MVP縦断動作と30分安定性を確認する。
+Windows 11で、GUIからのVRM import、実camera capture、pure-Rust inference、calibration／tracking、`bevy_vrm1` avatar適用を一本につなぎ、MVP縦断動作と30分安定性を確認する。
 
 ### protocol
 
@@ -6022,7 +5952,6 @@ Windows 11で、GUIからのVRM import、実camera capture、detector→crop→l
 
 ### 受入条件
 
-- full camera frameからface ROIと98 landmarksが継続的に得られる。
 - render最低30fps
 - tracking最低15Hz
 - p95 capture-to-apply 180ms以下
@@ -6035,13 +5964,12 @@ Windows 11で、GUIからのVRM import、実camera capture、detector→crop→l
 
 ### 実行subtask
 
-> `M1-08-001`〜`M1-08-008`は履歴保持のため残す。`M1-08-009`〜`M1-08-012`はDONEである。現在は`M1-08-013-001`から開始する。
-
+> `M1-08-001`〜`M1-08-008`は履歴保持のため残す。現在はacceptance infrastructureの`LEGACY_PROGRESS`であり、手動試験結果をPASSとみなさない。実際の縦断実装・受入は`M1-08-009`以降で行う。
 
 #### M1-08-001: Windows acceptance buildとtest environmentを固定する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-07`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-07`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -6080,8 +6008,8 @@ cargo run -p xtask -- acceptance --help
 
 #### M1-08-002: VRM／camera test matrixを確定する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-08-001`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-08-001`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -6118,8 +6046,8 @@ cargo run -p xtask -- model verify
 
 #### M1-08-003: functional motion／expression protocolを実施する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-08-002`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-08-002`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -6157,8 +6085,8 @@ cargo run -p xtask -- model verify
 
 #### M1-08-004: face loss／camera／avatar recovery protocolを実施する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-08-003`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-08-003`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -6196,8 +6124,8 @@ cargo run -p xtask -- model verify
 
 #### M1-08-005: capture-to-apply latencyとrateを測定する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-08-004`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-08-004`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -6236,8 +6164,8 @@ acceptance run metrics export
 
 #### M1-08-006: 30分soakを実施する
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-08-005`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-08-005`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -6275,8 +6203,8 @@ acceptance run metrics export
 
 #### M1-08-007: Windows acceptance reportを完成させる
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-08-006`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-08-006`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -6314,8 +6242,8 @@ sha256sum docs/acceptance/artifacts/* 2>/dev/null || true
 
 #### M1-08-008: Windows blockerを分類しM1-09進行可否を決める
 
-状態: `LEGACY_PROGRESS`
-依存: `M1-08-007`
+状態: `LEGACY_PROGRESS`  
+依存: `M1-08-007`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -6356,8 +6284,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### M1-08-009: GUI importをavatar lifecycleへ接続する
 
-状態: `DONE`
-依存: `M1-08-008`
+状態: `DONE`  
+依存: `M1-08-008`  
 親参照: DESIGN.md §7.2〜§7.4、§16、§17、§18.4、§21.3
 
 **変更候補**
@@ -6407,8 +6335,8 @@ cargo test -p vtuber-desktop
 
 #### M1-08-010: dev-only synthetic trackingでavatar適用経路を証明する
 
-状態: `DONE`
-依存: `M1-08-009`
+状態: `DONE`  
+依存: `M1-08-009`  
 親参照: DESIGN.md §11、§15、§16、§20.1、ADR-004
 
 **変更候補**
@@ -6451,8 +6379,8 @@ cargo check -p vtuber-desktop --features dev-synthetic-input
 
 #### M1-08-011: Windows Nokhwa／MSMF backendを実装しdevice選択契約を修正する
 
-状態: `DONE`
-依存: `M1-08-010`
+状態: `DONE`  
+依存: `M1-08-010`  
 親参照: DESIGN.md §10.2、§12、§13、§20.2、§21.2
 
 **変更候補**
@@ -6498,8 +6426,8 @@ cargo check -p vtuber-desktop
 
 #### M1-08-012: 実captureをorchestratorとpreviewへ接続する
 
-状態: `DONE`
-依存: `M1-08-011`
+状態: `DONE`  
+依存: `M1-08-011`  
 親参照: DESIGN.md §12、§13、§17.1、§20.2〜§20.4、§21.2
 
 **変更候補**
@@ -6543,809 +6471,249 @@ cargo clippy -p vtuber-app -p vtuber-camera -p vtuber-desktop --all-targets -- -
 cargo run -p vtuber-desktop --release
 ```
 
-#### M1-08-013: detector→crop→Peppa landmarkのproduction face pipelineを確定する
+#### M1-08-013: production face inferenceとhead-pose方式をWindowsで確定する
 
-状態: `BLOCKED`（repair branch実行中）
-依存: `M1-08-012`
-実行単位: `M1-08-013-001`〜`M1-08-013-009`
+状態: `BLOCKED`  
+依存: `M1-08-012`  
 親参照: DESIGN.md §3、§11.4〜§11.6、§14、§15、ADR-001
 
-### blocker
-
-現行Peppa ONNXは、あらかじめface cropへ整形された入力から98点landmarkを推定するmodelである。full camera frameを直接resizeして入力しても、face detection／ROI選択／crop contractを満たさない。
-
-完了済みのもの:
-
-- `tract-onnx 0.23.4`でPeppa modelをload／optimize／runするruntime
-- 98点2D landmark decode
-- `peppapig-98`専用planar pose solver
-- capture、preview、worker、tracking、avatar bridge、diagnostics、shutdownの基盤
-
-不足しているもの:
-
-- full-frame face detector artifact
-- detector preprocess／output decode／NMS
-- single-user primary face selection
-- detector boxからPeppa入力cropへのtyped変換
-- detectorとlandmarkを同一workerで所有するcomposite runtime
-- no-face／ROI loss／detector cadenceのcorrect state machine
-- fixed inputとWindows実cameraによるend-to-end gate
-
-### fixed direction
-
-第一候補としてUltraFace RFB-320 ONNXを採用候補に固定する。exact artifactが`tract-onnx 0.23.4`で動くことを`M1-08-013-002`で証明するまでは「採用済み」と記述しない。
-
-authoritative contract:
-
-```text
-file        version-RFB-320.onnx
-source      ONNX Model Zoo / UltraFace
-license     MIT
-SHA-256     34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017
-size        1,270,727 bytes
-opset       9
-input       [1, 3, 240, 320] F32 NCHW RGB
-normalize   (pixel - 127.0) / 128.0
-outputs     scores [1, 4420, 2], boxes [1, 4420, 4]
-threshold   0.7 initial value
-NMS IoU     0.3 initial value
-```
-
-UltraFace以外のdetectorへ変更する場合は、`M1-08-013-002`のexact failureを記録した後、新repair leafとADR amendmentを追加する。同じleafで候補を次々に試して根拠を失わせない。
-
-### parent完了条件
-
-次をすべて満たした時だけ`M1-08-013`を`DONE`へ変更する。
-
-- detector／landmark両artifactのsource、license、SHA-256、tensor contractがmanifestにある。
-- UltraFace exact artifactが`tract-onnx 0.23.4`でload／optimize／runできる。
-- full frame→face box→square crop→Peppa 98 landmarks→source image座標へのinverse mappingがpure Rustで成立する。
-- no-faceはtyped outcomeとなり、recoverable runtime failureと区別される。
-- fixed inputとWindows cameraの双方からfiniteなlandmarks／head poseが得られる。
-- detector cadence中もlandmark inferenceは毎対象frame継続する。
-- model／crop変更時にgolden testが検知する。
-- ADR-001、manifest、Windows acceptance reportが実装と一致する。
-
----
-
-#### M1-08-013-001: UltraFace artifactと二段pipeline manifest schemaを固定する
-
-状態: `DONE`
-依存: `M1-08-012`
-親参照: M1-08-013、ADR-001
+理由: 現行のPeppa Pig ONNXは98点landmark-only出力であり、実camera full-frameを入力するための検証済みface detector／crop artifactがmanifestおよびproduction workerに存在しない。`cargo run -p xtask -- acceptance verify assets/models/manifest.toml`でmodel hash／tensor contractは検証できるが、実camera pose gateは再現できない。検出・crop段を追加検証するまで、依存するM1-08-014以降へ受入上は進まない。
 
 **変更候補**
 
 - `assets/models/manifest.toml`
-- `crates/vtuber-app/src/model_catalog.rs`
-- `crates/vtuber-inference/src/descriptor.rs`
-- `tools/xtask/src/acceptance.rs`
-- `LICENSES/`または既存license inventory
-
-**実装指示**
-
-- 現在の`models[0]`前提を廃止し、modelをstable ID／roleで解決するmanifest schemaへ変更する。
-- 少なくとも`role = "face_detector"`と`role = "face_landmarks"`を表現し、二つを一つのproduction pipeline IDへ束縛する。
-- UltraFace entryへ上記fixed contract、authoritative source、upstream、MIT license、exact SHA-256、exact byte sizeを記録する。
-- Peppa entryは保持し、`role = "face_landmarks"`、crop-required、landmark coordinate encoding、planar pose methodを明示する。
-- detector postprocessにscore threshold `0.7`、NMS IoU `0.3`、max pre-NMS candidates `256`、max post-NMS detections `16`をmanifest値として置く。
-- crop configにprovisional baselineとして、square scale `1.35`、center Y offset `-0.05` face-box heights、output `256x256`、bilinear、outside fill=`normalization mean`を置く。これらは`013-009`で受入値へ確定する。
-- `FacePipelineDescriptor`等のplain data contractを定義する。detector／landmark model runtime objectを含めない。
-- `acceptance verify`を二artifact対応にし、file不存在、size不一致、hash不一致、role重複、pipeline参照切れをtyped failureにする。
-- runtime起動時downloadは行わない。development fetchを追加する場合はtemp file→size／hash verify→atomic renameを必須にする。
-
-**このleafで行わないこと**
-
-- detector runtimeを実装しない。
-- Peppa artifact／planar solverを置換しない。
-- model file名やtensor indexをapp sourceへ重複hard-codeしない。
-- hash checkを無効化するforce optionを作らない。
-
-**完了条件**
-
-- production pipelineをIDで一意に解決できる。
-- manifest parserがarray先頭順に依存しない。
-- detector／landmark双方のfile、size、hash、license、input／output contractを検証できる。
-- existing Peppa-only manifest testをpipeline manifest testへ更新できる。
-- model binaryがない環境でもerrorがどのartifact不足か特定できる。
-
-**検証**
-
-```powershell
-cargo fmt --all -- --check
-cargo test -p vtuber-app model_catalog
-cargo test -p vtuber-inference descriptor
-cargo test -p xtask
-cargo run -p xtask -- acceptance verify assets/models/manifest.toml
-cargo clippy -p vtuber-app -p vtuber-inference -p xtask --all-targets -- -D warnings
-```
-
-#### M1-08-013-002: UltraFaceをtract-onnx 0.23.4でexact probeする
-
-状態: `BLOCKED`
-依存: `M1-08-013-001`
-親参照: M1-08-013、ADR-001
-
-**変更候補**
-
-- `crates/vtuber-inference/src/probe.rs`
-- `crates/vtuber-inference/tests/ultraface_probe.rs`
-- `assets/models/operator-inventory-ultraface.*`
-- `docs/adr/ADR-001-face-inference-runtime-and-model.md`
-
-**実装指示**
-
-- manifestで検証済みのexact UltraFace artifactだけを対象にする。
-- `tract-onnx = 0.23.4`でmodel load、input fact設定、optimize、runnable化、runを段階別に実行する。
-- input factは`F32 [1,3,240,320]`へ固定し、manifestとmodelの実shape／dtypeを照合する。
-- zero／mean inputに加え、ONNX Model Zooのmodel-with-test-data artifactを利用できる場合は、そのSHA-256も記録してreference input／outputを実行する。
-- output名、順序、shape、dtypeをprobe結果から記録する。runtime実装はoutput indexだけを無条件に仮定しない。
-- output全値のfinite性、scores／boxesのelement countを確認する。
-- operator inventoryをstable順序で保存する。
-- stage別errorへmodel ID、SHA-256、stage、operator／node情報を含める。
-- zensally等の既存Tract実装はfeasibility evidenceに留め、このprojectのprobe結果で代用しない。
-
-**このleafで行わないこと**
-
-- probe failure時にONNX Runtime、OpenCV、TFLiteへfallbackしない。
-- 別UltraFace variant、int8版、YuNet等を同時採用しない。
-- output toleranceを広げてNaN／shape mismatchを通さない。
-
-**完了条件**
-
-- exact modelがload／optimize／runを通る、またはexact blockerが再現可能に記録される。
-- output contractが`[1,4420,2]`と`[1,4420,4]`へ一致する。
-- probe成功時、次leafが利用できるrunnable construction functionがある。
-- probe失敗時、`M1-08-013`はBLOCKEDのままで、`013-003`へ進まない。
-
-**検証**
-
-```powershell
-cargo test -p vtuber-inference ultraface_probe --features onnx -- --nocapture
-cargo clippy -p vtuber-inference --features onnx --all-targets -- -D warnings
-cargo run -p xtask -- acceptance verify assets/models/manifest.toml
-```
-
-#### M1-08-013-003: UltraFace preprocessとdetector stage runtimeを実装する
-
-状態: `PENDING`
-依存: `M1-08-013-002`
-親参照: M1-08-013、DESIGN.md §14
-
-**変更候補**
-
-- `crates/vtuber-inference/src/detector/mod.rs`
-- `crates/vtuber-inference/src/detector/preprocess.rs`
-- `crates/vtuber-inference/src/detector/runtime.rs`
-- `crates/vtuber-inference/tests/detector_preprocess.rs`
-
-**実装指示**
-
-- `VideoFrame`のsupported canonical pixel formatsをRGBへ読み、320x240へbilinear direct resizeする。official UltraFace contractどおり、この段階ではletterboxへ変えない。
-- RGB各channelへ`(pixel - 127.0) / 128.0`を適用し、NCHW `[1,3,240,320]`へ格納する。
-- source strideを尊重し、packed width前提にしない。
-- preprocess bufferをworker-ownedで再利用し、steady stateでframeごとの大容量allocationを行わない。
-- detector stage runtimeは`FaceInference`のlandmark固有outputへ押し込まず、detector専用typed APIとする。
-- model runnableはworker thread内でconstruct／dropされる構造を維持する。
-- unsupported pixel format、zero dimension、short buffer、non-finite normalization設定をtyped errorにする。
-- testはsmall synthetic RGB patternからchannel order、resize orientation、normalization、NCHW indexを固定する。
-
-**このleafで行わないこと**
-
-- box decode／NMS／cropを実装しない。
-- preview imageを推論入力として再encodeしない。
-- main threadでmodel runtimeをconstructしない。
-- unsafe SIMDを追加しない。
-
-**完了条件**
-
-- fixed frameからmanifest contractどおりのdetector tensorを再現できる。
-- RGB／BGR、width／height、NCHW／NHWCの取り違えをtestが検知する。
-- buffer reuseがAPIから明確である。
-- UltraFace runnableへtensorを渡しraw outputsを取得できる。
-
-**検証**
-
-```powershell
-cargo test -p vtuber-inference detector_preprocess --features onnx
-cargo test -p vtuber-inference detector_runtime --features onnx
-cargo clippy -p vtuber-inference --features onnx --all-targets -- -D warnings
-```
-
-#### M1-08-013-004: UltraFace output decode、NMS、primary face selectionを実装する
-
-状態: `PENDING`
-依存: `M1-08-013-003`
-親参照: M1-08-013、DESIGN.md §14
-
-**変更候補**
-
-- `crates/vtuber-inference/src/detector/decode.rs`
-- `crates/vtuber-inference/src/detector/nms.rs`
-- `crates/vtuber-inference/src/roi.rs`
-- `crates/vtuber-inference/tests/detector_decode.rs`
-
-**実装指示**
-
-- raw outputsをvalidated output name／shape contractからscoresとboxesへ解決する。
-- face class scoreをthresholdし、boxesを`[xmin,ymin,xmax,ymax]` normalized source coordinatesへ変換する。
-- NaN／Inf、反転box、zero area、著しく範囲外のboxをrejectし、微小な範囲超過だけclampする。
-- pre-NMS candidateをconfidence順に最大256へbounded化する。
-- hard NMSをIoU `0.3`で実装し、post-NMS最大16件へ制限する。
-- parameterはmanifestから取得し、decode moduleにmagic numberを散らさない。
-- single-user primary face policyをpure functionにする。
-  - previous ROIとIoU `>= 0.2`の候補があればIoU最大、同値ならconfidence最大。
-  - continuity候補がなければconfidence最大、同値ならarea最大。
-- `NoFace`、`Detections(Vec<...>)`、malformed outputを区別する。
-- no-faceは通常の観測結果であり、worker consecutive failure countを増やさない。
-- known boxesでIoU、threshold、NMS、continuity selectionをdeterministic testする。
-
-**このleafで行わないこと**
-
-- multi-person UIを追加しない。
-- no-faceを空の全画面ROIへfallbackしない。
-- unbounded Vec historyを保持しない。
-- detector boxからcropをまだ作らない。
-
-**完了条件**
-
-- official output shapeからface boxesをboundedにdecodeできる。
-- overlap boxのNMS結果が既知fixtureと一致する。
-- faceの一時的なconfidence順変動でprimary identityが不必要に切り替わらない。
-- no-faceとruntime failureをcallerが判別できる。
-
-**検証**
-
-```powershell
-cargo test -p vtuber-inference detector_decode --features onnx
-cargo test -p vtuber-inference detector_nms --features onnx
-cargo test -p vtuber-inference primary_face_selection --features onnx
-```
-
-#### M1-08-013-005: detector boxからPeppa cropへのtyped transformを実装する
-
-状態: `PENDING`
-依存: `M1-08-013-004`
-親参照: M1-08-013、DESIGN.md §11、§14
-
-**変更候補**
-
-- `crates/vtuber-inference/src/crop.rs`
-- `crates/vtuber-inference/src/preprocess.rs`
-- `crates/vtuber-inference/src/decode.rs`
-- `crates/vtuber-inference/tests/face_crop.rs`
-
-**実装指示**
-
-- `FaceCropTransform`を定義し、source normalized coordinates、source pixels、crop pixels、landmark model coordinatesの相互変換を一箇所へ集約する。
-- detector boxをmanifestのcrop configで拡張し、square ROIを作る。
-  - initial scale `1.35`
-  - initial center Y offset `-0.05 * detector_box_height`
-  - output `256x256`
-- source外へはみ出すROIを切り詰めて形を変えず、paddingとして扱う。
-- paddingはPeppaのImageNet meanへ正規化後0になる値を使う。
-- crop resizeはbilinear、RGB、Peppa manifestのNCHW／mean／stdに従う。
-- Peppa outputのx／y coordinate encodingをprobeで確定し、`normalized_0_1`、`crop_pixels`等のenumで表す。現状の暗黙的な「すでにnormalized」という仮定を禁止する。
-- 98 landmarksをcrop座標からsource normalized座標へinverse mappingし、`RawFaceObservation.roi`へ実ROIを記録する。
-- edge／cornerのROI、1px box、outside padding、round tripの誤差をpure testする。
-- crop configは`013-009`の実camera結果で調整可能だが、accepted valueはmanifest／ADR／goldenを同時更新する。
-
-**このleafで行わないこと**
-
-- OpenCV affine／resizeを導入しない。
-- bboxを単純clampしてaspect ratioを壊さない。
-- mirror preview flagをcrop／inference座標へ入れない。
-- crop parameterをmodel_catalog以外へ重複hard-codeしない。
-
-**完了条件**
-
-- source→crop→source round tripが許容誤差内で一致する。
-- frame edgeのfaceでもpanic／short readがない。
-- Peppaへ常にvalid `[1,3,256,256]` tensorを渡せる。
-- output landmarksがsource normalized coordinateへ戻る。
-- crop scale／offsetを変更するとgolden testが明示的に変化する。
-
-**検証**
-
-```powershell
-cargo test -p vtuber-inference face_crop --features onnx
-cargo test -p vtuber-inference crop_round_trip --features onnx
-cargo clippy -p vtuber-inference --features onnx --all-targets -- -D warnings
-```
-
-#### M1-08-013-006: frame-level composite inference contractを導入する
-
-状態: `PENDING`
-依存: `M1-08-013-005`
-親参照: M1-08-013、DESIGN.md §12、§14
-
-**変更候補**
-
-- `crates/vtuber-inference/src/descriptor.rs`
+- `crates/vtuber-inference/src/backend/tract.rs`
 - `crates/vtuber-inference/src/runtime.rs`
-- `crates/vtuber-inference/src/pipeline.rs`
-- `crates/vtuber-app/src/model_catalog.rs`
-- `crates/vtuber-inference/tests/composite_contract.rs`
+- `crates/vtuber-tracking/src/pose/`
+- `crates/vtuber-inference/tests/golden.rs`
+- `docs/adr/ADR-001-*.md`
 
 **実装指示**
 
-- single model用`ModelDescriptor`をstage descriptorとして再利用し、production用`FacePipelineDescriptor`にdetector、landmark、postprocess、crop configを束ねる。
-- production boundaryをpreprocessed tensor単体ではなく`VideoFrame`単位にする。
-- 例として`FrameFaceInference::infer_frame(&mut self, &VideoFrame) -> Result<FrameInferenceOutcome>`相当のtyped contractを導入する。名称は既存codeに合わせてよい。
-- outcomeは少なくとも`Face(RawFaceObservation)`と`NoFace`を区別する。
-- individual ONNX runnableを扱うinternal stage APIと、end-to-end frame APIを分離する。
-- detectorとPeppa runnableは同じinference worker内でconstruct、所有、dropする。controller／Bevy resourceへlive model objectを出さない。
-- `model_catalog`はproduction pipeline IDを解決し、first `models[]`前提を残さない。
-- existing `FaceInference`をtest probe用に残す場合も、production workerがsingle modelへ直接結合しないようにする。
-- public contractへcoordinate space、ownership、thread confinement、no-face semanticsを記す。
+- 現状を先に再検証する。MediaPipe TFLiteはtractのF16 operatorでblock、現ONNX fallbackは98点2D＋confidenceであり`z = 0`を3D Kabschへ渡せないという前提をartifactとcodeで確認する。
+- 次のどちらか一方を選び、ADRへ根拠を残す。
+  1. tract互換で実用的な3D landmarkまたは直接head poseを出すmodelへ変更する。
+  2. 現98点2D modelを維持し、license明確なcanonical 3D face templateとpure-Rustの2D pose solverを実装する。
+- 二方式を同時にproduction実装しない。
+- `z = 0`点群を既存3D Kabschへそのまま投入するfallbackを禁止する。
+- fixed license-safe imageでmodel load、preprocess、infer、decode、head poseまで実行し、finiteなyaw／pitch／rollをgolden testへ固定する。
+- neutral、known left／right／up／down入力またはsynthetic projectionでsign conventionを検証する。
+- model hash、tensor contract、output decode、solver assumptionsをmanifest／ADRへ同期する。
+- gateを満たせない場合は`BLOCKED`としてexact operator／output limitation／再現commandを残し、M1-08-014へ進まない。
 
-**このleafで行わないこと**
+**このsubtaskで行わないこと**
 
-- worker loopへまだ接続しない。
-- app／tracking／avatar crateへdetector-specific tensor型を漏らさない。
-- general graph／plugin frameworkを作らない。
-- 二つのruntimeを別threadへ分割しない。
+- native C／C++ runtime、Python sidecar、OpenCVへ切り替えない。
+- 目視だけでpose精度を合格にしない。
+- model license／hash不明のartifactを採用しない。
 
 **完了条件**
 
-- plain descriptorだけがcontrollerからworkerへ渡る。
-- composite runtimeがdetectorとlandmarkの双方をworker内で所有できる。
-- no-faceがerrorと区別される。
-- appはpipeline IDから完全なdescriptorを構築できる。
-- single-model whole-frame Peppa経路をproduction contractから選べない。
+- fixed inputからfiniteで再現可能なface observationとhead poseが得られる。
+- 2D／3Dの意味がtypeとtestで区別される。
+- yaw／pitch／rollの符号が設計と一致する。
+- production model／solver選択がADRで一意に決まる。
 
 **検証**
 
 ```powershell
-cargo test -p vtuber-inference composite_contract --features onnx
-cargo test -p vtuber-app model_catalog
-cargo clippy -p vtuber-inference --features onnx --all-targets -- -D warnings
-cargo clippy -p vtuber-app --all-targets -- -D warnings
+cargo run -p xtask -- model verify
+cargo test -p vtuber-inference golden -- --nocapture
+cargo test -p vtuber-tracking pose -- --nocapture
+cargo clippy -p vtuber-inference -p vtuber-tracking --all-targets -- -D warnings
 ```
 
-#### M1-08-013-007: detector cadenceとROI recoveryを含むcomposite runtimeを実装する
+#### M1-08-014: captureからproduction inference workerまでを接続する
 
-状態: `PENDING`
-依存: `M1-08-013-006`
-親参照: M1-08-013、DESIGN.md §12、§14、§20.2
+状態: `PENDING`  
+依存: `M1-08-013`  
+親参照: DESIGN.md §12、§14、§20.2〜§20.3、§21.2
 
 **変更候補**
 
-- `crates/vtuber-inference/src/composite.rs`
-- `crates/vtuber-inference/src/worker.rs`
-- `crates/vtuber-inference/src/pipeline.rs`
-- `crates/vtuber-inference/src/metrics.rs`
-- `crates/vtuber-inference/tests/composite_runtime.rs`
-
-**実装指示**
-
-- composite runtimeの一frame処理を次の順序へ固定する。
-  1. ROIなし／lost／detector期限ならUltraFace実行。
-  2. primary detectionがあればexpanded square cropを更新。
-  3. active ROIがあればPeppa landmarkを毎対象frame実行。
-  4. landmarkをsource座標へ戻して`RawFaceObservation`を構築。
-  5. confidence不足／malformed landmarkならROIをinvalidateし、次frameでdetectorを強制。
-- correctness baselineではsearch中detectorを毎frame実行する。
-- tracking中のinitial detector intervalは既存settingsの5 framesを使用してよいが、**detectorをskipしたframeでもlandmark stageは実行する**。
-- previous ROI continuity、face loss、reacquireをexplicit stateにする。
-- no detectionは`NoFace`を返し、consecutive runtime errorを増やさない。
-- source `FrameSeq`、captured timestamp、inference start／finishを保持する。stageごとに別epochを作らない。
-- detector、crop、landmark、decode、totalのbounded metricsを追加する。
-- detector／landmark failureをstage付きerrorにし、どちらのmodelが失敗したか区別する。
-- output slotはlatest-onlyを維持し、ROI history／frame historyを蓄積しない。
-- old logicの`should_run_detector == false`で全inferenceをskipする挙動を除去する。
-- mock detector／landmark stageでdetector cadence、landmark毎frame、loss→reacquireをdeterministic testする。
-
-**このleafで行わないこと**
-
-- optical flow tracker、Kalman tracker、multi-face identity trackerを追加しない。
-- performance tuningを先行しない。
-- detector／landmarkを別workerへ分けない。
-- no-face時に古いlandmarkを新観測として再発行しない。
-
-**完了条件**
-
-- stable ROI中、detector intervalが5でもlandmark outputは各入力frameで生成される。
-- loss時にdetector searchへ戻り、face復帰後に自動reacquireする。
-- detector／landmarkのerrorとno-faceがmetrics／statusで区別される。
-- latest-only／bounded memory invariantを維持する。
-- composite runtimeのunit testがcameraなしで通る。
-
-**検証**
-
-```powershell
-cargo test -p vtuber-inference composite_runtime --features onnx
-cargo test -p vtuber-inference detector_cadence --features onnx
-cargo test -p vtuber-inference roi_recovery --features onnx
-cargo clippy -p vtuber-inference --features onnx --all-targets -- -D warnings
-```
-
-#### M1-08-013-008: detector→crop→landmarkのgolden／replay gateを作る
-
-状態: `PENDING`
-依存: `M1-08-013-007`
-親参照: M1-08-013、DESIGN.md §14、§21
-
-**変更候補**
-
-- `crates/vtuber-inference/tests/composite_golden.rs`
-- `crates/vtuber-inference/tests/data/`
-- `assets/models/golden/`
-- `docs/adr/ADR-001-face-inference-runtime-and-model.md`
-- `assets/models/manifest.toml`
-
-**実装指示**
-
-- UltraFaceのofficial model-with-test-dataが利用できる場合、そのsource、license、SHA-256を記録しdetector output goldenへ使う。
-- end-to-endには権利・出典が明確な単一顔画像を使用する。任意の検索画像や個人camera frameをrepositoryへcommitしない。public-domain／permissive assetを使用し、source URL、license、SHA-256をmanifestまたはtest-data READMEへ残す。
-- blank／mean imageで`NoFace`を確認する。
-- single-face imageで少なくとも次を固定する。
-  - primary face box
-  - crop transform
-  - landmark count 98
-  - all finite
-  - source coordinate range
-  - detector／landmark confidence
-- multi-face referenceを合法に用意できる場合はprimary selectionをgolden化する。用意できない場合はsynthetic detection listのpure testを正とし、実画像を捏造しない。
-- golden toleranceをoutput categoryごとに定義し、model／crop config hash変更でsilent passしないようにする。
-- planar poseのaxis signは既存synthetic testを維持し、single portraitの主観だけでyaw／pitchをgolden化しない。
-- replay harnessはfixed frame sequenceをcomposite runtimeへ流し、same sequence、same outcome、bounded metricsを再現する。
-- golden更新は明示command／reviewを必要とし、自動上書きしない。
-
-**このleafで行わないこと**
-
-- raw user camera recordingをcommitしない。
-- toleranceを顔box全域が許容されるほど広くしない。
-- model hash変更時にgoldenを自動更新しない。
-- physical camera試験をこのleafの自動testで代替しない。
-
-**完了条件**
-
-- no-faceとsingle-faceのend-to-end結果を自動再現できる。
-- detector→crop→98 landmarksの各境界を個別に診断できる。
-- license／source／hash不明のtest assetがない。
-- model／crop contractの破壊をtestが検知する。
-- replayでmemoryがframe数に比例しない。
-
-**検証**
-
-```powershell
-cargo test -p vtuber-inference composite_golden --features onnx -- --nocapture
-cargo test -p vtuber-inference composite_replay --features onnx
-cargo run -p xtask -- acceptance verify assets/models/manifest.toml
-```
-
-#### M1-08-013-009: Windows full-frame camera probeでparent gateを解除する
-
-状態: `PENDING`
-依存: `M1-08-013-008`
-親参照: M1-08-013、docs/PERFORMANCE_TEST_PLAN.md
-
-**変更候補**
-
-- `tools/xtask/src/face_pipeline_smoke.rs`
-- `tools/xtask/src/main.rs`
-- `tools/xtask/Cargo.toml`
-- `crates/vtuber-inference/src/diagnostic.rs（必要なら）`
-- `docs/acceptance/windows-m1.md`
-- `docs/adr/ADR-001-face-inference-runtime-and-model.md`
-- `assets/models/manifest.toml`
-
-**実装指示**
-
-- main desktop appへ接続する前に、既存Windows MSMF captureとcomposite runtimeだけを直結するdiagnostic commandを作る。
-- command例は`cargo run -p xtask -- face-pipeline-smoke ...`とし、camera descriptor、duration、pipeline ID、optional JSON outputを受け取る。
-- command内でcapture controllerとcomposite inference workerを正規のthread ownership規約どおり起動し、終了時にinference→captureの順でstop／joinする。
-- avatar、Bevy renderer、eguiを起動しない。これによりdetector／crop／landmark blockerをapp integrationから分離する。
-- console／bounded JSON summaryへ次を記録する。
-  - detector state
-  - detector confidence
-  - normalized ROI
-  - detector Hz／landmark Hz
-  - face／no-face count
-  - detector／crop／landmark stage error
-  - crop scale／offset
-  - 98 landmark finite count
-  - planar pose finite countとyaw／pitch／roll range
-- raw frame／crop／landmark全列をdiskへ自動保存しない。debug画像出力を追加する場合は明示flag、単発、local-only、default offとする。
-- 実cameraで少なくとも次を実施する。
-  - centered neutral face 60秒
-  - face out／returnを5回
-  - 左右／上下へ通常範囲で移動
-  - frame edge近くへ移動
-  - Stop／Startを3回
-- neutral face runで継続的に98 finite landmarksを得る。
-- planar pose calibration相当のneutral referenceをdiagnostic command内で明示収集し、yaw／pitch／rollがfiniteで、正負方向が既存semantic conventionと一致することを確認する。
-- provisional crop scale／Y offsetが額、顎、両頬を安定して含むか確認する。変更した場合はmanifest、golden、ADRを同一差分で更新する。
-- detector／crop／landmarkのどこでlossしたかをreportへ記録する。
-- success時に`M1-08-013`を`DONE`へ変更し、`M1-08-014`を次実行単位とする。
-- failure時は`M1-08-013`をBLOCKEDのままにし、exact failureを分類して`M1-08-013-010`以降のrepair leafを追加する。`M1-08-014`へ進まない。
-
-**このleafで行わないこと**
-
-- desktop orchestrator、tracking runtime、avatar bridgeへ接続しない。
-- 60秒smokeを30分soakと呼ばない。
-- crop parameterを目視だけでcodeへ直書きしない。
-- detector missを古いROIの永久保持で隠さない。
-- physical test未実施をPASSにしない。
-
-**完了条件**
-
-- full camera frameからdetector→crop→Peppa→98 landmarksが継続する。
-- face loss／returnでsearch／reacquireが成立する。
-- finiteなneutral-relative poseを生成できる。
-- detector／landmark Hzとfailure stageをsummaryで観測できる。
-- command終了後にcamera handleとworker threadが残らない。
-- manifest、ADR、reportが実測値と一致する。
-- parent `M1-08-013`の全完了条件を満たす。
-
-**検証**
-
-```powershell
-cargo fmt --all -- --check
-cargo test --workspace --no-fail-fast
-cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p xtask -- acceptance verify assets/models/manifest.toml
-cargo run -p xtask -- face-pipeline-smoke --help
-cargo build -p vtuber-desktop --release
-# 上記に加え、本leafのWindows手動protocolを実施し、結果をreportへ記録する。
-```
-
-
-#### M1-08-014: composite runtimeを既存InferenceRuntime／orchestratorへ接続する
-
-状態: `PENDING`
-依存: `M1-08-013-009`
-親参照: DESIGN.md §12、§14、§17、§20.2〜§20.3、§21.2
-
-**現状の扱い**
-
-`crates/vtuber-app/src/inference_runtime.rs`、`model_catalog.rs`、`crates/vtuber-inference/src/controller.rs`／`worker.rs`は既に存在する。これらを捨てて別workerを作らず、single-model前提を`M1-08-013`で確定したcomposite pipelineへ置換する差分だけを実装する。
-
-**変更候補**
-
-- `crates/vtuber-app/src/inference_runtime.rs`
-- `crates/vtuber-app/src/model_catalog.rs`
-- `crates/vtuber-app/src/orchestrator.rs`
+- `crates/vtuber-inference/src/backend/tract.rs`
 - `crates/vtuber-inference/src/controller.rs`
 - `crates/vtuber-inference/src/worker.rs`
-- `crates/vtuber-inference/src/state.rs`
+- `crates/vtuber-app/src/runtime.rs`
+- `crates/vtuber-app/src/orchestrator.rs`
 - `crates/vtuber-app/tests/inference_orchestration.rs`
 
 **実装指示**
 
-- controllerへ渡すload commandをsingle `ModelDescriptor`から`FacePipelineDescriptor`へ変更する。
-- runtime objectは既存どおりworker内でconstruct／dropする。detectorとlandmarkの双方を同一workerが所有する。
-- appのmodel catalogはmanifestのproduction pipeline IDからdescriptorを構築する。
-- Start時はcapture worker→composite model load→inference readyの順に進め、各stageの成功を確認してからapp lifecycleをRunningへする。
-- Stop時はinferenceを先にstop／joinし、その後captureをstopする。closed input slot待ちでhangしない。
-- existing capture `LatestSlot<VideoFrame>`をcomposite workerへそのまま渡し、previewと別captureを開かない。
-- `FrameInferenceOutcome::Face`相当だけをobservation slotへpublishし、`NoFace`はtyped state／metricとしてtracking側へ伝えられるようにする。必要ならno-face signal用のlatest stateを追加するが、fake observationは作らない。
-- detector／landmark／crop／total metrics、last source sequence、ROI state、stage failureをexisting statusへ追加する。
-- existing detector cadence設定をcomposite runtimeへ渡し、landmark毎frame invariantを壊さない。
-- model load、detector infer、landmark infer、malformed outputをstable error codeで区別し、previewだけは可能な範囲で継続できる。
-- old whole-frame Peppa pathとsingle-model production constructorを検索し、production appから到達不能にする。
-- testsはmock composite runtimeを注入し、Start／Face／NoFace／runtime failure／Stopのstate transitionをcameraなしで確認する。
+- M1-08-013で選んだproduction runtimeの`infer()`を実装し、placeholder errorを残さない。
+- appがcapture controllerの`LatestSlot<VideoFrame>`を同じinstanceの`InferenceController`へ渡す。
+- Start時にcapture→model load→inferenceの順で起動し、model load成功を待ってstateを更新する。
+- Stop時はinferenceを先に停止／joinし、その後captureを停止する。closed slotでhangしない。
+- descriptorをmanifestから生成し、model path、hash、shape、normalizationをsource codeへ重複hard-codeしない。
+- latest-only semantics、duplicate sequence suppression、detector cadenceを維持する。
+- worker status、processed sequence、stage timing、failureをDiagnosticsへ同期する。
+- model load／infer failure時にcapture previewまで巻き込んでpanicしない。UIからStop／Retry可能にする。
 
 **このsubtaskで行わないこと**
 
-- tracking math、calibration、avatar applyを再実装しない。
-- detector／landmarkを別threadへ分けない。
+- tracking pipelineやavatar適用を接続しない。
+- runtime objectをmain threadでconstructしてworkerへmoveしない。
 - FIFO frame queueを追加しない。
-- runtime error時にprocess abortしない。
-- previewを停止して推論failureを隠さない。
 
 **完了条件**
 
-- GUI Startでexisting capture slotからcomposite workerがframeを受け取る。
-- actual face frameで`RawFaceObservation`がlatest-onlyで発行される。
-- no-faceとruntime failureがstatus上で区別される。
-- Stop後にinference workerが残らず、再Startできる。
-- single-model whole-frame Peppa production pathがない。
-- model hash mismatch／detector failure／landmark failureをUIへ区別して伝えられる。
+- 実camera frameから`RawFaceObservation`が継続的に発行される。
+- inference rateとlatest sequenceがDiagnosticsに出る。
+- Stop後にinference worker threadが残らない。
+- model hash mismatch／runtime failureをUIで判別できる。
 
 **検証**
 
 ```powershell
-cargo fmt --all -- --check
-cargo test -p vtuber-inference --features onnx --no-fail-fast
+cargo test -p vtuber-inference --no-fail-fast
 cargo test -p vtuber-app inference_orchestration
 cargo clippy -p vtuber-inference -p vtuber-app -p vtuber-desktop --all-targets -- -D warnings
-cargo build -p vtuber-desktop --release
+cargo run -p vtuber-desktop --release
 ```
 
+#### M1-08-015: calibrationとTrackingPipelineを実observationsへ接続する
 
-#### M1-08-015: 既存TrackingRuntimeをcomposite observationsへ適合・実機検証する
-
-状態: `PENDING`
-依存: `M1-08-014`
+状態: `PENDING`  
+依存: `M1-08-014`  
 親参照: DESIGN.md §11、§15、§17.2、§20.1、§21.1
-
-**現状の扱い**
-
-`crates/vtuber-app/src/tracking_runtime.rs`、`CalibrationCollector`、`CalibrationSession`、`TrackingPipeline`、planar pose branchは既に実装されている。新しいtracking pipelineを作らず、detector／crop後のsource-normalized 98 landmarksとtyped no-face outcomeを既存runtimeへ正しく流す。
 
 **変更候補**
 
 - `crates/vtuber-app/src/tracking_runtime.rs`
-- `crates/vtuber-app/src/inference_runtime.rs`
 - `crates/vtuber-app/src/orchestrator.rs`
 - `crates/vtuber-app/src/ui_model.rs`
-- `crates/vtuber-tracking/src/pipeline.rs`
+- `crates/vtuber-tracking/`
 - `crates/vtuber-app/tests/tracking_orchestration.rs`
 
 **実装指示**
 
-- composite inferenceのlatest `Face` outcomeを既存`TrackingRuntime`へ渡す。
-- `NoFace`は`TrackingPipeline::update(None, ...)`へ渡し、lost hold／neutral decay／recoveryを既存state machineで処理する。
-- no-face中に最後のlandmark observationを新frameとして再利用しない。
-- `peppapig-98` landmarksがsource normalized x-right／y-downであることをschema contractとtestで確認する。
-- crop座標のままcalibrationへ流れないことをassert／testする。
-- `UiAction::BeginCalibration`、`CancelCalibration`、`RetryCalibration`は既存collector／sessionへ接続したまま維持する。
-- sample count、reject reason、quality、complete状態を既存`UiViewModel.calibration`へ同期する。
-- calibration完了後、existing planar pose branchでneutral-relative yaw／pitch／rollを生成する。
-- detector confidence、landmark confidence、reprojection errorをconfidence synthesisへどう渡すか一箇所で定義する。欠落値を無条件1.0にしない。
-- detector ROIが変わってもsource coordinateへ戻したlandmarksを使うことで、crop translation／scaleがhead poseへ混入しないことをrecorded testで確認する。
-- camera device、model pipeline、avatar generation変更時にexisting calibration／filter reset policyを維持する。
-- existing monotonic clockを使い、`dt`を別epochから作らない。
-- mock／recorded outcomeでcalibration→tracking→loss→reacquireをdeterministic testする。
+- `InferenceController.output_slot()`のlatest observationをconsumeするapp resource／systemを作る。
+- `UiAction::BeginCalibration`、`CancelCalibration`、`RetryCalibration`を既存`CalibrationCollector`／`CalibrationSession`へ接続する。
+- sample数、reject理由、quality、complete状態を`UiViewModel.calibration`へ同期する。
+- calibration完了後に`NeutralProfile`を`TrackingPipeline`へ適用する。
+- monotonic `dt`で`TrackingPipeline::update`を実行し、`AvatarControlFrame`をlatest-onlyで生成する。
+- no-face期間もloss hold／neutral decay／recoveryを既存state machineどおり処理する。
+- tracking state、confidence、face detectedをUI／Diagnosticsへ同期する。
+- camera／model／avatar replace時はcalibrationとfilter stateのreset policyを明示し、旧profileを誤用しない。
 
 **このsubtaskで行わないこと**
 
+- control frameをavatarへまだ適用しない。
 - UI内でcalibration mathを行わない。
-- planar solverを別実装へ置換しない。
-- fixed alphaの追加filterを作らない。
-- control frameをavatarへ直接適用しない。
+- fixed frame alphaの独自filterを追加しない。
 
 **完了条件**
 
 - 実cameraでneutral calibrationを完了できる。
-- detector crop位置が変化してもneutral faceのpose driftが許容範囲内である。
 - head motionに応じたfiniteな`AvatarControlFrame`が生成される。
-- face loss／returnでstate transitionがUIへ反映される。
+- face loss／returnでstate transitionがUIに反映される。
 - cancel／retry後にprocess再起動なしで再校正できる。
-- no-faceをruntime failureとして誤表示しない。
 
 **検証**
 
 ```powershell
 cargo test -p vtuber-tracking --no-fail-fast
-cargo test -p vtuber-app tracking_orchestration
-cargo test -p vtuber-app tracking_crop_invariance
+cargo test -p vtuber-app
 cargo clippy -p vtuber-tracking -p vtuber-app --all-targets -- -D warnings
 ```
 
+#### M1-08-016: TrackingPipeline出力をactive VRMへ適用する
 
-#### M1-08-016: 既存avatar bridgeをreal tracking sourceで閉じる
-
-状態: `PENDING`
-依存: `M1-08-015`
+状態: `PENDING`  
+依存: `M1-08-015`  
 親参照: DESIGN.md §15、§16、§20.1、ADR-004
-
-**現状の扱い**
-
-`crates/vtuber-app/src/avatar_bridge.rs`、`ActiveControlFrame`、generation tagging、head／neck apply、expression／gaze fallbackは既に実装されている。新しいVRM制御経路を作らず、real tracking sourceをexisting bridgeへ接続し、synthetic sourceとの排他と実機挙動を検証する。
 
 **変更候補**
 
 - `crates/vtuber-app/src/avatar_bridge.rs`
-- `crates/vtuber-app/src/synthetic_tracking.rs`
 - `crates/vtuber-avatar/src/plugin.rs`
 - `crates/vtuber-avatar/src/unload.rs`
 - `crates/vtuber-avatar/src/expression.rs`
 - `crates/vtuber-avatar/src/gaze.rs`
 - `crates/vtuber-avatar/tests/vertical_control.rs`
-- `crates/vtuber-app/tests/avatar_bridge.rs`
 
 **実装指示**
 
-- existing tracking control slotのlatest `AvatarControlFrame`をcurrent `AvatarLifecycle` generationへtagし、`ActiveControlFrame`へpublishする。
-- lifecycle `Ready`以外ではframeを適用せず、stale generation／bindingをdropしてmetric化する。
-- real tracking sourceとdev synthetic sourceを同時有効にしない。production defaultはreal sourceとする。
+- latest `AvatarControlFrame`をcurrent `AvatarLifecycle` generationへtagし、`ActiveControlFrame`へpublishする。
+- lifecycle `Ready`以外ではframeを適用せず、stale generationをdrop／metric化する。
 - M1-05のhead／neck pose、M1-06のexpression／gaze systemが`VtuberAvatarPlugin`へ正しいschedule順で登録済みか監査し、不足登録だけを補う。
-- one-frame expression commandを一回にcoalesceし、`bevy_vrm1::ModifyExpressions` pathを維持する。
-- gazeはexisting expression／eye-bone fallbackを使い、`bevy_vrm1::LookAt`／`BodyTracking`をproduct pathへ導入しない。
-- avatar replace／unload、camera stop、pipeline failure時にactive frame、binding、capability cacheをclearする。
-- face lossではTrackingPipelineが生成したhold／neutral-return frameを適用し、last poseを永久freezeしない。
-- existing synthetic modeを診断用controlとして残し、同じVRMでsynthetic success／real failureを切り分けられるようにする。
-- integration testではold generation frame、replace、unload、missing expression、head-only avatarを確認する。
+- 一frameのexpression commandを一回にcoalesceし、`bevy_vrm1::ModifyExpressions` pathを維持する。
+- gazeは既存expression／eye-bone fallbackを使い、`bevy_vrm1::LookAt`／`BodyTracking`をproduct pathへ導入しない。
+- avatar replace／unload時にactive frame、binding、capability cacheをclearする。
+- synthetic sourceとreal tracking sourceを同時有効にしない。
 
 **このsubtaskで行わないこと**
 
-- app crateからbone transformへ直接writeしない。
-- 独自VRM loader／expression resolverを作らない。
+- bone transformへapp crateから直接writeしない。
+- 独自VRM expression resolverを作らない。
 - SpringBone／MToonへtracking値を混ぜない。
-- detector／tracking failureをsynthetic sourceで自動fallbackして隠さない。
 
 **完了条件**
 
-- Web cameraの顔動作でactive VRMのhead／neckが動く。
-- blink、mouth、gazeがmodel capabilityに応じて動く。
-- model replace後は新avatarだけが動く。
-- face lossでneutralへ戻り、face returnで再追従する。
+- Web cameraの顔動作でVRMのhead／neck、blink、mouth、gazeがcapabilityに応じて動く。
+- model replace後に新avatarだけが動く。
+- face lossで永久freezeせずneutralへ戻る。
 - stale frame／bindingでpanicしない。
-- synthetic modeとreal modeが明示的に排他である。
 
 **検証**
 
 ```powershell
 cargo test -p vtuber-avatar
 cargo test -p vtuber-app avatar_bridge
-cargo test -p vtuber-app synthetic_tracking
 cargo clippy -p vtuber-avatar -p vtuber-app -p vtuber-desktop --all-targets -- -D warnings
-cargo build -p vtuber-desktop --release
+cargo run -p vtuber-desktop --release
 ```
 
+#### M1-08-017: real worker status、Diagnostics、error recovery、shutdownを統合する
 
-#### M1-08-017: 既存Diagnostics／error recovery／shutdownを実pipelineで監査する
-
-状態: `PENDING`
-依存: `M1-08-016`
+状態: `PENDING`  
+依存: `M1-08-016`  
 親参照: DESIGN.md §17、§20.2〜§20.4、§21、§24
-
-**現状の扱い**
-
-Diagnostics、error presenter、worker status、clean shutdownの基盤は既にある。このsubtaskではstubやsingle-model前提を除去し、detector／landmark composite pipelineの実stateを表示・回復できることを監査する。
 
 **変更候補**
 
-- `crates/vtuber-app/src/inference_runtime.rs`
-- `crates/vtuber-app/src/tracking_runtime.rs`
+- `crates/vtuber-app/src/runtime.rs`
 - `crates/vtuber-app/src/diagnostics.rs`
 - `crates/vtuber-app/src/error_presenter.rs`
 - `crates/vtuber-app/src/orchestrator.rs`
-- `crates/vtuber-app/src/ui/diagnostics.rs`
 - `crates/vtuber-app/tests/runtime_recovery.rs`
 
 **実装指示**
 
-- `DiagnosticsSnapshot`をcapture、detector、crop、landmark、tracking、avatar applyの実metricsから更新し、stub値を残さない。
-- 少なくとも次を表示する。
-  - capture／detector／landmark／tracking rate
-  - detector confidence、ROI state、no-face count
-  - detector／crop／landmark／tracking／apply stage timing
-  - input／output slot overwrite
-  - pipeline IDと短いmodel hashes
-  - worker stateとlast stable error code
+- `DiagnosticsSnapshot`をcapture、inference、tracking、avatar applyの実metricsから更新し、stub値を残さない。
 - Startの遷移をIdle→Starting→Running、StopをRunning／Failed→Stopping→Idleとして、各workerの実stateと一致させる。
-- Start途中failureでは、起動済みworkerをinference→captureの逆順に停止／joinし、partial runtimeを残さない。
-- camera disconnect、detector model load、detector infer、landmark model load、landmark infer、malformed output、avatar load、worker panicをstable code付きrecoverable errorへmapする。
-- `NoFace`／Searching／Lostは通常stateであり、error bannerを出さない。
+- Start途中failureでは、起動済みworkerを逆順に停止・joinし、partial runtimeを残さない。
+- Stop、camera disconnect、model load error、inference failure、worker panic、avatar load failureをstable code付きrecoverable errorへmapする。
 - unexpected worker exitを定期監視し、UIへ通知する。
-- Retryはerror stageに応じて必要なruntimeを新規構築し、closed slot／stopped controllerを不正再利用しない。
-- app exit時にinference→captureの順でexplicit shutdownし、slot waiterをwakeしてjoinする。
-- raw pixel、crop image、全landmark、full local pathをnormal logへ出さない。
-- Start／Stop／Retry／panic／disconnectをmockで反復し、thread leak／hangを検知する。
+- Retryはerror typeに応じて必要なstageだけを再構築し、同一controllerを不正再利用しない。
+- app exit時にinference→captureの順でclean shutdownし、slot waiterをwakeする。
+- normal logへraw pixel、landmark全列、full local pathを出さない。
 
 **このsubtaskで行わないこと**
 
-- performance tuning、settings永続化、release packagingを先行しない。
-- errorを一種類のStringへ潰さない。
+- 性能最適化やsettings永続化を先行しない。
+- errorを文字列一種類へ潰さない。
 - Dropだけを唯一のshutdown pathにしない。
-- no-faceをretry対象errorにしない。
 
 **完了条件**
 
-- GUI Diagnosticsがcomposite pipelineの実rate／state／timingを表示する。
+- GUIのDiagnosticsが実rate／state／overwrite／stage timingを表示する。
 - Start／Stop／Retryを複数回行ってthread leak／hangがない。
-- detector／landmarkのどちらが失敗したかUIで判別できる。
 - worker panic testがprocess crashではなくFailed stateとUI errorになる。
-- app close時にcamera handle、detector、landmark runtime、workerが解放される。
-- normal no-faceでerror bannerが出ない。
+- app close時にcamera handleとworkerが解放される。
 
 **検証**
 
 ```powershell
-cargo test -p vtuber-app runtime_recovery
-cargo test -p vtuber-camera -p vtuber-inference -p vtuber-tracking -p vtuber-avatar --no-fail-fast
+cargo test -p vtuber-app
+cargo test -p vtuber-camera -p vtuber-inference -p vtuber-tracking -p vtuber-avatar
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-
 #### M1-08-018: Windows functional／recovery acceptanceを実pipelineで実施する
 
-状態: `PENDING`
-依存: `M1-08-017`
+状態: `PENDING`  
+依存: `M1-08-017`  
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -7386,15 +6754,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 # 上記に加え、docs/acceptance/windows-m1.mdの手動protocolを実施する。
 ```
 
-#### M1-08-019: latency、30分soak、Windows final gateを閉じる
+#### M1-08-019: monotonic timing、latency、30分soak、Windows final gateを閉じる
 
-状態: `PENDING`
-依存: `M1-08-018`
+状態: `PENDING`  
+依存: `M1-08-018`  
 親参照: DESIGN.md §6、§20.2〜§20.3、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
-
-**現状の扱い**
-
-process-wide monotonic timing、latest-slot metrics、tracking／avatar apply timingの基盤は既に実装済みである。このsubtaskでは再実装せず、全stageが同じepochを使うことを監査し、実camera／release buildで測定する。correctnessを変える修正が必要になった場合は本subtaskを止め、repair leafを追加する。
 
 **変更候補**
 
@@ -7404,43 +6768,32 @@ process-wide monotonic timing、latest-slot metrics、tracking／avatar apply ti
 - `crates/vtuber-tracking/`
 - `crates/vtuber-avatar/`
 - `crates/vtuber-app/src/diagnostics.rs`
-- `tools/xtask/src/acceptance.rs`
 - `docs/acceptance/windows-m1.md`
 - `docs/acceptance/artifacts/`
 
 **実装指示**
 
-- capture、detector start／finish、crop、landmark start／finish、tracking produce、avatar applyがprocess-wide同一monotonic epochの`MonoTimeNs`を使うことをsourceとtestで監査する。
-- frameごとのlocal `Instant::now().elapsed()`等、別epoch timestampが残っていれば同じclock abstractionへ統一する。
-- source sequenceとtimestampを全stageで維持し、sequence mismatch／missing stageをmetric上で区別する。
-- warm-up 10秒、measurement window 60秒以上、minimum sample count 300を固定する。
-- render FPS、capture Hz、detector Hz、landmark Hz、tracking Hz、p50／p95 capture-to-apply、各stage p50／p95、overwrite、queue depthをbounded exportする。
-- detector cadenceによりdetector Hzがlandmark Hzより低くても、landmark／tracking Hzが目標を満たすことを確認する。
-- MVP基準を判定する。
-  - render 30fps以上
-  - tracking 15Hz以上
-  - capture-to-apply p95 180ms以下
-  - queue depth 1以下
-- 基準未達でもcorrectnessが成立している場合、stage別blockerを数値でQ2-03へ送る。本subtask内で根拠のないpool／unsafe最適化を行わない。
-- 固定model／cameraで30分soakを行い、60秒間隔でRSS／working set、latency、rates、overwrite、worker count、ROI loss／reacquire countを記録する。
-- soak途中に短いface loss／returnを複数回入れ、終了時にStop→app exitして全worker／camera／model runtimeの終了を確認する。
-- `docs/acceptance/windows-m1.md`をPASS／FAIL／CONDITIONAL／NOT RUNで完成させ、binary、detector、landmark、VRM、config、metrics artifactのhashを記録する。
-- no correctness blockerかつ最低性能基準を満たした場合だけWindows Q2をunlockする。
-- M1-09は引き続き`DEFERRED`とする。
+- capture、inference start／finish、tracking produce、avatar applyを同一process-wide monotonic epochの`MonoTimeNs`で記録する。
+- frameごとに`Instant::now().elapsed()`をtimestampとして使う実装を除去する。
+- source sequenceとtimestampをstage間で維持し、mismatch／missing stageをmetric上で区別する。
+- warm-up、sample window、minimum sample countを固定し、render FPS、capture Hz、inference Hz、tracking Hz、p50／p95 capture-to-apply、overwrite、queue depthをexportする。
+- まず60秒測定を行い、MVP基準（render 30fps以上、tracking 15Hz以上、p95 180ms以下、queue 1以下）を判定する。
+- correctnessを変えない範囲のtimestamp／metric修正だけを行い、本格最適化はQ2-03へ送る。
+- 固定model／cameraで30分soakを行い、RSS、latency、rates、overwrite、worker countを一定間隔で記録する。
+- 終了時にStop→app exitし、全workerとcamera handleの終了を確認する。
+- `docs/acceptance/windows-m1.md`をPASS／FAIL／CONDITIONAL／NOT RUNで完成させる。
+- no correctness blockerかつ最低性能基準を満たした場合だけ、Windows Q2をunlockする。M1-09は引き続き`DEFERRED`とする。
 
 **このsubtaskで行わないこと**
 
 - 異なるclock domainを単純減算しない。
 - 平均値だけでlatencyを判定しない。
-- detector Hzをtracking Hzと誤表示しない。
 - 30分未満のrunをsoak合格にしない。
 - 未達性能を測定なしの仕様変更で正当化しない。
-- 本格最適化をQ2-03より先に行わない。
 
 **完了条件**
 
 - capture-to-apply p50／p95が同一monotonic domainから算出される。
-- detector／landmark／tracking各rateが区別される。
 - MVP最低基準を数値で判定できる。
 - 30分runでprocess crash、継続的memory／latency増加、thread leakがない。
 - Windows gate判断とQ2進行可否がreportに明記される。
@@ -7452,15 +6805,14 @@ process-wide monotonic timing、latest-slot metrics、tracking／avatar apply ti
 cargo fmt --all -- --check
 cargo test --workspace --no-fail-fast
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 cargo build -p vtuber-desktop --release
-# 上記に加え、60秒measurementと30分soakを実施しartifactを保存する。
+# 60秒metrics runと30分soakを実施し、artifact hashをreportへ記録する。
 ```
 
 
 ## M1-09: macOS vertical acceptance（保留）
-状態: `DEFERRED`
-実行単位: `M1-09-NNN`
+状態: `DEFERRED`  
+実行単位: `M1-09-NNN`  
 重点参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 
@@ -7503,8 +6855,8 @@ macOS `.app`形態でcamera permissionを含む同等縦断動作を確認する
 
 #### M1-09-001: minimal macOS `.app` bundle layoutを作る
 
-状態: `DEFERRED`
-依存: `M1-08`
+状態: `DEFERRED`  
+依存: `M1-08`  
 親参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 **変更候補**
@@ -7543,8 +6895,8 @@ cargo build -p vtuber-desktop --release
 
 #### M1-09-002: `Info.plist`とresource locatorを完成させる
 
-状態: `DEFERRED`
-依存: `M1-09-001`
+状態: `DEFERRED`  
+依存: `M1-09-001`  
 親参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 **変更候補**
@@ -7583,8 +6935,8 @@ cargo test -p vtuber-app resource_locator
 
 #### M1-09-003: macOS camera permission flowを`.app`で検証する
 
-状態: `DEFERRED`
-依存: `M1-09-002`
+状態: `DEFERRED`  
+依存: `M1-09-002`  
 親参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 **変更候補**
@@ -7623,8 +6975,8 @@ tccutil reset Camera <bundle-id>（必要な場合。実行内容を記録）
 
 #### M1-09-004: Apple Silicon release buildとbasic smokeを実施する
 
-状態: `DEFERRED`
-依存: `M1-09-003`
+状態: `DEFERRED`  
+依存: `M1-09-003`  
 親参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 **変更候補**
@@ -7663,8 +7015,8 @@ cargo run -p xtask -- package-macos
 
 #### M1-09-005: M1-08と同じfunctional／recovery protocolをmacOSで実施する
 
-状態: `DEFERRED`
-依存: `M1-09-004`
+状態: `DEFERRED`  
+依存: `M1-09-004`  
 親参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 **変更候補**
@@ -7702,8 +7054,8 @@ cargo run -p xtask -- package-macos
 
 #### M1-09-006: macOS latency／rateと30分soakを実施する
 
-状態: `DEFERRED`
-依存: `M1-09-005`
+状態: `DEFERRED`  
+依存: `M1-09-005`  
 親参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 **変更候補**
@@ -7741,8 +7093,8 @@ cargo run -p xtask -- package-macos
 
 #### M1-09-007: Windows／macOS差分を分類する
 
-状態: `DEFERRED`
-依存: `M1-09-006`
+状態: `DEFERRED`  
+依存: `M1-09-006`  
 親参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 **変更候補**
@@ -7780,8 +7132,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### M1-09-008: macOS vertical acceptance reportとMilestone 1 gateを完成させる
 
-状態: `DEFERRED`
-依存: `M1-09-007`
+状態: `DEFERRED`  
+依存: `M1-09-007`  
 親参照: DESIGN.md §4.1、§13.4、§22.2、§24、ADR-007
 
 **変更候補**
@@ -7821,8 +7173,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ## Q2-01: 5母音と表情品質
-状態: `PENDING`
-実行単位: `Q2-01-NNN`
+状態: `PENDING`  
+実行単位: `Q2-01-NNN`  
 重点参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 
@@ -7860,8 +7212,8 @@ backendが提供するblendshapeを検証し、5母音とより自然なblink／
 
 #### Q2-01-001: blendshape output contractをmanifestへ追加する
 
-状態: `PENDING`
-依存: `M1-08-019`
+状態: `PENDING`  
+依存: `M1-08-019`  
 親参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 **変更候補**
@@ -7900,8 +7252,8 @@ cargo run -p xtask -- model verify
 
 #### Q2-01-002: blendshape tensor decodeを実装する
 
-状態: `PENDING`
-依存: `Q2-01-001`
+状態: `PENDING`  
+依存: `Q2-01-001`  
 親参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 **変更候補**
@@ -7939,8 +7291,8 @@ cargo test -p vtuber-inference blendshape_decode
 
 #### Q2-01-003: neutral baseline calibrationをblendshapeへ拡張する
 
-状態: `PENDING`
-依存: `Q2-01-002`
+状態: `PENDING`  
+依存: `Q2-01-002`  
 親参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 **変更候補**
@@ -7978,8 +7330,8 @@ cargo test -p vtuber-tracking blendshape_calibration
 
 #### Q2-01-004: 5母音normalize／competition policyを実装する
 
-状態: `PENDING`
-依存: `Q2-01-003`
+状態: `PENDING`  
+依存: `Q2-01-003`  
 親参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 **変更候補**
@@ -8017,8 +7369,8 @@ cargo test -p vtuber-tracking vowel_normalization
 
 #### Q2-01-005: coarticulation smoothingを実装する
 
-状態: `PENDING`
-依存: `Q2-01-004`
+状態: `PENDING`  
+依存: `Q2-01-004`  
 親参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 **変更候補**
@@ -8056,8 +7408,8 @@ cargo test -p vtuber-tracking vowel_filter
 
 #### Q2-01-006: blink／gaze品質をblendshapeで改善する
 
-状態: `PENDING`
-依存: `Q2-01-005`
+状態: `PENDING`  
+依存: `Q2-01-005`  
 親参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 **変更候補**
@@ -8095,8 +7447,8 @@ cargo test -p vtuber-tracking blendshape_blink_gaze
 
 #### Q2-01-007: Expression conflict／override integration testを追加する
 
-状態: `PENDING`
-依存: `Q2-01-006`
+状態: `PENDING`  
+依存: `Q2-01-006`  
 親参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 **変更候補**
@@ -8134,8 +7486,8 @@ cargo test -p vtuber-avatar expression_conflict
 
 #### Q2-01-008: UI calibration値とQ2-01総合検証を追加する
 
-状態: `PENDING`
-依存: `Q2-01-007`
+状態: `PENDING`  
+依存: `Q2-01-007`  
 親参照: DESIGN.md §14、§15.4、§16.8、§25 R5
 
 **変更候補**
@@ -8173,8 +7525,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ## Q2-02: settings、recent avatar、import UX
-状態: `PENDING`
-実行単位: `Q2-02-NNN`
+状態: `PENDING`  
+実行単位: `Q2-02-NNN`  
 重点参照: DESIGN.md §17.4、§18.3〜§18.5
 
 
@@ -8208,8 +7560,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### Q2-02-001: versioned config schemaを定義する
 
-状態: `PENDING`
-依存: `M1-08-019`
+状態: `PENDING`  
+依存: `M1-08-019`  
 親参照: DESIGN.md §17.4、§18.3〜§18.5
 
 **変更候補**
@@ -8246,8 +7598,8 @@ cargo test -p vtuber-app config_schema
 
 #### Q2-02-002: config loadとvalidation fallbackを実装する
 
-状態: `PENDING`
-依存: `Q2-02-001`
+状態: `PENDING`  
+依存: `Q2-02-001`  
 親参照: DESIGN.md §17.4、§18.3〜§18.5
 
 **変更候補**
@@ -8284,8 +7636,8 @@ cargo test -p vtuber-app config_load
 
 #### Q2-02-003: atomic config writeとbroken backupを実装する
 
-状態: `PENDING`
-依存: `Q2-02-002`
+状態: `PENDING`  
+依存: `Q2-02-002`  
 親参照: DESIGN.md §17.4、§18.3〜§18.5
 
 **変更候補**
@@ -8322,8 +7674,8 @@ cargo test -p vtuber-app config_save
 
 #### Q2-02-004: config migration frameworkとV1 migration testを作る
 
-状態: `PENDING`
-依存: `Q2-02-003`
+状態: `PENDING`  
+依存: `Q2-02-003`  
 親参照: DESIGN.md §17.4、§18.3〜§18.5
 
 **変更候補**
@@ -8361,8 +7713,8 @@ cargo test -p vtuber-app config_migration
 
 #### Q2-02-005: per-camera calibration identityを保存／解決する
 
-状態: `PENDING`
-依存: `Q2-02-004`
+状態: `PENDING`  
+依存: `Q2-02-004`  
 親参照: DESIGN.md §17.4、§18.3〜§18.5
 
 **変更候補**
@@ -8401,8 +7753,8 @@ cargo test -p vtuber-tracking calibration_profile
 
 #### Q2-02-006: recent avatar listとmissing cleanupを実装する
 
-状態: `PENDING`
-依存: `Q2-02-005`
+状態: `PENDING`  
+依存: `Q2-02-005`  
 親参照: DESIGN.md §17.4、§18.3〜§18.5
 
 **変更候補**
@@ -8440,8 +7792,8 @@ cargo test -p vtuber-app recent_avatar
 
 #### Q2-02-007: optional native file dialogをadapterとして追加する
 
-状態: `PENDING`
-依存: `Q2-02-006`
+状態: `PENDING`  
+依存: `Q2-02-006`  
 親参照: DESIGN.md §17.4、§18.3〜§18.5
 
 **変更候補**
@@ -8480,8 +7832,8 @@ cargo test -p vtuber-app file_dialog
 
 #### Q2-02-008: settings／import UXを総合検証する
 
-状態: `PENDING`
-依存: `Q2-02-007`
+状態: `PENDING`  
+依存: `Q2-02-007`  
 親参照: DESIGN.md §17.4、§18.3〜§18.5
 
 **変更候補**
@@ -8519,8 +7871,8 @@ cargo clippy -p vtuber-app -p vtuber-desktop --all-targets -- -D warnings
 ```
 
 ## Q2-03: performance tuningとlatency budget
-状態: `PENDING`
-実行単位: `Q2-03-NNN`
+状態: `PENDING`  
+実行単位: `Q2-03-NNN`  
 重点参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 
@@ -8557,8 +7909,8 @@ cargo clippy -p vtuber-app -p vtuber-desktop --all-targets -- -D warnings
 
 #### Q2-03-001: fixed-size latency histogramを実装する
 
-状態: `PENDING`
-依存: `M1-08-019`
+状態: `PENDING`  
+依存: `M1-08-019`  
 親参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 **変更候補**
@@ -8595,8 +7947,8 @@ cargo test -p vtuber-core latency_histogram
 
 #### Q2-03-002: capture→apply全stage instrumentationを統一する
 
-状態: `PENDING`
-依存: `Q2-03-001`
+状態: `PENDING`  
+依存: `Q2-03-001`  
 親参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 **変更候補**
@@ -8638,8 +7990,8 @@ cargo test -p vtuber-app diagnostics_snapshot
 
 #### Q2-03-003: recorded replay benchmark harnessを作る
 
-状態: `PENDING`
-依存: `Q2-03-002`
+状態: `PENDING`  
+依存: `Q2-03-002`  
 親参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 **変更候補**
@@ -8677,8 +8029,8 @@ cargo run -p xtask -- bench --help
 
 #### Q2-03-004: allocation profileを取得しhot allocationを特定する
 
-状態: `PENDING`
-依存: `Q2-03-003`
+状態: `PENDING`  
+依存: `Q2-03-003`  
 親参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 **変更候補**
@@ -8716,8 +8068,8 @@ platform profiler command。docsへ正確に記録。
 
 #### Q2-03-005: frame／tensor／preview buffer reuseを最適化する
 
-状態: `PENDING`
-依存: `Q2-03-004`
+状態: `PENDING`  
+依存: `Q2-03-004`  
 親参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 **変更候補**
@@ -8757,8 +8109,8 @@ cargo run -p xtask -- bench --help
 
 #### Q2-03-006: preview throttleとdetector cadenceを計測調整する
 
-状態: `PENDING`
-依存: `Q2-03-005`
+状態: `PENDING`  
+依存: `Q2-03-005`  
 親参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 **変更候補**
@@ -8798,8 +8150,8 @@ manual loss/reacquire protocol
 
 #### Q2-03-007: tract thread behaviorを計測し設定を固定する
 
-状態: `PENDING`
-依存: `Q2-03-006`
+状態: `PENDING`  
+依存: `Q2-03-006`  
 親参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 **変更候補**
@@ -8838,8 +8190,8 @@ cargo test -p vtuber-inference golden
 
 #### Q2-03-008: Windows／macOS最適化reportと目標判定を完成させる
 
-状態: `DEFERRED`
-依存: `Q2-03-007、M1-09`
+状態: `DEFERRED`  
+依存: `Q2-03-007、M1-09`  
 親参照: DESIGN.md §6.1、§14.5〜§14.6、§20.2〜§20.3、§21.5
 
 **変更候補**
@@ -8878,8 +8230,8 @@ cargo run -p xtask -- bench --help
 ```
 
 ## Q2-04: release packaging
-状態: `PENDING`
-実行単位: `Q2-04-NNN`
+状態: `PENDING`  
+実行単位: `Q2-04-NNN`  
 重点参照: DESIGN.md §22、ADR-007
 
 
@@ -8916,8 +8268,8 @@ cargo run -p xtask -- bench --help
 
 #### Q2-04-001: release input／license manifestを定義する
 
-状態: `PENDING`
-依存: `M1-08-019`
+状態: `PENDING`  
+依存: `M1-08-019`  
 親参照: DESIGN.md §22、ADR-007
 
 **変更候補**
@@ -8957,8 +8309,8 @@ cargo deny check licenses
 
 #### Q2-04-002: `xtask package-windows`を実装する
 
-状態: `PENDING`
-依存: `Q2-04-001`
+状態: `PENDING`  
+依存: `Q2-04-001`  
 親参照: DESIGN.md §22、ADR-007
 
 **変更候補**
@@ -8997,8 +8349,8 @@ cargo build -p vtuber-desktop --release
 
 #### Q2-04-003: Windows portable zipとintegrity checkを実装する
 
-状態: `PENDING`
-依存: `Q2-04-002`
+状態: `PENDING`  
+依存: `Q2-04-002`  
 親参照: DESIGN.md §22、ADR-007
 
 **変更候補**
@@ -9037,8 +8389,8 @@ unzip -t <artifact.zip>
 
 #### Q2-04-004: `xtask package-macos`をrelease用に完成させる
 
-状態: `DEFERRED`
-依存: `M1-09、Q2-04-001`
+状態: `DEFERRED`  
+依存: `M1-09、Q2-04-001`  
 親参照: DESIGN.md §22、ADR-007
 
 **変更候補**
@@ -9077,8 +8429,8 @@ plutil -lint <app>/Contents/Info.plist
 
 #### Q2-04-005: macOS ad-hoc signing instructions／verificationを追加する
 
-状態: `DEFERRED`
-依存: `Q2-04-004`
+状態: `DEFERRED`  
+依存: `Q2-04-004`  
 親参照: DESIGN.md §22、ADR-007
 
 **変更候補**
@@ -9117,8 +8469,8 @@ plutil -p <app>/Contents/Info.plist
 
 #### Q2-04-006: version／hash manifestを全packageへ統一する
 
-状態: `DEFERRED`
-依存: `Q2-04-003、Q2-04-005`
+状態: `DEFERRED`  
+依存: `Q2-04-003、Q2-04-005`  
 親参照: DESIGN.md §22、ADR-007
 
 **変更候補**
@@ -9157,8 +8509,8 @@ sha256sum <artifact> 2>/dev/null || shasum -a 256 <artifact>
 
 #### Q2-04-007: clean-location resource／startup testを実施する
 
-状態: `DEFERRED`
-依存: `Q2-04-006`
+状態: `DEFERRED`  
+依存: `Q2-04-006`  
 親参照: DESIGN.md §22、ADR-007
 
 **変更候補**
@@ -9196,8 +8548,8 @@ manual package smoke。artifact hashと実行場所を記録。
 
 #### Q2-04-008: ADR-007とrelease packaging reportを完成させる
 
-状態: `DEFERRED`
-依存: `Q2-04-007`
+状態: `DEFERRED`  
+依存: `Q2-04-007`  
 親参照: DESIGN.md §22、ADR-007
 
 **変更候補**
@@ -9236,8 +8588,8 @@ cargo run -p xtask -- package verify --help
 ```
 
 ## Q2-05: release hardeningとprivacy audit
-状態: `PENDING`
-実行単位: `Q2-05-NNN`
+状態: `PENDING`  
+実行単位: `Q2-05-NNN`  
 重点参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 
@@ -9273,8 +8625,8 @@ cargo run -p xtask -- package verify --help
 
 #### Q2-05-001: privacy／debug data flow inventoryを作る
 
-状態: `PENDING`
-依存: `M1-08-019`
+状態: `PENDING`  
+依存: `M1-08-019`  
 親参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 **変更候補**
@@ -9312,8 +8664,8 @@ rg -n "write\(|File::create|reqwest|hyper|TcpStream|UdpSocket|clipboard" crates 
 
 #### Q2-05-002: debug frame／pixel保存をreleaseで無効化する
 
-状態: `PENDING`
-依存: `Q2-05-001`
+状態: `PENDING`  
+依存: `Q2-05-001`  
 親参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 **変更候補**
@@ -9353,8 +8705,8 @@ rg -n "frame_dump|pixel_dump|save_frame|screenshot" crates apps || true
 
 #### Q2-05-003: log redactionとstructured error auditを実装する
 
-状態: `PENDING`
-依存: `Q2-05-002`
+状態: `PENDING`  
+依存: `Q2-05-002`  
 親参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 **変更候補**
@@ -9394,8 +8746,8 @@ rg -n "\{.*landmark|pixels|full_path" crates apps || true
 
 #### Q2-05-004: path／size parserへfuzz-like property testsを追加する
 
-状態: `PENDING`
-依存: `Q2-05-003`
+状態: `PENDING`  
+依存: `Q2-05-003`  
 親参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 **変更候補**
@@ -9434,8 +8786,8 @@ cargo test -p vtuber-app config_adversarial
 
 #### Q2-05-005: worker panic／unexpected exit handlingをhardeningする
 
-状態: `PENDING`
-依存: `Q2-05-004`
+状態: `PENDING`  
+依存: `Q2-05-004`  
 親参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 **変更候補**
@@ -9475,8 +8827,8 @@ cargo test -p vtuber-core -p vtuber-camera -p vtuber-inference -p vtuber-app wor
 
 #### Q2-05-006: camera reconnect edge casesを追加検証する
 
-状態: `PENDING`
-依存: `Q2-05-005`
+状態: `PENDING`  
+依存: `Q2-05-005`  
 親参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 **変更候補**
@@ -9513,8 +8865,8 @@ cargo test -p vtuber-camera reconnect_edges -- --nocapture
 
 #### Q2-05-007: release profile／crash-free shutdownを検証する
 
-状態: `PENDING`
-依存: `Q2-05-006`
+状態: `PENDING`  
+依存: `Q2-05-006`  
 親参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 **変更候補**
@@ -9554,8 +8906,8 @@ cargo build -p vtuber-desktop --release
 
 #### Q2-05-008: dependency／license／privacy release auditを完成させる
 
-状態: `PENDING`
-依存: `Q2-05-007`
+状態: `PENDING`  
+依存: `Q2-05-007`  
 親参照: DESIGN.md §6.2〜§6.3、§20.4、§21、AGENTS.md §Error handling／§Model provenance
 
 **変更候補**
@@ -9597,8 +8949,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 # Research 3 — 自由研究としての評価
 
 ## R3-01: smoothingとlatencyの比較実験
-状態: `PENDING`
-実行単位: `R3-01-NNN`
+状態: `PENDING`  
+実行単位: `R3-01-NNN`  
 重点参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 
@@ -9645,8 +8997,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 #### R3-01-001: experiment dataset／replay contractを固定する
 
-状態: `PENDING`
-依存: `Q2-01-008、Q2-03-007`
+状態: `PENDING`  
+依存: `Q2-01-008、Q2-03-007`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9685,8 +9037,8 @@ cargo test -p vtuber-tracking experiment_replay
 
 #### R3-01-002: filter strategy interfaceとmeasurement hooksを定義する
 
-状態: `PENDING`
-依存: `R3-01-001`
+状態: `PENDING`  
+依存: `R3-01-001`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9723,8 +9075,8 @@ cargo test -p vtuber-tracking filter_strategy
 
 #### R3-01-003: fixed exponential smoothing baselineをadapter化する
 
-状態: `PENDING`
-依存: `R3-01-002`
+状態: `PENDING`  
+依存: `R3-01-002`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9761,8 +9113,8 @@ cargo test -p vtuber-tracking experiment_exponential
 
 #### R3-01-004: One Euro filterをquaternion入力向けに実装する
 
-状態: `PENDING`
-依存: `R3-01-003`
+状態: `PENDING`  
+依存: `R3-01-003`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9799,8 +9151,8 @@ cargo test -p vtuber-tracking experiment_one_euro
 
 #### R3-01-005: quaternion log-space adaptive filterを実装する
 
-状態: `PENDING`
-依存: `R3-01-004`
+状態: `PENDING`  
+依存: `R3-01-004`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9837,8 +9189,8 @@ cargo test -p vtuber-tracking experiment_log_adaptive
 
 #### R3-01-006: output-only slerp filterを実装する
 
-状態: `PENDING`
-依存: `R3-01-005`
+状態: `PENDING`  
+依存: `R3-01-005`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9875,8 +9227,8 @@ cargo test -p vtuber-tracking experiment_output_slerp
 
 #### R3-01-007: 標準scenario generatorを実装する
 
-状態: `PENDING`
-依存: `R3-01-006`
+状態: `PENDING`  
+依存: `R3-01-006`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9914,8 +9266,8 @@ cargo test -p vtuber-tracking experiment_scenarios
 
 #### R3-01-008: jitter／rise time／overshoot／phase lag metricsを実装する
 
-状態: `PENDING`
-依存: `R3-01-007`
+状態: `PENDING`  
+依存: `R3-01-007`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9953,8 +9305,8 @@ cargo test -p vtuber-tracking experiment_metrics
 
 #### R3-01-009: filter×scenario matrixを実行しraw CSVを生成する
 
-状態: `PENDING`
-依存: `R3-01-008`
+状態: `PENDING`  
+依存: `R3-01-008`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -9993,8 +9345,8 @@ cargo run -p xtask -- filter-experiment
 
 #### R3-01-010: 比較reportとrecommended defaultsを完成させる
 
-状態: `PENDING`
-依存: `R3-01-009`
+状態: `PENDING`  
+依存: `R3-01-009`  
 親参照: DESIGN.md §15.6、§23、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**

@@ -85,7 +85,7 @@ fn handle_acceptance(args: &[String]) {
             let manifest = args
                 .get(1)
                 .map(Path::new)
-                .unwrap_or_else(|| Path::new("docs/acceptance/model-manifest.md"));
+                .unwrap_or_else(|| Path::new("assets/models/manifest.toml"));
             if let Err(e) = acceptance::verify_models(manifest) {
                 eprintln!("verify failed: {e}");
                 process::exit(1);

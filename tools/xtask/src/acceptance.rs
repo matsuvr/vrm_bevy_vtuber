@@ -84,39 +84,40 @@ pub fn print_env() {
     println!("- Camera device names + descriptors");
 }
 
-/// Verify model hashes in a manifest.
-pub fn verify_models(manifest_path: &Path) -> Result<(), String> {
-    if !manifest_path.exists() {
-        return Err(format!("manifest not found: {}", manifest_path.display()));
-    }
+/// Verify every artifact in the production face pipeline manifest.
+pub fn verify_models(
+    manifest_path: &Path,
+) -> Result<(), vtuber_app::model_catalog::ModelCatalogError> {
+    let pipeline = vtuber_app::model_catalog::verify_pipeline_artifacts(manifest_path)?;
 
-    let content =
-        fs::read_to_string(manifest_path).map_err(|e| format!("cannot read manifest: {e}"))?;
-
-    let _ = content;
-    let root = manifest_path
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or_else(|| {
-            format!(
-                "cannot derive workspace root from {}",
-                manifest_path.display()
-            )
-        })?;
-    let descriptor = vtuber_app::model_catalog::load_production_descriptor(root)
-        .map_err(|error| format!("cannot load production descriptor: {error}"))?;
-    vtuber_inference::backend::tract::verify_model_file(&descriptor.path, &descriptor.sha256)
-        .map_err(|error| format!("production model verification failed: {error}"))?;
-
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     println!("Model manifest: {}", manifest_path.display());
-    println!("Production model: {}", descriptor.path.display());
-    println!("SHA-256: verified");
+    println!("Production pipeline: {}", pipeline.id);
     println!(
-        "Tensor: {:?} {}",
-        descriptor.input_shape, descriptor.input_dtype
+        "Detector: {}",
+        manifest_dir.join(&pipeline.detector.file).display()
     );
-    println!("Schema: {}", descriptor.schema.0);
+    println!(
+        "Landmarks: {}",
+        manifest_dir.join(&pipeline.landmarks.file).display()
+    );
+    println!("SHA-256 and byte size: verified for both artifacts");
+    println!(
+        "Detector tensor: {:?} {}",
+        pipeline.detector.input.shape, pipeline.detector.input.dtype
+    );
+    println!(
+        "Landmark tensor: {:?} {}",
+        pipeline.landmarks.input.shape, pipeline.landmarks.input.dtype
+    );
+    println!(
+        "Landmark schema: {}",
+        pipeline
+            .landmarks
+            .schema
+            .as_deref()
+            .unwrap_or("unspecified")
+    );
 
     Ok(())
 }
@@ -131,9 +132,9 @@ pub fn print_help() {
     println!("COMMANDS:");
     println!("  env              Print test environment info");
     println!("  new [base-dir]   Create a new acceptance run directory");
-    println!("  verify <manifest> Verify model hashes against manifest");
+    println!("  verify <manifest> Verify both pipeline artifacts against manifest");
     println!("  help             Show this help");
     println!();
     println!("The acceptance report template is at:");
-    println!("  docs/acceptance/windows-m1.md");
+    println!("  assets/models/manifest.toml");
 }

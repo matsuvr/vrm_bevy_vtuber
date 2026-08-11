@@ -56,24 +56,57 @@ input = { shape = [1, 192, 192, 3], dtype = "float32", layout = "NHWC", mean = 0
 output = { names = ["face_landmarks"], description = "468 3D landmarks" }
 notes = ["Legacy float32 model evaluated as TFLite fallback; also blocked by tract-tflite F16 ADD operator."]
 
+[production_pipeline]
+id = "ultraface-rfb-320-peppapig-98"
+detector_model = "ultraface-rfb-320"
+landmark_model = "peppapig-98"
+
+[production_pipeline.detector_postprocess]
+score_threshold = 0.7
+nms_iou = 0.3
+max_pre_nms_candidates = 256
+max_post_nms_detections = 16
+
+[production_pipeline.crop]
+square_scale = 1.35
+center_y_offset_fraction = -0.05
+output_size = [256, 256]
+interpolation = "bilinear"
+outside_fill = "normalization_mean"
+
 [[models]]
-name = "Peppa_Pig_Face_Landmark student 256x256"
-runtime = "tract-onnx 0.23.4"
+id = "peppapig-98"
+role = "face_landmarks"
+file = "peppapig_student_1x3x256x256.onnx"
+byte_size = 13728231
+sha256 = "73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A"
 input_name = "input"
-schema = "peppapig-98"
 source = "https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/436_Peppa_Pig_Face_Landmark/resources.tar.gz"
 upstream = "https://github.com/610265158/Peppa_Pig_Face_Landmark"
-upstream_license = "Apache-2.0"
-upstream_license_url = "https://github.com/610265158/Peppa_Pig_Face_Landmark/blob/master/LICENSE"
-converted_by = "PINTO0309/PINTO_model_zoo (MIT scripts; model license follows upstream Apache-2.0)"
-redistribution = "allowed under Apache-2.0; prefer upstream for updates"
-file = "peppapig_student_1x3x256x256.onnx"
-sha256 = "73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A"
-purpose = "ONNX face landmark detector fallback validated against tract-onnx 0.23.4"
-input = { shape = [1, 3, 256, 256], dtype = "float32", layout = "NCHW", mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225], description = "ImageNet normalization, RGB" }
-output = { names = ["/Concat_1"], shape = [1, 98, 3], dtype = "float32", description = "98 facial landmarks with visibility/confidence in third channel" }
-pose = { method = "canonical_orthographic_2d", template = "synthetic-face-v1", representative_indices = [16, 37, 46, 52, 63, 71, 76, 82], coordinate_system = "normalized image x-right y-down; positive yaw right, pitch chin-up, roll clockwise" }
-notes = [
-    "Selected as production ONNX fallback after MediaPipe TFLite models failed to load in tract-tflite 0.23.4 due to unsupported float16 ADD operator.",
-    "Output landmarks are image-space (x, y, confidence); this artifact is landmark-only and requires a verified face detector crop stage for real-camera production use.",
+license = "Apache-2.0"
+license_url = "https://github.com/610265158/Peppa_Pig_Face_Landmark/blob/master/LICENSE"
+schema = "peppapig-98"
+requires_crop = true
+landmark_coordinate_encoding = "normalized_0_1"
+pose_method = "canonical_orthographic_2d"
+representative_indices = [16, 37, 46, 52, 63, 71, 76, 82]
+input = { shape = [1, 3, 256, 256], dtype = "float32", layout = "NCHW", channel_order = "RGB", value_domain = "unit_float", normalization = { mean = [0.485, 0.456, 0.406], scale = [0.229, 0.224, 0.225] } }
+outputs = [{ name = "/Concat_1", shape = [1, 98, 3], dtype = "float32", description = "98 facial landmarks with visibility/confidence in third channel" }]
+
+[[models]]
+id = "ultraface-rfb-320"
+role = "face_detector"
+file = "version-RFB-320.onnx"
+byte_size = 1270727
+sha256 = "34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017"
+input_name = "input"
+source = "https://huggingface.co/onnxmodelzoo/version-RFB-320/resolve/main/version-RFB-320.onnx"
+upstream = "https://github.com/onnx/models/tree/main/vision/body_analysis/ultraface"
+license = "MIT"
+license_url = "https://opensource.org/license/mit/"
+requires_crop = false
+input = { shape = [1, 3, 240, 320], dtype = "float32", layout = "NCHW", channel_order = "RGB", value_domain = "raw_u8", normalization = { mean = [127.0, 127.0, 127.0], scale = [128.0, 128.0, 128.0] } }
+outputs = [
+    { name = "scores", shape = [1, 4420, 2], dtype = "float32", description = "Per-anchor background and face scores" },
+    { name = "boxes", shape = [1, 4420, 4], dtype = "float32", description = "Per-anchor encoded face boxes" },
 ]
