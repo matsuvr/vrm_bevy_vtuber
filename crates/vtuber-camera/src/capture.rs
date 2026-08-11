@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use vtuber_core::{LatestSlot, StopToken, VideoFrame, WorkerHandle};
+use vtuber_core::{FrameSeq, LatestSlot, StopToken, VideoFrame, WorkerHandle};
 
 use crate::device::{CameraBackend, CameraDescriptor, CameraError, CameraFormat, CameraRequest};
 
@@ -290,6 +290,7 @@ where
     let mut selected_device: Option<CameraDescriptor> = None;
     let mut requested_format: Option<CameraRequest> = None;
     let mut reconnect_attempts: u32 = 0;
+    let mut next_frame_seq = 0u64;
     let mut metrics = CaptureMetrics::default();
 
     while !stop.is_stopped() {
@@ -317,6 +318,7 @@ where
                         &state,
                         &slot,
                         &mut metrics,
+                        &mut next_frame_seq,
                     ) {
                         Ok(stream) => {
                             active_stream = Some(stream);
@@ -340,6 +342,7 @@ where
                     if let Some(mut stream) = active_stream.take() {
                         let _ = stream.stop();
                     }
+                    slot.clear();
                     update_state(&state, |s| {
                         s.state = CaptureServiceState::Selected;
                     });
@@ -348,6 +351,7 @@ where
                     if let Some(mut stream) = active_stream.take() {
                         let _ = stream.stop();
                     }
+                    slot.clear();
                     selected_device = None;
                     requested_format = None;
                     reconnect_attempts = 0;
@@ -371,6 +375,7 @@ where
             match stream.next_frame(&stop) {
                 Ok(frame) => {
                     reconnect_attempts = 0;
+                    let frame = stamp_frame_sequence(frame, &mut next_frame_seq);
                     metrics.frames_captured = metrics.frames_captured.saturating_add(1);
                     if !slot.publish(frame) {
                         metrics.frames_dropped = metrics.frames_dropped.saturating_add(1);
@@ -384,6 +389,7 @@ where
                 }
                 Err(CameraError::Disconnected) => {
                     active_stream = None;
+                    slot.clear();
                     metrics.last_error = Some("CAMERA_DISCONNECTED".into());
                     if reconnect_attempts < MAX_RECONNECT_ATTEMPTS && selected_device.is_some() {
                         reconnect_attempts += 1;
@@ -405,6 +411,7 @@ where
                                 &state,
                                 &slot,
                                 &mut metrics,
+                                &mut next_frame_seq,
                             ) {
                                 Ok(stream) => {
                                     active_stream = Some(stream);
@@ -451,6 +458,7 @@ where
 }
 
 /// Opens the requested camera and returns the stream.
+#[allow(clippy::too_many_arguments)]
 fn open_and_stream<B>(
     backend: &B,
     device: &CameraDescriptor,
@@ -459,6 +467,7 @@ fn open_and_stream<B>(
     state: &Arc<std::sync::Mutex<SharedState>>,
     slot: &Arc<LatestSlot<VideoFrame>>,
     metrics: &mut CaptureMetrics,
+    next_frame_seq: &mut u64,
 ) -> Result<Box<dyn crate::device::CameraStream>, CameraError>
 where
     B: CameraBackend,
@@ -468,14 +477,12 @@ where
 
     // Discard stale slot contents so the consumer does not see an old frame
     // after a reconnect.
-    let current_gen = slot.generation();
-    if let Some(vtuber_core::ReadResult::New(_)) = slot.try_read_after(current_gen) {
-        // The slot may have been overwritten; this is fine.
-    }
+    slot.clear();
 
     // Capture one frame immediately to confirm the device is really alive.
     match stream.next_frame(stop) {
         Ok(frame) => {
+            let frame = stamp_frame_sequence(frame, next_frame_seq);
             metrics.frames_captured = metrics.frames_captured.saturating_add(1);
             if !slot.publish(frame) {
                 metrics.frames_dropped = metrics.frames_dropped.saturating_add(1);
@@ -492,6 +499,17 @@ where
             Err(err)
         }
     }
+}
+
+/// Assigns the capture-owned sequence number to a frame.
+///
+/// Backend streams may restart their local counters after a reconnect. The
+/// capture worker owns the cross-session sequence contract, so the sequence
+/// is overwritten here before a frame crosses the worker boundary.
+fn stamp_frame_sequence(mut frame: VideoFrame, next_frame_seq: &mut u64) -> VideoFrame {
+    *next_frame_seq = next_frame_seq.saturating_add(1);
+    frame.seq = FrameSeq(*next_frame_seq);
+    frame
 }
 
 /// Computes an exponential-backoff delay capped at [`RECONNECT_DELAY_MAX`].
@@ -562,6 +580,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
 
         assert_eq!(controller.selected_device(), Some(device));
+        assert_eq!(slot.try_read_after(0), None);
         let _ = controller.shutdown();
     }
 
@@ -641,6 +660,25 @@ mod tests {
             "expected reconnect to produce more frames, got {:?}",
             metrics
         );
+    }
+
+    #[test]
+    fn reconnect_keeps_capture_sequence_monotonic() {
+        let mut next_frame_seq = 0;
+        let frame = || VideoFrame {
+            seq: FrameSeq(0),
+            captured_at: vtuber_core::MonoTimeNs(0),
+            width: 1,
+            height: 1,
+            stride_bytes: 1,
+            format: vtuber_core::PixelFormat::Gray8,
+            data: vec![0].into(),
+        };
+
+        // A backend is allowed to restart its local sequence at zero after a
+        // reconnect; the capture-owned stamp must not do so.
+        assert_eq!(stamp_frame_sequence(frame(), &mut next_frame_seq).seq.0, 1);
+        assert_eq!(stamp_frame_sequence(frame(), &mut next_frame_seq).seq.0, 2);
     }
 
     #[test]

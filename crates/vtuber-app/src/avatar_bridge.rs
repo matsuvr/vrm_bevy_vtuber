@@ -19,7 +19,7 @@ pub fn publish_control_frame_system(
     lifecycle: Res<AvatarLifecycle>,
     mut active: ResMut<ActiveControlFrame>,
 ) {
-    if lifecycle.state() != AvatarLifecycleState::Ready {
+    if lifecycle.state() != AvatarLifecycleState::Ready || !tracking.control_active {
         active.frame = None;
         return;
     }
@@ -71,5 +71,50 @@ pub fn sync_avatar_diagnostics(
             diagnostics.capture_to_apply_p50_ms = None;
             diagnostics.capture_to_apply_p95_ms = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vtuber_avatar::lifecycle::AvatarLifecycle;
+
+    #[test]
+    fn inactive_tracking_session_clears_retained_control_frame() {
+        let mut app = App::new();
+        app.init_resource::<TrackingRuntime>()
+            .init_resource::<AvatarLifecycle>()
+            .init_resource::<ActiveControlFrame>()
+            .add_systems(Update, publish_control_frame_system);
+
+        let root = app.world_mut().spawn_empty().id();
+        {
+            let mut lifecycle = app.world_mut().resource_mut::<AvatarLifecycle>();
+            lifecycle.request_load(root).unwrap();
+            lifecycle.start_binding(root);
+            lifecycle.finish_ready();
+        }
+        let generation = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .current_generation();
+        app.world_mut()
+            .resource_mut::<ActiveControlFrame>()
+            .generation = generation;
+        app.world_mut().resource_mut::<ActiveControlFrame>().frame =
+            Some(vtuber_core::AvatarControlFrame {
+                source_seq: vtuber_core::FrameSeq(1),
+                captured_at: vtuber_core::MonoTimeNs(1),
+                produced_at: vtuber_core::MonoTimeNs(1),
+                confidence: 1.0,
+                state: vtuber_core::TrackingState::Tracking,
+                head: vtuber_core::HeadPose::default(),
+                gaze: None,
+                expressions: vtuber_core::ExpressionCoefficients::default(),
+            });
+
+        app.update();
+
+        assert!(app.world().resource::<ActiveControlFrame>().frame.is_none());
     }
 }

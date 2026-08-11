@@ -13,6 +13,8 @@ pub mod controller;
 pub mod decode;
 /// Model descriptor and runtime settings.
 pub mod descriptor;
+/// Detector-specific preprocessing and raw-output runtime.
+pub mod detector;
 /// Typed errors for the inference subsystem.
 pub mod error;
 /// Fixed-size inference timing and drop metrics.

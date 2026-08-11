@@ -4,7 +4,8 @@
 use std::path::PathBuf;
 
 use vtuber_inference::probe::{
-    OnnxProbeStage, ULTRAFACE_RFB_320_MODEL_ID, ULTRAFACE_RFB_320_SHA256, probe_ultraface_model,
+    OnnxProbeStage, ULTRAFACE_RFB_320_MODEL_ID, ULTRAFACE_RFB_320_SHA256,
+    format_ultraface_operator_inventory, probe_ultraface_model,
 };
 
 fn model_path() -> PathBuf {
@@ -29,6 +30,16 @@ fn ultraface_probe_exact_artifact_or_reproducible_blocker() {
                     .iter()
                     .flat_map(|run| &run.outputs)
                     .all(|output| output.all_finite)
+            );
+            let inventory_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets/models/operator-inventory-ultraface.txt");
+            let inventory = format_ultraface_operator_inventory(&report);
+            let write_result = std::fs::write(&inventory_path, inventory);
+            assert!(
+                write_result.is_ok(),
+                "failed to write {}: {:?}",
+                inventory_path.display(),
+                write_result.err()
             );
             println!("{report:#?}");
         }

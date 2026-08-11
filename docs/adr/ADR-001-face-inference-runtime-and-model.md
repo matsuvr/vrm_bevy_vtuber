@@ -93,7 +93,7 @@ until a manifest-tracked, pure-Rust-compatible detector/crop stage is supplied
 and verified on a real camera frame. No camera or production pose success is
 claimed from the current unit tests alone.
 
-## M1-08-013-002 exact UltraFace probe blocker
+## M1-08-013-002 exact UltraFace probe result
 
 The repair leaf fixes the detector candidate to ultraface-rfb-320 and the
 runtime to tract-onnx = 0.23.4. The exact artifact identity is
@@ -102,10 +102,12 @@ version-RFB-320.onnx, 1,270,727 bytes, SHA-256
 The current ONNX Model Zoo mirror is
 https://huggingface.co/onnxmodelzoo/version-RFB-320/resolve/main/version-RFB-320.onnx.
 
-On 2026-08-11 the official model page exposed the fixed size and SHA, but the
-artifact could not be materialized into assets/models/ in the work
-environment. Therefore the exact probe stopped at artifact_read; no
-load/optimize/runnable/run result or operator inventory is claimed. The
-reproducible command and typed error are recorded in
-assets/models/operator-inventory-ultraface.blocked.md. M1-08-013-003 and
-later repair leaves must not start until this blocker is resolved.
+On 2026-08-11 the exact local artifact passed the tract-onnx 0.23.4 probe:
+load, input fact validation, operator inventory, optimize, runnable
+construction, and execution all passed. The loaded input is F32
+[1,3,240,320]. Outputs are ordered as scores F32 [1,4420,2] and boxes F32
+[1,4420,4]. Both zero and mean-normalized runs produced finite values; the
+reported element counts are 8,840 and 17,680 respectively. The stable
+452-node source-graph inventory is recorded in
+assets/models/operator-inventory-ultraface.txt. The model-with-test-data
+artifact was not required for this exact contract probe.

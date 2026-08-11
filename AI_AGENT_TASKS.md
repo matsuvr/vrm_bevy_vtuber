@@ -43,7 +43,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-現在の次実行単位は**`M1-08-013-002`**であり、exact artifact不足により `BLOCKED` で停止している。`M1-08-013`本体をもう一度丸ごと委嘱してはならない。
+現在の次実行単位は**`M1-08-013-004`**である。`M1-08-013`本体をもう一度丸ごと委嘱してはならない。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -6035,7 +6035,7 @@ Windows 11で、GUIからのVRM import、実camera capture、detector→crop→l
 
 ### 実行subtask
 
-> `M1-08-001`〜`M1-08-008`は履歴保持のため残す。`M1-08-009`〜`M1-08-012`はDONEである。現在は`M1-08-013-001`から開始する。
+> `M1-08-001`〜`M1-08-008`は履歴保持のため残す。`M1-08-009`〜`M1-08-012`はDONEである。repair branchは`M1-08-013-004`を次に実行する。
 
 
 #### M1-08-001: Windows acceptance buildとtest environmentを固定する
@@ -6662,7 +6662,7 @@ cargo clippy -p vtuber-app -p vtuber-inference -p xtask --all-targets -- -D warn
 
 #### M1-08-013-002: UltraFaceをtract-onnx 0.23.4でexact probeする
 
-状態: `BLOCKED`
+状態: `DONE`
 依存: `M1-08-013-001`
 親参照: M1-08-013、ADR-001
 
@@ -6708,7 +6708,7 @@ cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 
 #### M1-08-013-003: UltraFace preprocessとdetector stage runtimeを実装する
 
-状態: `PENDING`
+状態: `DONE`
 依存: `M1-08-013-002`
 親参照: M1-08-013、DESIGN.md §14
 
@@ -6718,6 +6718,7 @@ cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 - `crates/vtuber-inference/src/detector/preprocess.rs`
 - `crates/vtuber-inference/src/detector/runtime.rs`
 - `crates/vtuber-inference/tests/detector_preprocess.rs`
+- `crates/vtuber-inference/tests/detector_runtime.rs`
 
 **実装指示**
 

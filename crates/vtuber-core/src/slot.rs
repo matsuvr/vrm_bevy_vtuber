@@ -108,6 +108,18 @@ impl<T> LatestSlot<T> {
         self.changed.notify_all();
     }
 
+    /// Removes the currently retained value without closing the slot.
+    ///
+    /// This is used at a session boundary, such as camera Stop or reconnect,
+    /// so a consumer cannot process a frame captured by the previous session.
+    /// The generation is intentionally unchanged: clearing is not a produced
+    /// value and the next publish remains the only value visible to readers.
+    pub fn clear(&self) {
+        let mut state = self.inner.lock().expect("LatestSlot mutex poisoned");
+        state.value = None;
+        self.changed.notify_all();
+    }
+
     /// Returns the number of values that were overwritten before being read.
     #[must_use]
     pub fn overwritten_count(&self) -> u64 {
@@ -197,6 +209,21 @@ mod tests {
         let slot = LatestSlot::new();
         slot.close();
         assert!(!slot.publish(1));
+    }
+
+    #[test]
+    fn clear_removes_retained_value_without_closing_slot() {
+        let slot = LatestSlot::new();
+        assert!(slot.publish(42));
+        let generation = slot.generation();
+
+        slot.clear();
+
+        assert!(!slot.is_closed());
+        assert_eq!(slot.generation(), generation);
+        assert_eq!(slot.try_read_after(0), None);
+        assert!(slot.publish(43));
+        assert_eq!(slot.try_read_after(generation), Some(ReadResult::New(43)));
     }
 
     #[test]

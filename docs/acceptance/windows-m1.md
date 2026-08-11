@@ -117,6 +117,34 @@ Skip conditions:
 
 ## 4. Recovery Protocol (M1-08-004)
 
+### 4.0 Automated recovery preflight
+
+実機操作に先立つソフトウェア回復ゲートを 2026-08-11 に実施した。
+これはWindows GUI／物理cameraの受入結果ではなく、回復契約と状態遷移を
+自動検証した結果である。
+
+| Recovery contract | Evidence | Result |
+|---|---|---|
+| Repeated inference result is not replayed forever | `vtuber-app` observation-gate tests | PASS |
+| Stale inference becomes face loss after 250ms | `vtuber-app` observation-gate tests | PASS |
+| Missing inference output enters normal no-face path | `vtuber-app` observation-gate tests | PASS |
+| Lost hold / neutral decay / reacquisition | `vtuber-tracking` loss-recovery tests | PASS |
+| Camera Stop removes retained frame | `vtuber-camera` capture tests | PASS |
+| Camera reconnect preserves capture sequence | `vtuber-camera` capture tests | PASS |
+| Inactive tracking clears retained avatar control frame | `vtuber-app` avatar-bridge test | PASS |
+
+Executed commands:
+
+```text
+cargo test -p vtuber-core -p vtuber-camera -p vtuber-app --lib --tests
+cargo clippy -p vtuber-core -p vtuber-camera -p vtuber-app --all-targets -- -D warnings
+```
+
+The physical checklist below remains `NOT RUN` until the release binary is
+tested with a Windows camera and two imported VRM 1.0 models. In particular,
+the automated preflight does not prove camera unplug/replug, GUI avatar
+replacement, thread-count stability, or the two-second reacquisition target.
+
 ### 4.1 Face Loss / Return
 
 - [ ] Move face out of frame
