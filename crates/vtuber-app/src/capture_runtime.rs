@@ -310,6 +310,16 @@ pub fn capture_bridge_system(
 ) {
     use crate::orchestrator::PipelineState;
 
+    if capture.controller().worker_finished()
+        && matches!(
+            capture.state(),
+            CaptureServiceState::Starting | CaptureServiceState::Running
+        )
+        && orchestrator.capture_desired()
+    {
+        orchestrator.fail_camera("capture worker exited unexpectedly".to_string());
+    }
+
     // Handle camera enumeration refresh independently from start/stop
     // acknowledgements. Refreshing while the pipeline is running must not
     // accidentally stop or restart the worker.
@@ -380,6 +390,6 @@ pub fn capture_bridge_system(
             CaptureServiceState::Selected | CaptureServiceState::Idle
         )
     {
-        orchestrator.set_pipeline_state(PipelineState::Idle);
+        orchestrator.complete_capture_stop();
     }
 }

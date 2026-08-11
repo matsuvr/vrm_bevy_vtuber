@@ -221,6 +221,13 @@ impl Orchestrator {
                         // Capture is still owned by the current session; only
                         // the inference worker needs to be restarted.
                         self.capture_ack = true;
+                    } else if self.selected_camera.is_some() {
+                        // An inference failure stops capture as part of
+                        // recovery. The retry must therefore request a fresh
+                        // camera start instead of reusing a stopped session.
+                        self.pipeline_state = PipelineState::Starting;
+                        self.capture_desired = true;
+                        self.capture_ack = false;
                     }
                 }
                 self.retry_avatar_load();
@@ -481,6 +488,35 @@ impl Orchestrator {
     /// Set the last error (called by the capture bridge system).
     pub fn set_last_error(&mut self, error: Option<OrchestratorError>) {
         self.last_error = error;
+    }
+
+    /// Moves an inference failure through the normal reverse-order shutdown.
+    ///
+    /// The inference bridge calls this after observing a failed worker. The
+    /// capture bridge then stops the camera, while the inference bridge joins
+    /// the failed inference worker first.
+    pub fn fail_inference(&mut self, message: String) {
+        self.last_error = Some(OrchestratorError::InferenceFailed(message));
+        self.capture_desired = false;
+        self.capture_ack = false;
+        self.pipeline_state = PipelineState::Stopping;
+    }
+
+    /// Moves a capture-worker failure through the same recoverable shutdown.
+    pub fn fail_camera(&mut self, message: String) {
+        self.last_error = Some(OrchestratorError::CameraFailed(message));
+        self.capture_desired = false;
+        self.capture_ack = false;
+        self.pipeline_state = PipelineState::Stopping;
+    }
+
+    /// Completes a capture stop while preserving a recoverable failure state.
+    pub fn complete_capture_stop(&mut self) {
+        if self.last_error.is_some() {
+            self.pipeline_state = PipelineState::Failed;
+        } else {
+            self.pipeline_state = PipelineState::Idle;
+        }
     }
 
     /// Get the selected camera descriptor, if any.
@@ -868,6 +904,49 @@ mod tests {
         assert!(orch.take_inference_retry_request());
         assert!(!orch.take_inference_retry_request());
         assert!(orch.take_pending_load_request().is_none());
+    }
+
+    #[test]
+    fn inference_failure_requests_reverse_order_capture_shutdown() {
+        let mut orch = Orchestrator {
+            capture_desired: true,
+            capture_ack: true,
+            pipeline_state: PipelineState::Running,
+            ..Default::default()
+        };
+
+        orch.fail_inference("landmark failed".into());
+
+        assert_eq!(orch.pipeline_state, PipelineState::Stopping);
+        assert!(!orch.capture_desired);
+        assert!(!orch.capture_ack);
+        assert!(matches!(
+            orch.last_error(),
+            Some(OrchestratorError::InferenceFailed(message)) if message == "landmark failed"
+        ));
+
+        orch.complete_capture_stop();
+        assert_eq!(orch.pipeline_state, PipelineState::Failed);
+    }
+
+    #[test]
+    fn retry_after_failed_inference_restarts_capture_when_it_was_stopped() {
+        let mut orch = Orchestrator {
+            imported_model: Some(stub_imported_model()),
+            selected_camera: Some(0),
+            capture_desired: false,
+            capture_ack: true,
+            pipeline_state: PipelineState::Failed,
+            last_error: Some(OrchestratorError::InferenceFailed("model failed".into())),
+            ..Default::default()
+        };
+
+        orch.process_action(&UiAction::RetryAfterError);
+
+        assert_eq!(orch.pipeline_state, PipelineState::Starting);
+        assert!(orch.capture_desired);
+        assert!(!orch.capture_ack);
+        assert!(orch.take_inference_retry_request());
     }
 
     #[test]

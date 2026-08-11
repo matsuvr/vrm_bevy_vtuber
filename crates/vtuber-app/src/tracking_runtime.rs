@@ -44,6 +44,15 @@ struct ObservationGate {
 }
 
 impl ObservationGate {
+    /// Clears the source-sequence boundary at a capture/session reset.
+    ///
+    /// Capture sequence numbers are owned by the capture session. A new
+    /// session may legally start at the same sequence as the previous one,
+    /// so retaining the old value would suppress its first face observation.
+    fn reset(&mut self) {
+        self.last_source_seq = None;
+    }
+
     fn dispatch(
         &mut self,
         latest: Option<&RawFaceObservation>,
@@ -151,6 +160,8 @@ pub fn tracking_bridge_system(
         } else {
             tracking.reset_calibration();
         }
+        tracking.observation_gate.reset();
+        tracking.control_slot.clear();
         tracking.latest_control = None;
         tracking.control_active = false;
         tracking.last_update = None;
@@ -165,6 +176,8 @@ pub fn tracking_bridge_system(
     let pipeline_failed = pipeline_state == crate::orchestrator::PipelineState::Failed;
     if capture_inactive || pipeline_failed {
         tracking.pipeline.reset();
+        tracking.observation_gate.reset();
+        tracking.control_slot.clear();
         tracking.latest_control = None;
         tracking.control_active = false;
         tracking.last_update = None;
@@ -302,7 +315,10 @@ fn tracking_view(state: TrackingState, confidence: f32) -> crate::ui_model::Trac
         is_tracking: matches!(state, UiTrackingState::Tracking),
         state,
         confidence: confidence.clamp(0.0, 1.0),
-        face_detected: !matches!(state, UiTrackingState::Lost),
+        // Searching/initializing is also a no-face state. Keeping this false
+        // prevents the UI from claiming a face is present before the first
+        // valid composite observation arrives.
+        face_detected: matches!(state, UiTrackingState::Tracking),
     }
 }
 
@@ -385,5 +401,28 @@ mod tests {
             gate.dispatch(None, MonoTimeNs(1)),
             ObservationDispatch::NoFace
         );
+    }
+
+    #[test]
+    fn observation_gate_reset_accepts_a_reused_capture_sequence() {
+        let mut gate = ObservationGate::default();
+        let face = observation(7, 1_000_000_000);
+
+        assert!(matches!(
+            gate.dispatch(Some(&face), MonoTimeNs(1_050_000_000)),
+            ObservationDispatch::Face(_)
+        ));
+        gate.reset();
+        assert!(matches!(
+            gate.dispatch(Some(&face), MonoTimeNs(1_050_000_000)),
+            ObservationDispatch::Face(_)
+        ));
+    }
+
+    #[test]
+    fn no_face_is_not_reported_as_detected_while_searching() {
+        let view = tracking_view(TrackingState::Searching, 0.0);
+        assert_eq!(view.state, UiTrackingState::Initializing);
+        assert!(!view.face_detected);
     }
 }

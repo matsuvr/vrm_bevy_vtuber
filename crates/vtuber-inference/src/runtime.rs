@@ -44,7 +44,7 @@ pub enum InferenceOutcome {
 }
 
 /// Per-frame timing reported by a composite runtime.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrameInferenceTiming {
     /// Detector preprocessing and execution time, when the detector ran.
     pub detector: Option<Duration>,
@@ -56,6 +56,10 @@ pub struct FrameInferenceTiming {
     pub decode: Option<Duration>,
     /// Total time measured by the runtime itself.
     pub total: Duration,
+    /// Detector confidence associated with the active ROI, if known.
+    pub detector_confidence: Option<f32>,
+    /// Human-readable ROI lifecycle state after the frame attempt.
+    pub roi_state: Option<String>,
 }
 
 /// Frame-level production inference boundary.

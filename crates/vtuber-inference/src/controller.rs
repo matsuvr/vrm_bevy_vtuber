@@ -120,6 +120,18 @@ impl InferenceController {
     /// Returns a snapshot of the current worker status.
     #[must_use]
     pub fn status(&self) -> crate::state::InferenceWorkerStatus {
+        if self.worker.as_ref().is_some_and(WorkerHandle::is_finished) {
+            let mut status = self
+                .status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if matches!(
+                status.state,
+                InferenceWorkerState::LoadingModel | InferenceWorkerState::Running
+            ) {
+                status.record_failure(FailureStage::WorkerPanic, InferenceError::WorkerPanicked);
+            }
+        }
         self.status
             .lock()
             .expect("InferenceController status mutex poisoned")

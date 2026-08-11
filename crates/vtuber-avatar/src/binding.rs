@@ -248,7 +248,9 @@ pub fn bind_humanoid_bones(
                 has_spring_bone,
             );
 
-            commands.entity(root_entity).insert(binding);
+            commands
+                .entity(root_entity)
+                .insert((binding, Visibility::Inherited));
             commands.entity(root_entity).remove::<BindingDeadline>();
             lifecycle.set_capabilities(Some(capabilities));
             lifecycle.finish_ready();

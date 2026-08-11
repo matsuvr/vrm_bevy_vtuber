@@ -155,6 +155,13 @@ impl CaptureController {
         state.metrics.clone()
     }
 
+    /// Returns whether the supervised worker has exited unexpectedly or is
+    /// finishing a requested shutdown.
+    #[must_use]
+    pub fn worker_finished(&self) -> bool {
+        self.worker.as_ref().is_some_and(WorkerHandle::is_finished)
+    }
+
     /// Starts the capture worker.
     ///
     /// The worker owns the backend and must be started before any device command

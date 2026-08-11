@@ -106,6 +106,13 @@ impl<const N: usize> StageTimingRing<N> {
     /// Returns a snapshot of the recorded samples.
     #[must_use]
     pub fn snapshot(&self) -> StageTimingSnapshot {
+        let mut retained = self.retained_samples();
+        let (p50_ns, p95_ns) = if retained.is_empty() {
+            (0, 0)
+        } else {
+            retained.sort_unstable();
+            (nearest_rank(&retained, 0.50), nearest_rank(&retained, 0.95))
+        };
         StageTimingSnapshot {
             count: self.count,
             min_ns: if self.count == 0 { 0 } else { self.min_ns },
@@ -115,7 +122,20 @@ impl<const N: usize> StageTimingRing<N> {
             } else {
                 (self.sum_ns / u128::from(self.count)) as u64
             },
+            p50_ns,
+            p95_ns,
         }
+    }
+
+    fn retained_samples(&self) -> Vec<u64> {
+        let retained = self.count.min(N as u64) as usize;
+        if retained == 0 {
+            return Vec::new();
+        }
+        let first = if self.count >= N as u64 { self.head } else { 0 };
+        (0..retained)
+            .map(|offset| self.samples[(first + offset) % N].as_nanos() as u64)
+            .collect()
     }
 
     /// Returns the fixed capacity of the ring.
@@ -136,6 +156,15 @@ pub struct StageTimingSnapshot {
     pub max_ns: u64,
     /// Mean duration in nanoseconds.
     pub mean_ns: u64,
+    /// p50 duration in nanoseconds over the retained bounded samples.
+    pub p50_ns: u64,
+    /// p95 duration in nanoseconds over the retained bounded samples.
+    pub p95_ns: u64,
+}
+
+fn nearest_rank(sorted: &[u64], percentile: f64) -> u64 {
+    let rank = (percentile * sorted.len() as f64).ceil() as usize;
+    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
 
 /// Drop and skip counters for the inference pipeline.
@@ -267,6 +296,17 @@ mod tests {
     fn ring_capacity_is_fixed() {
         let ring = StageTimingRing::<8>::new();
         assert_eq!(ring.capacity(), 8);
+    }
+
+    #[test]
+    fn ring_percentiles_use_only_the_bounded_retained_window() {
+        let mut ring = StageTimingRing::<4>::new();
+        for ns in [100, 200, 300, 400, 500] {
+            ring.record(Duration::from_nanos(ns));
+        }
+        let snap = ring.snapshot();
+        assert_eq!(snap.p50_ns, 300);
+        assert_eq!(snap.p95_ns, 500);
     }
 
     #[test]

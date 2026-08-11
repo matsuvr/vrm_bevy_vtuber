@@ -298,7 +298,10 @@ where
     }
 
     fn take_timing(&mut self) -> FrameInferenceTiming {
-        std::mem::take(&mut self.last_timing)
+        let mut timing = std::mem::take(&mut self.last_timing);
+        timing.detector_confidence = Some(self.active_detection_confidence);
+        timing.roi_state = Some(format!("{:?}", self.pipeline.roi_state()));
+        timing
     }
 }
 

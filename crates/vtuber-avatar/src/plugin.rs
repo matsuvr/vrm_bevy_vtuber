@@ -124,9 +124,9 @@ fn setup_scene(
     ));
 }
 
-fn log_loaded_vrm(vrms: Query<(Entity, &VrmHandle), Added<Vrm>>) {
-    for (entity, _) in vrms.iter() {
-        info!("VRM entity loaded: {:?}", entity);
+fn log_loaded_vrm(vrms: Query<Entity, Added<Vrm>>) {
+    for entity in vrms.iter() {
+        info!("VRM runtime attached to root: {entity:?}");
     }
 }
 

@@ -172,8 +172,10 @@ pub fn inference_bridge_system(
                     .last_failure
                     .map(|failure| failure.error.to_string())
                     .unwrap_or_else(|| "inference worker failed".into());
-                orchestrator.set_pipeline_state(PipelineState::Failed);
-                orchestrator.set_last_error(Some(OrchestratorError::InferenceFailed(message)));
+                // A failed worker cannot be reused. Request the normal
+                // inference-first, capture-second shutdown so a partial
+                // runtime is never left behind.
+                orchestrator.fail_inference(message);
             }
             InferenceWorkerState::Running
                 if capture.state() == vtuber_camera::CaptureServiceState::Running
@@ -186,23 +188,41 @@ pub fn inference_bridge_system(
     }
 }
 
+/// Local state used to derive the inference, detector, and landmark rates.
+#[derive(Default)]
+pub(crate) struct InferenceRateState {
+    last_seq: Option<FrameSeq>,
+    rate: Option<RateCounter>,
+    detector_last_count: u64,
+    detector_rate: Option<RateCounter>,
+    landmark_last_count: u64,
+    landmark_rate: Option<RateCounter>,
+}
+
 /// Reads the latest observation and updates worker diagnostics.
-pub fn read_inference_output_system(
+pub(crate) fn read_inference_output_system(
     mut inference: ResMut<InferenceRuntime>,
     mut diagnostics: ResMut<DiagnosticsSnapshot>,
-    mut last_seq: Local<Option<FrameSeq>>,
-    mut rate: Local<Option<RateCounter>>,
+    mut rates: Local<InferenceRateState>,
 ) {
     let _ = inference.read_latest();
     let status = inference.status();
-    let rate_counter = rate.get_or_insert_with(|| RateCounter::new(1_000_000_000));
-    if let (Some(seq), Some(finished_at)) = (status.last_source_seq, status.last_finished_at)
-        && *last_seq != Some(seq)
-    {
-        rate_counter.record(finished_at.0);
-        *last_seq = Some(seq);
+    let new_observation = match (status.last_source_seq, status.last_finished_at) {
+        (Some(seq), Some(finished_at)) if rates.last_seq != Some(seq) => Some((seq, finished_at.0)),
+        _ => None,
+    };
+    if let Some((seq, finished_at)) = new_observation {
+        rates
+            .rate
+            .get_or_insert_with(|| RateCounter::new(1_000_000_000))
+            .record(finished_at);
+        rates.last_seq = Some(seq);
     }
-    diagnostics.inference_rate = rate_counter.rate_hz(monotonic_now().0) as f32;
+    let now = monotonic_now().0;
+    diagnostics.inference_rate = rates
+        .rate
+        .get_or_insert_with(|| RateCounter::new(1_000_000_000))
+        .rate_hz(now) as f32;
     diagnostics.inference_state = format!("{:?}", status.state);
     diagnostics.inference_last_source_seq = status.last_source_seq.map(|seq| seq.0);
     diagnostics.inference_frames_processed = status.frames_processed;
@@ -215,6 +235,13 @@ pub fn read_inference_output_system(
     diagnostics.inference_last_roi = status
         .last_roi
         .map(|roi| (roi.x, roi.y, roi.width, roi.height));
+    diagnostics.detector_confidence = status.detector_confidence;
+    diagnostics.roi_state = status.roi_state.clone();
+    diagnostics.pipeline_id = status.pipeline_id.clone();
+    diagnostics.model_hash = model_hash_summary(
+        status.detector_model_hash.as_deref(),
+        status.landmark_model_hash.as_deref(),
+    );
     diagnostics.inference_failure_stage = status
         .last_failure
         .as_ref()
@@ -224,6 +251,51 @@ pub fn read_inference_output_system(
     }
 
     let metrics = status.metrics();
+    let stage_time = status.last_finished_at.map_or(now, |time| time.0);
+    let detector_count = metrics.stage(InferenceStage::Detector).count;
+    let landmark_count = metrics.stage(InferenceStage::Landmark).count;
+    if detector_count < rates.detector_last_count {
+        rates
+            .detector_rate
+            .get_or_insert_with(|| RateCounter::new(1_000_000_000))
+            .reset();
+        rates.detector_last_count = 0;
+    }
+    if landmark_count < rates.landmark_last_count {
+        rates
+            .landmark_rate
+            .get_or_insert_with(|| RateCounter::new(1_000_000_000))
+            .reset();
+        rates.landmark_last_count = 0;
+    }
+    let detector_delta = detector_count.saturating_sub(rates.detector_last_count);
+    {
+        let detector_counter = rates
+            .detector_rate
+            .get_or_insert_with(|| RateCounter::new(1_000_000_000));
+        for _ in 0..detector_delta {
+            detector_counter.record(stage_time);
+        }
+    }
+    rates.detector_last_count = detector_count;
+    let landmark_delta = landmark_count.saturating_sub(rates.landmark_last_count);
+    {
+        let landmark_counter = rates
+            .landmark_rate
+            .get_or_insert_with(|| RateCounter::new(1_000_000_000));
+        for _ in 0..landmark_delta {
+            landmark_counter.record(stage_time);
+        }
+    }
+    rates.landmark_last_count = landmark_count;
+    diagnostics.detector_rate = rates
+        .detector_rate
+        .as_mut()
+        .map_or(0.0, |counter| counter.rate_hz(now) as f32);
+    diagnostics.landmark_rate = rates
+        .landmark_rate
+        .as_mut()
+        .map_or(0.0, |counter| counter.rate_hz(now) as f32);
     diagnostics.stage_timings = InferenceStage::ALL
         .into_iter()
         .filter_map(|stage| {
@@ -236,9 +308,39 @@ pub fn read_inference_output_system(
             })
         })
         .collect();
+    diagnostics.stage_percentiles = InferenceStage::ALL
+        .into_iter()
+        .filter_map(|stage| {
+            let timing = metrics.stage(stage);
+            (timing.count > 0).then(|| {
+                (
+                    format!("inference_{stage:?}"),
+                    timing.p50_ns as f32 / 1_000_000.0,
+                    timing.p95_ns as f32 / 1_000_000.0,
+                )
+            })
+        })
+        .collect();
     if let Some(failure) = status.last_failure.as_ref() {
         diagnostics.last_error = Some(failure.error.to_string());
     }
+}
+
+fn model_hash_summary(detector: Option<&str>, landmark: Option<&str>) -> Option<String> {
+    match (detector, landmark) {
+        (Some(detector), Some(landmark)) => Some(format!(
+            "det:{} lm:{}",
+            short_hash(detector),
+            short_hash(landmark)
+        )),
+        (Some(detector), None) => Some(format!("det:{}", short_hash(detector))),
+        (None, Some(landmark)) => Some(format!("lm:{}", short_hash(landmark))),
+        (None, None) => None,
+    }
+}
+
+fn short_hash(hash: &str) -> &str {
+    hash.get(..12).unwrap_or(hash)
 }
 
 fn inference_error_code(failure: &vtuber_inference::WorkerFailure) -> &'static str {

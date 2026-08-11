@@ -55,6 +55,16 @@ pub struct InferenceWorkerStatus {
     pub consecutive_errors: u32,
     /// ROI from the most recent face outcome, if one was available.
     pub last_roi: Option<NormalizedRect>,
+    /// Stable production pipeline identifier.
+    pub pipeline_id: Option<String>,
+    /// Detector model hash for diagnostics.
+    pub detector_model_hash: Option<String>,
+    /// Landmark model hash for diagnostics.
+    pub landmark_model_hash: Option<String>,
+    /// Detector confidence associated with the current ROI.
+    pub detector_confidence: Option<f32>,
+    /// Human-readable ROI lifecycle state.
+    pub roi_state: Option<String>,
     metrics_state: InferenceMetricsState,
 }
 
@@ -212,6 +222,24 @@ impl InferenceWorkerStatus {
     /// Records the latest source-image ROI, or clears it for a no-face result.
     pub fn set_last_roi(&mut self, roi: Option<NormalizedRect>) {
         self.last_roi = roi;
+    }
+
+    /// Records the manifest identity used by the active worker.
+    pub fn set_pipeline_info(
+        &mut self,
+        pipeline_id: Option<String>,
+        detector_model_hash: Option<String>,
+        landmark_model_hash: Option<String>,
+    ) {
+        self.pipeline_id = pipeline_id;
+        self.detector_model_hash = detector_model_hash;
+        self.landmark_model_hash = landmark_model_hash;
+    }
+
+    /// Records composite ROI diagnostics.
+    pub fn set_roi_diagnostics(&mut self, confidence: Option<f32>, state: Option<String>) {
+        self.detector_confidence = confidence;
+        self.roi_state = state;
     }
 }
 

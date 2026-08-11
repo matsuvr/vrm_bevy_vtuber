@@ -33,7 +33,12 @@ fn humanoid_binding_head_only_ready() {
     let head = spawn_bone(&mut app);
     let root = app
         .world_mut()
-        .spawn((ActiveAvatar, BindTriggered, HeadBoneEntity(head)))
+        .spawn((
+            ActiveAvatar,
+            BindTriggered,
+            HeadBoneEntity(head),
+            Visibility::Hidden,
+        ))
         .id();
 
     enter_binding(&mut app, root);
@@ -54,6 +59,18 @@ fn humanoid_binding_head_only_ready() {
     assert!(binding.spine.is_none());
     assert!(binding.left_eye.is_none());
     assert!(binding.right_eye.is_none());
+
+    assert_eq!(
+        app.world().get::<Visibility>(root),
+        Some(&Visibility::Inherited)
+    );
+    let capabilities = app
+        .world()
+        .resource::<AvatarLifecycle>()
+        .capabilities()
+        .expect("successful binding should publish capabilities");
+    assert!(capabilities.bones.head);
+    assert!(!capabilities.bones.neck);
 }
 
 #[test]

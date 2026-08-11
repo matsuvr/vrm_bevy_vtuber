@@ -27,7 +27,7 @@ repository基準: `main`が少なくとも次を含むこと。
 確認済みrelease binary SHA-256:
 
 ```text
-2C4ED40CDBB1B4E7DC39F55B62AF3875433D50943C0A5855BCD45FA2A6198BB9
+97F82B36E7C97C621C7C41672220F828ECDD971D9593CF59A35871AE66E34F00
 ```
 
 | 範囲 | 状態 | 扱い |
@@ -37,13 +37,14 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-001`〜`M1-08-008` | `LEGACY_PROGRESS` | acceptance用の文書・matrix・metrics基盤まで実装済み。ただしWindows物理受入は未実施であり、PASSと解釈しない。 |
 | `M1-08-009`〜`M1-08-012` | `DONE` | GUI import、avatar lifecycle、synthetic tracking、Windows camera契約、capture／preview接続まで実装・自動検証済み。 |
 | `M1-08-013` | `DONE` | UltraFace→crop→Peppa 98点landmark→planar poseのWindows C922実機gateを、face loss／return、方向、edge、capture Stop／Startを含むguided protocolで確認済み。 |
-| `M1-08-014`〜`M1-08-017` | `PENDING` | worker、tracking、avatar bridge、diagnostics、shutdownの既存実装を捨てず、二段推論pipelineへ適合させて実機監査する。 |
-| `M1-08-018`〜`M1-08-019` | `PENDING` | Windows functional／recovery／latency／30分soakを実施してfinal gateを閉じる。 |
+| `M1-08-014` | `DONE` | managed VRM import／avatar lifecycleの既存blockerを解消し、自動互換性検査済み。 |
+| `M1-08-015`〜`M1-08-017` | `IN_PROGRESS` | composite tracking、real-source avatar bridge、diagnostics／recovery／shutdownの実装・自動検証は完了。GUIの実VRM motion／校正確認が未完了。 |
+| `M1-08-018`〜`M1-08-019` | `BLOCKED` | GUI functional／recovery、latency export、30分soakが未実施のためfinal gateを閉じられない。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-現在の次実行単位は**`M1-08-014`**である。完了済みの`M1-08-013`本体をもう一度丸ごと委嘱してはならない。
+現在の次実行単位は**`M1-08-015`のGUI実機確認**である。実装・自動検証済みの範囲を再実装せず、未確認のWindows GUI／VRM項目だけを受入する。完了済みの`M1-08-013`本体をもう一度丸ごと委嘱してはならない。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -7115,13 +7116,17 @@ cargo build -p vtuber-desktop --release
 
 #### M1-08-014: composite runtimeを既存InferenceRuntime／orchestratorへ接続する
 
-状態: `IN_PROGRESS`
+状態: `DONE`
 依存: `M1-08-013-009`
 親参照: DESIGN.md §12、§14、§17、§20.2〜§20.3、§21.2
 
 **現状の扱い**
 
 `crates/vtuber-app/src/inference_runtime.rs`、`model_catalog.rs`、`crates/vtuber-inference/src/controller.rs`／`worker.rs`は既に存在する。これらを捨てて別workerを作らず、single-model前提を`M1-08-013`で確定したcomposite pipelineへ置換する差分だけを実装する。
+
+**blocker resolution note (2026-08-11)**
+
+The avatar load blocker was the pinned `bevy_vrm1` lifecycle boundary: it removes `VrmHandle` before adding `Initialized`, while the adapter required both `Added<Initialized>` and `&VrmHandle` on the same root. Successful initialization is now observed from `Initialized` independently, transient handle-less roots remain in `Loading`, and successful humanoid binding restores root visibility before `Ready`. Automated validation, the managed-source runtime gate, and the physical Windows GUI/camera acceptance all passed; `M1-08-014` is `DONE`.
 
 **変更候補**
 
@@ -7178,7 +7183,8 @@ cargo build -p vtuber-desktop --release
 
 #### M1-08-015: 既存TrackingRuntimeをcomposite observationsへ適合・実機検証する
 
-状態: `PENDING`
+状態: `IN_PROGRESS`
+備考: composite observationのfreshness/reset、no-face、source-sequence境界、tracking bridgeの自動検証は完了。実camera smokeは完了したが、GUI neutral calibrationと実VRMのloss／reacquire確認は未完了。
 依存: `M1-08-014`
 親参照: DESIGN.md §11、§15、§17.2、§20.1、§21.1
 
@@ -7239,7 +7245,8 @@ cargo clippy -p vtuber-tracking -p vtuber-app --all-targets -- -D warnings
 
 #### M1-08-016: 既存avatar bridgeをreal tracking sourceで閉じる
 
-状態: `PENDING`
+状態: `IN_PROGRESS`
+備考: real tracking source接続、generation／stale frame排他、synthetic source排他、binding／expression／gazeの自動検証は完了。GUI上の実顔→実VRM motion確認は未完了。
 依存: `M1-08-015`
 親参照: DESIGN.md §15、§16、§20.1、ADR-004
 
@@ -7300,7 +7307,8 @@ cargo build -p vtuber-desktop --release
 
 #### M1-08-017: 既存Diagnostics／error recovery／shutdownを実pipelineで監査する
 
-状態: `PENDING`
+状態: `IN_PROGRESS`
+備考: composite stage diagnostics、worker exit／panic recovery、逆順shutdown、retry、全workspace test／clippyは完了。GUI Diagnostics表示とrelease appの反復Start／Stopは未完了。
 依存: `M1-08-016`
 親参照: DESIGN.md §17、§20.2〜§20.4、§21、§24
 
@@ -7365,7 +7373,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### M1-08-018: Windows functional／recovery acceptanceを実pipelineで実施する
 
-状態: `PENDING`
+状態: `BLOCKED`
+備考: release build、C922 composite guided smoke、managed VRM Ready、automated recoveryは確認済み。GUI import／校正／avatar motion／replace／unloadの受入証跡がないためBLOCKED。
 依存: `M1-08-017`
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
@@ -7409,7 +7418,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### M1-08-019: latency、30分soak、Windows final gateを閉じる
 
-状態: `PENDING`
+状態: `BLOCKED`
+備考: stage timing／p50／p95のコードとテストはあるが、release appの60秒latency exportと30分soakを未実施。`M1-08-018`のmanual gate待ち。
 依存: `M1-08-018`
 親参照: DESIGN.md §6、§20.2〜§20.3、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 

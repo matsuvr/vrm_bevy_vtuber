@@ -14,6 +14,11 @@ pub struct DiagnosticsSnapshot {
     pub capture_rate: f32,
     /// Inference rate.
     pub inference_rate: f32,
+    /// Full-frame detector rate. This is intentionally separate from the
+    /// landmark/tracking rate because detector cadence is lower by design.
+    pub detector_rate: f32,
+    /// Crop landmark rate.
+    pub landmark_rate: f32,
     /// Tracking output rate, measured from unique source sequences.
     pub tracking_rate: f32,
     /// Current capture worker state.
@@ -34,6 +39,12 @@ pub struct DiagnosticsSnapshot {
     pub last_inference_ms: Option<f32>,
     /// Last source-image ROI reported by the composite runtime.
     pub inference_last_roi: Option<(f32, f32, f32, f32)>,
+    /// Detector confidence for the active ROI.
+    pub detector_confidence: Option<f32>,
+    /// Composite ROI lifecycle state.
+    pub roi_state: Option<String>,
+    /// Stable manifest pipeline identifier.
+    pub pipeline_id: Option<String>,
     /// Stable worker stage for the last failure, if any.
     pub inference_failure_stage: Option<String>,
     /// Tracking state description.
@@ -42,6 +53,8 @@ pub struct DiagnosticsSnapshot {
     pub slot_overwrites: u64,
     /// Stage timings (name, duration_ms).
     pub stage_timings: Vec<(String, f32)>,
+    /// Bounded stage timing percentiles (name, p50_ms, p95_ms).
+    pub stage_percentiles: Vec<(String, f32, f32)>,
     /// Model hash (short).
     pub model_hash: Option<String>,
     /// Camera backend name.

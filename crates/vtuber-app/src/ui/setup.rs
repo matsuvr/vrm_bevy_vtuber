@@ -25,7 +25,10 @@ pub fn render_setup_screen(
             ui_state.emit(UiAction::RefreshCameras);
         }
     } else {
-        let selected = vm.camera.selected_index.unwrap_or(0);
+        // Keep the unselected state distinct from camera index 0. Otherwise a
+        // one-camera list renders camera 0 but selecting it produces no change
+        // event, leaving Start disabled forever.
+        let selected = vm.camera.selected_index.unwrap_or(usize::MAX);
         let mut new_selected = selected;
         bevy_egui::egui::ComboBox::from_label("Select camera")
             .selected_text(

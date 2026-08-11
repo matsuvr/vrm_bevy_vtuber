@@ -87,6 +87,14 @@ impl<T> WorkerHandle<T> {
         self.stop.is_stopped()
     }
 
+    /// Returns whether the underlying thread has already exited.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.join
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+    }
+
     /// Joins the worker thread and returns its result.
     ///
     /// This call blocks until the worker returns or panics. Callers that need

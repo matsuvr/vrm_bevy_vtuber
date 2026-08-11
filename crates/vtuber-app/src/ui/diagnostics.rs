@@ -29,6 +29,14 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
             ui.label(format!("{:.1} Hz", diagnostics.inference_rate));
             ui.end_row();
 
+            ui.label("Detector rate");
+            ui.label(format!("{:.1} Hz", diagnostics.detector_rate));
+            ui.end_row();
+
+            ui.label("Landmark rate");
+            ui.label(format!("{:.1} Hz", diagnostics.landmark_rate));
+            ui.end_row();
+
             ui.label("No-face frames");
             ui.label(format!("{}", diagnostics.inference_no_face_frames));
             ui.end_row();
@@ -86,6 +94,27 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
         ui.separator();
     }
 
+    if !diagnostics.stage_percentiles.is_empty() {
+        ui.heading("Stage Percentiles");
+        bevy_egui::egui::Grid::new("percentile_grid")
+            .num_columns(3)
+            .spacing([40.0, 4.0])
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label("Stage");
+                ui.label("p50");
+                ui.label("p95");
+                ui.end_row();
+                for (name, p50, p95) in &diagnostics.stage_percentiles {
+                    ui.label(name);
+                    ui.label(format!("{p50:.2} ms"));
+                    ui.label(format!("{p95:.2} ms"));
+                    ui.end_row();
+                }
+            });
+        ui.separator();
+    }
+
     // Model and camera info.
     ui.heading("Model & Camera");
     bevy_egui::egui::Grid::new("info_grid")
@@ -95,6 +124,23 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
         .show(ui, |ui| {
             ui.label("Model hash");
             ui.label(diagnostics.model_hash.as_deref().unwrap_or("(none)"));
+            ui.end_row();
+
+            ui.label("Pipeline");
+            ui.label(diagnostics.pipeline_id.as_deref().unwrap_or("(none)"));
+            ui.end_row();
+
+            ui.label("ROI state");
+            ui.label(diagnostics.roi_state.as_deref().unwrap_or("(none)"));
+            ui.end_row();
+
+            ui.label("Detector confidence");
+            ui.label(
+                diagnostics
+                    .detector_confidence
+                    .map(|value| format!("{value:.3}"))
+                    .unwrap_or_else(|| "(none)".to_string()),
+            );
             ui.end_row();
 
             ui.label("Camera backend");

@@ -62,6 +62,11 @@ pub fn run_inference_worker(
                     settings,
                 }) => {
                     update_status(&status, |s| {
+                        s.set_pipeline_info(
+                            Some(descriptor.id.clone()),
+                            Some(descriptor.sha256.clone()),
+                            None,
+                        );
                         s.transition_to(InferenceWorkerState::LoadingModel);
                     });
 
@@ -89,6 +94,11 @@ pub fn run_inference_worker(
                     settings,
                 }) => {
                     update_status(&status, |s| {
+                        s.set_pipeline_info(
+                            Some(descriptor.id.clone()),
+                            Some(descriptor.detector.sha256.clone()),
+                            Some(descriptor.landmarks.sha256.clone()),
+                        );
                         s.transition_to(InferenceWorkerState::LoadingModel);
                     });
 
@@ -125,6 +135,8 @@ pub fn run_inference_worker(
                     update_status(&status, |s| {
                         s.transition_to(InferenceWorkerState::Idle);
                         s.clear_consecutive_errors();
+                        s.set_pipeline_info(None, None, None);
+                        s.set_roi_diagnostics(None, None);
                     });
                 }
                 #[cfg(test)]
@@ -541,6 +553,7 @@ fn record_composite_timing(
     elapsed: Duration,
 ) {
     update_status(status, |s| {
+        s.set_roi_diagnostics(timing.detector_confidence, timing.roi_state);
         s.record_stage_duration(InferenceStage::Wait, wait_duration);
         if let Some(duration) = timing.detector {
             s.record_stage_duration(InferenceStage::Detector, duration);

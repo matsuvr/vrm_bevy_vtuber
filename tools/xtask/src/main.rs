@@ -11,6 +11,7 @@ mod acceptance;
 mod face_image_probe;
 mod face_pipeline_smoke;
 mod vrm_compatibility;
+mod vrm_managed_compatibility;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -18,6 +19,9 @@ fn main() {
         println!("usage: cargo xtask <task>");
         println!("tasks:");
         println!("  vrm-compat [fixture-dir]  run bevy_vrm1 compatibility gate");
+        println!(
+            "  vrm-managed-compat <path-to-model.vrm>  run the managed user:// lifecycle gate"
+        );
         println!("  acceptance <command>      Windows acceptance test support");
         println!("  face-image-probe <path>  Run UltraFace on one still image");
         println!("  face-pipeline-smoke       Windows MSMF detector/crop/landmark probe");
@@ -50,6 +54,16 @@ fn main() {
                     eprintln!("compatibility runner failed: {e}");
                     process::exit(1);
                 }
+            }
+        }
+        "vrm-managed-compat" => {
+            let Some(path) = args.get(1).map(PathBuf::from) else {
+                eprintln!("usage: cargo xtask -- vrm-managed-compat <path-to-model.vrm>");
+                process::exit(1);
+            };
+            if let Err(error) = vrm_managed_compatibility::run(&path) {
+                eprintln!("managed compatibility runner failed: {error}");
+                process::exit(1);
             }
         }
         "acceptance" => {

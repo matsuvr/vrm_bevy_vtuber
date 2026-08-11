@@ -7,7 +7,9 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
 use crate::actions::UiAction;
-use crate::avatar_bridge::{publish_control_frame_system, sync_avatar_diagnostics};
+#[cfg(not(feature = "dev-synthetic-input"))]
+use crate::avatar_bridge::publish_control_frame_system;
+use crate::avatar_bridge::sync_avatar_diagnostics;
 use crate::capture_runtime::{
     CaptureRuntime, LatestVideoFrame, capture_bridge_system, read_latest_frame,
     sync_capture_diagnostics, update_preview_texture_system,
@@ -55,10 +57,7 @@ impl Plugin for UiShellPlugin {
             .get_resource::<InferenceProjectRoot>()
             .map(|root| root.0.clone())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        app.insert_resource(InferenceRuntime::new(
-            frame_slot,
-            project_root,
-        ))
+        app.insert_resource(InferenceRuntime::new(frame_slot, project_root))
             .init_resource::<TrackingRuntime>()
             // Action processing then lifecycle sync, chained in Update.
             .add_systems(
@@ -88,11 +87,33 @@ impl Plugin for UiShellPlugin {
                     .before(capture_bridge_system),
             )
             .add_systems(Update, tracking_bridge_system.after(read_inference_output_system))
-            .add_systems(Update, publish_control_frame_system.after(tracking_bridge_system))
-            .add_systems(Update, sync_avatar_diagnostics.after(publish_control_frame_system))
             .add_systems(Last, shutdown_workers_on_exit)
             // egui rendering in EguiPrimaryContextPass.
             .add_systems(EguiPrimaryContextPass, ui_render_system);
+
+        // The synthetic source is an explicit diagnostic build mode. It
+        // replaces the real bridge rather than running beside it, so two
+        // producers can never race on ActiveControlFrame.
+        #[cfg(not(feature = "dev-synthetic-input"))]
+        app.add_systems(
+            Update,
+            publish_control_frame_system.after(tracking_bridge_system),
+        )
+        .add_systems(
+            Update,
+            sync_avatar_diagnostics.after(publish_control_frame_system),
+        );
+
+        #[cfg(feature = "dev-synthetic-input")]
+        app.insert_resource(crate::synthetic_tracking::SyntheticTrackingSource::default())
+            .add_systems(
+                Update,
+                crate::synthetic_tracking::synthetic_tracking_system.after(tracking_bridge_system),
+            )
+            .add_systems(
+                Update,
+                sync_avatar_diagnostics.after(crate::synthetic_tracking::synthetic_tracking_system),
+            );
     }
 }
 

@@ -173,9 +173,7 @@ pub fn import_vrm<P: AsRef<Path>, Q: AsRef<Path>>(
     let dest_model = dest_dir.join("model.vrm");
     let meta_path = dest_dir.join("import.toml");
 
-    if !dest_model.exists() {
-        copy_atomic(source, &dest_model)?;
-    }
+    ensure_cached_model(source, &dest_model, size, &id)?;
 
     let imported = ImportedModel {
         id,
@@ -351,8 +349,47 @@ fn check_external_uris(document: &gltf::Document) -> Result<(), ModelImportError
 fn copy_atomic(source: &Path, dest: &Path) -> Result<(), ModelImportError> {
     let temp = dest.with_extension("tmp");
     fs::copy(source, &temp)?;
-    fs::rename(&temp, dest)?;
+    replace_staged_file(&temp, dest)?;
     Ok(())
+}
+
+fn ensure_cached_model(
+    source: &Path,
+    dest: &Path,
+    source_size: u64,
+    source_id: &str,
+) -> Result<(), ModelImportError> {
+    let cache_matches = fs::metadata(dest)
+        .ok()
+        .filter(|metadata| metadata.is_file() && metadata.len() == source_size)
+        .is_some_and(|_| file_sha256(dest).is_ok_and(|hash| hash == source_id));
+
+    if !cache_matches {
+        copy_atomic(source, dest)?;
+    }
+    Ok(())
+}
+
+fn file_sha256(path: &Path) -> io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn replace_staged_file(temp: &Path, dest: &Path) -> Result<(), ModelImportError> {
+    match fs::rename(temp, dest) {
+        Ok(()) => Ok(()),
+        Err(rename_error) if dest.exists() => {
+            // Windows does not replace an existing file with rename. The
+            // validated source is already staged in `temp`; remove only this
+            // cache entry, then complete the rename.
+            fs::remove_file(dest).map_err(|_| rename_error)?;
+            fs::rename(temp, dest)?;
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), ModelImportError> {
@@ -500,5 +537,23 @@ mod tests {
             .expect("re-import should succeed");
         assert_eq!(imported.id, reimported.id);
         assert_eq!(imported.asset_path, reimported.asset_path);
+    }
+
+    #[test]
+    fn repairs_corrupt_existing_cached_file() {
+        let dir = TempDir::new().unwrap();
+        let source = fixture_vrm1();
+        let imported = import_vrm(&source, dir.path(), DEFAULT_SIZE_LIMIT)
+            .expect("fixture should import successfully");
+
+        fs::write(&imported.asset_path, b"corrupt cached model").unwrap();
+        let repaired = import_vrm(&source, dir.path(), DEFAULT_SIZE_LIMIT)
+            .expect("re-import should repair the cached file");
+
+        assert_eq!(repaired.id, imported.id);
+        assert_eq!(
+            fs::read(&repaired.asset_path).unwrap(),
+            fs::read(source).unwrap()
+        );
     }
 }

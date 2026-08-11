@@ -33,9 +33,9 @@ pub(crate) fn observe_initialized(
     mut commands: Commands,
     mut lifecycle: ResMut<AvatarLifecycle>,
     asset_server: Res<AssetServer>,
-    active_roots: Query<(Entity, &VrmHandle), With<ActiveAvatar>>,
+    active_loading_handles: Query<(Entity, &VrmHandle), With<ActiveAvatar>>,
     newly_initialized: Query<
-        (Entity, &VrmHandle),
+        Entity,
         (
             With<ActiveAvatar>,
             Added<Initialized>,
@@ -49,18 +49,27 @@ pub(crate) fn observe_initialized(
         let now = Instant::now();
         if lifecycle.is_load_timed_out(now) {
             if let Some(entity) = lifecycle.active_root() {
+                error!(
+                    "avatar load timeout: root={entity:?} had not reached Initialized before the deadline; lifecycle={:?}",
+                    lifecycle.state()
+                );
                 commands.entity(entity).remove::<ActiveAvatar>();
             }
             lifecycle.fail(AvatarLifecycleFailure::AssetLoadFailed);
             return;
         }
 
-        for (entity, handle) in active_roots.iter() {
+        for (entity, handle) in active_loading_handles.iter() {
             if lifecycle.active_root() != Some(entity) {
                 continue;
             }
             match asset_server.load_state(handle.0.id()) {
-                LoadState::Failed(_) => {
+                LoadState::Failed(error) => {
+                    error!(
+                        "VRM asset load failed: root={entity:?} path={:?} error={error:?} lifecycle={:?}",
+                        handle.0.path(),
+                        lifecycle.state()
+                    );
                     commands.entity(entity).remove::<ActiveAvatar>();
                     lifecycle.fail(AvatarLifecycleFailure::AssetLoadFailed);
                     return;
@@ -76,7 +85,7 @@ pub(crate) fn observe_initialized(
     // Transition to Binding once Initialized is observed exactly once on the
     // active root. The `Without<BindTriggered>` filter and `Added<Initialized>`
     // filter together ensure this path runs at most once per root.
-    for (entity, _handle) in newly_initialized.iter() {
+    for entity in newly_initialized.iter() {
         if lifecycle.active_root() != Some(entity) {
             continue;
         }
@@ -142,6 +151,50 @@ mod tests {
     }
 
     #[test]
+    fn handle_removed_before_initialized_still_enters_binding() {
+        let mut app = test_app();
+        let root = spawn_active_root(&mut app);
+        app.world_mut()
+            .resource_mut::<AvatarLifecycle>()
+            .request_load(root)
+            .unwrap();
+
+        // This is the ordering used by the pinned bevy_vrm1 revision: the
+        // handle is removed when the runtime components are attached, and the
+        // Initialized marker arrives in a later update.
+        app.world_mut().entity_mut(root).remove::<VrmHandle>();
+        app.world_mut().entity_mut(root).insert(Initialized);
+        app.update();
+
+        let lifecycle = app.world().resource::<AvatarLifecycle>();
+        assert_eq!(lifecycle.state(), AvatarLifecycleState::Binding);
+        assert_eq!(lifecycle.active_root(), Some(root));
+        assert!(lifecycle.failure().is_none());
+        assert!(app.world().entity(root).contains::<BindTriggered>());
+    }
+
+    #[test]
+    fn handleless_root_waits_for_initialized_without_failing_early() {
+        let mut app = test_app();
+        let root = spawn_active_root(&mut app);
+        app.world_mut()
+            .resource_mut::<AvatarLifecycle>()
+            .request_load(root)
+            .unwrap();
+        app.world_mut().entity_mut(root).remove::<VrmHandle>();
+
+        // The handle-less interval is expected while bevy_vrm1 finishes
+        // spawning the runtime hierarchy. A normal update must keep waiting.
+        app.update();
+        app.update();
+
+        let lifecycle = app.world().resource::<AvatarLifecycle>();
+        assert_eq!(lifecycle.state(), AvatarLifecycleState::Loading);
+        assert_eq!(lifecycle.active_root(), Some(root));
+        assert!(lifecycle.failure().is_none());
+    }
+
+    #[test]
     fn avatar_initialized_ignored_when_not_active_root() {
         let mut app = test_app();
         let stale_root = spawn_active_root(&mut app);
@@ -154,6 +207,10 @@ mod tests {
 
         // Both roots receive Initialized, but only the active one may trigger
         // binding. This exercises stale-request late-completion defense.
+        app.world_mut().entity_mut(stale_root).remove::<VrmHandle>();
+        app.world_mut()
+            .entity_mut(active_root)
+            .remove::<VrmHandle>();
         app.world_mut().entity_mut(stale_root).insert(Initialized);
         app.world_mut().entity_mut(active_root).insert(Initialized);
         app.update();
