@@ -6755,7 +6755,7 @@ cargo clippy -p vtuber-inference --features onnx --all-targets -- -D warnings
 
 #### M1-08-013-004: UltraFace output decode、NMS、primary face selectionを実装する
 
-状態: `PENDING`
+状態: `DONE`
 依存: `M1-08-013-003`
 親参照: M1-08-013、DESIGN.md §14
 
