@@ -21,6 +21,8 @@ vtuber-app = { path = "../../crates/vtuber-app" }
 vtuber-avatar = { path = "../../crates/vtuber-avatar" }
 vtuber-inference = { path = "../../crates/vtuber-inference" }
 vtuber-tracking = { path = "../../crates/vtuber-tracking" }
+# JPEG input is needed only by the still-image detector diagnostic.
+image = { version = "=0.25.10", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 

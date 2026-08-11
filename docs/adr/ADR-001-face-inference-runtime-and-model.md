@@ -89,10 +89,12 @@ This resolves the 2D/3D type mismatch and has deterministic synthetic sign
 tests. The manifest-tracked UltraFace RFB-320 artifact, pure-Rust detector
 decode/NMS, primary-face selection, square crop, and same-worker composite
 runtime are now implemented and covered by fixed-input golden/replay tests. A
-Windows MSMF diagnostic command is also available. The Windows vertical gate
-remains blocked until a face-in-frame camera run produces finite 98 landmarks
-and a finite planar pose; the current 10-second camera run observed no face and
-makes no production pose success claim.
+Windows MSMF diagnostic command is also available. A still-image probe on a
+user-supplied 800x533 JPEG detected one face at confidence 0.9999, confirming
+the detector artifact, RGBA8 preprocessing, and output decoder. The Windows
+vertical gate remains blocked until a face-in-frame camera run produces finite
+98 landmarks and a finite planar pose; the current camera run observed no face
+and makes no production pose success claim.
 
 ## M1-08-013-002 exact UltraFace probe result
 

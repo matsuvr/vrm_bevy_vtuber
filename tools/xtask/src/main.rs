@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 mod acceptance;
+mod face_image_probe;
 mod face_pipeline_smoke;
 mod vrm_compatibility;
 
@@ -18,6 +19,7 @@ fn main() {
         println!("tasks:");
         println!("  vrm-compat [fixture-dir]  run bevy_vrm1 compatibility gate");
         println!("  acceptance <command>      Windows acceptance test support");
+        println!("  face-image-probe <path>  Run UltraFace on one still image");
         println!("  face-pipeline-smoke       Windows MSMF detector/crop/landmark probe");
         return;
     }
@@ -53,6 +55,13 @@ fn main() {
         "acceptance" => {
             handle_acceptance(&args[1..]);
         }
+        "face-image-probe" => match face_image_probe::run(&args[1..]) {
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!("face-image-probe failed: {error}");
+                process::exit(1);
+            }
+        },
         "face-pipeline-smoke" => match face_pipeline_smoke::run(&args[1..]) {
             Ok(()) => {}
             Err(error) => {

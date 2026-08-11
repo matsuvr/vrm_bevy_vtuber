@@ -1,6 +1,6 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — software gates and the diagnostic command pass; the 10-second MSMF probe saw no face, so the full face-in-frame protocol is NOT RUN
+**Status:** BLOCKED — software gates and the still-image detector probe pass; the MSMF probe still saw no face, so the full face-in-frame protocol is NOT RUN
 **Date:** 2026-08-11
 **Commit SHA:** see `git rev-parse HEAD` for the commit containing this report
 **Binary:** `vtuber-desktop` (release profile)
@@ -57,6 +57,22 @@ face_count/no_face_count: 0/30
 detector_hz/landmark_hz: 2.836/0.000
 stage_error: none
 ```
+
+The detector was also exercised directly with the user-supplied local JPEG
+`ookawa721_0I9A4938_TP_V4.jpg` (not committed to the repository):
+
+```text
+cargo run -p xtask -- face-image-probe ookawa721_0I9A4938_TP_V4.jpg
+dimensions: 800x533
+result: FACE_DETECTED
+confidence: 0.9999
+rect: (0.4314,0.1891,0.1228,0.2397)
+```
+
+This confirms that the pinned UltraFace artifact, JPEG/RGBA8 preprocessing,
+and detector decode can detect a face in a still image. It does not substitute
+for the live camera composite gate because it does not exercise crop,
+landmark, or planar-pose output.
 
 This is a real MSMF capture and composite-runtime run, but it is not a face
 success: no face was present in the sampled view. The 60-second neutral run,
@@ -261,7 +277,7 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 | 6 | No process crash | 0 crashes | NOT RUN | NOT RUN |
 | 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** BLOCKED — the detector/crop/landmark software gate and a real MSMF no-face run pass, but a face-in-frame run yielding finite 98 landmarks and planar pose has not been completed.
+**Overall Gate:** BLOCKED — the still-image detector probe, detector/crop/landmark software gate, and real MSMF no-face run pass, but a face-in-frame run yielding finite 98 landmarks and planar pose has not been completed.
 
 ---
 
@@ -269,7 +285,7 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 | # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
 |---|---------|----------|----------|-------------|---------------|
-| 1 | The 10-second MSMF probe captured frames but observed no face, so detector→crop→landmark→pose could not be measured | test-environment | High | Place a face in the selected camera view and execute the full M1-08-013-009 protocol | Yes |
+| 1 | The 10-second MSMF probe captured frames but observed no face, while the still-image detector probe succeeded; detector→crop→landmark→pose could not be measured live | test-environment | High | Place a face in the selected camera view and execute the full M1-08-013-009 protocol | Yes |
 | 2 | Physical Windows GUI, VRM motion, and 30-minute soak were not run in this session | test-environment | High | Execute the Windows acceptance protocol on target hardware | Yes |
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment

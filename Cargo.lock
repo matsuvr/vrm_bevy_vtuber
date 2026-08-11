@@ -7628,6 +7628,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_vrm1",
+ "image",
  "vtuber-app",
  "vtuber-avatar",
  "vtuber-camera",
