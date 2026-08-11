@@ -103,6 +103,12 @@ where
         self.pipeline.roi_state()
     }
 
+    /// Returns the reusable crop-buffer capacities for replay allocation checks.
+    #[must_use]
+    pub fn crop_buffer_capacities(&self) -> (usize, usize) {
+        self.crop_buffers.capacities()
+    }
+
     fn infer_frame_inner(&mut self, frame: &VideoFrame) -> Result<FrameInferenceOutcome> {
         let detector_due = self.pipeline.should_run_detector(frame.seq);
         if detector_due {

@@ -6963,7 +6963,7 @@ cargo clippy -p vtuber-inference --features onnx --all-targets -- -D warnings
 
 #### M1-08-013-008: detector→crop→landmarkのgolden／replay gateを作る
 
-状態: `PENDING`
+状態: `DONE`
 依存: `M1-08-013-007`
 親参照: M1-08-013、DESIGN.md §14、§21
 
