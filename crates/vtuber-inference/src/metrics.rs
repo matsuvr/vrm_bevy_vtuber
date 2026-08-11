@@ -18,6 +18,8 @@ pub enum InferenceStage {
     Preprocess,
     /// Face detection.
     Detector,
+    /// Detector-box crop preprocessing.
+    Crop,
     /// Landmark regression.
     Landmark,
     /// Output tensor decoding to observations.
@@ -28,13 +30,14 @@ pub enum InferenceStage {
 
 impl InferenceStage {
     /// Number of distinct inference stages.
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 
     /// Array containing all stages in declaration order.
     pub const ALL: [Self; Self::COUNT] = [
         Self::Wait,
         Self::Preprocess,
         Self::Detector,
+        Self::Crop,
         Self::Landmark,
         Self::Decode,
         Self::Total,
@@ -45,9 +48,10 @@ impl InferenceStage {
             Self::Wait => 0,
             Self::Preprocess => 1,
             Self::Detector => 2,
-            Self::Landmark => 3,
-            Self::Decode => 4,
-            Self::Total => 5,
+            Self::Crop => 3,
+            Self::Landmark => 4,
+            Self::Decode => 5,
+            Self::Total => 6,
         }
     }
 }
@@ -143,6 +147,8 @@ pub struct DropCounters {
     pub skipped_sequence: u64,
     /// Frames that completed inference.
     pub processed: u64,
+    /// Frames for which the detector or landmark validity policy found no face.
+    pub no_face: u64,
     /// Frames overwritten in the output slot before being consumed.
     pub output_overwritten: u64,
 }
@@ -190,6 +196,11 @@ impl InferenceMetricsState {
     /// Records a frame that completed inference.
     pub(crate) fn record_processed(&mut self) {
         self.drops.processed = self.drops.processed.saturating_add(1);
+    }
+
+    /// Records an ordinary no-face frame.
+    pub(crate) fn record_no_face(&mut self) {
+        self.drops.no_face = self.drops.no_face.saturating_add(1);
     }
 
     /// Records frames overwritten in the output slot.
@@ -268,6 +279,7 @@ mod tests {
         state.record_skipped_sequence();
         state.record_skipped_sequence();
         state.record_processed();
+        state.record_no_face();
         state.record_output_overwritten(1);
 
         let snap = state.snapshot();
@@ -277,6 +289,7 @@ mod tests {
         assert_eq!(snap.drops.input_overwritten, 3);
         assert_eq!(snap.drops.skipped_sequence, 2);
         assert_eq!(snap.drops.processed, 1);
+        assert_eq!(snap.drops.no_face, 1);
         assert_eq!(snap.drops.output_overwritten, 1);
     }
 

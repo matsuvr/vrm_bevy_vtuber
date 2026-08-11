@@ -12,7 +12,7 @@ use crate::error::Result;
 use crate::metrics::InferenceStage;
 use crate::pipeline::Pipeline;
 use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
-use crate::runtime::FaceInference;
+use crate::runtime::{FaceInference, FrameFaceInference, FrameInferenceOutcome};
 use crate::state::{FailureStage, InferenceWorkerState, SharedStatus};
 
 /// Maximum consecutive recoverable per-frame errors before the worker halts.
@@ -142,10 +142,10 @@ pub fn run_inference_worker(
                     pipeline,
                 } = context.as_mut().expect("context present when not paused");
 
-                if !pipeline.should_run_detector(frame.seq) {
-                    update_status(&status, |s| s.record_skipped_sequence());
-                    continue;
-                }
+                // The legacy runtime is a combined model and has no separate
+                // landmark stage. Do not use detector cadence to skip the
+                // entire frame: the composite runtime owns detector cadence
+                // while keeping landmark inference on every active frame.
                 pipeline.record_detector_run(frame.seq);
 
                 let start = Instant::now();
@@ -285,6 +285,150 @@ pub fn run_inference_worker(
         .metrics();
 
     InferenceWorkerResult { final_metrics }
+}
+
+/// Runs a frame-level composite runtime on a capacity-one frame slot.
+///
+/// This loop intentionally has no detector cadence gate. Cadence and ROI
+/// recovery belong to [`FrameFaceInference`], so landmark inference remains
+/// active on every frame while an ROI is tracked. `NoFace` is recorded as a
+/// normal result and does not increment the recoverable-error counter.
+pub fn run_composite_inference_worker(
+    mut runtime: Box<dyn FrameFaceInference>,
+    stop: StopToken,
+    status: SharedStatus,
+    frame_slot: Arc<LatestSlot<VideoFrame>>,
+    output_slot: Arc<LatestSlot<RawFaceObservation>>,
+) -> InferenceWorkerResult {
+    let mut last_gen = 0u64;
+    let mut last_overwritten = 0u64;
+    let mut last_processed_seq: Option<FrameSeq> = None;
+
+    update_status(&status, |s| s.transition_to(InferenceWorkerState::Running));
+
+    while !stop.is_stopped() {
+        let wait_started = Instant::now();
+        match frame_slot.wait_read_after(last_gen, Duration::from_millis(50)) {
+            Some(ReadResult::New(frame)) => {
+                let wait_duration = wait_started.elapsed();
+                last_gen = frame_slot.generation();
+                let overwritten = frame_slot.overwritten_count();
+                let overwrite_delta = overwritten.saturating_sub(last_overwritten);
+                update_status(&status, |s| s.record_overwritten(overwrite_delta));
+                last_overwritten = overwritten;
+
+                if let Some(last_seq) = last_processed_seq
+                    && frame.seq <= last_seq
+                {
+                    update_status(&status, |s| s.record_duplicate_suppressed());
+                    continue;
+                }
+                last_processed_seq = Some(frame.seq);
+
+                let total_started = Instant::now();
+                let outcome = runtime.infer_frame(&frame);
+                let timing = runtime.take_timing();
+                let elapsed = total_started.elapsed();
+                let finished_at = vtuber_core::monotonic_now();
+                record_composite_timing(&status, wait_duration, timing, elapsed);
+
+                match outcome {
+                    Ok(FrameInferenceOutcome::Face(observation)) => {
+                        if let Err(error) = validate_observation(&observation) {
+                            let halt = update_status(&status, |s| {
+                                s.record_frame_error(
+                                    FailureStage::Decode,
+                                    error,
+                                    MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                                )
+                            });
+                            if halt {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        let output_overwritten_before = output_slot.overwritten_count();
+                        if !output_slot.publish(observation) {
+                            update_status(&status, |s| s.record_dropped());
+                        }
+                        let output_overwritten_delta = output_slot
+                            .overwritten_count()
+                            .saturating_sub(output_overwritten_before);
+                        update_status(&status, |s| {
+                            s.record_output_overwritten(output_overwritten_delta);
+                            s.record_processed(frame.seq, finished_at, elapsed);
+                            s.clear_consecutive_errors();
+                        });
+                    }
+                    Ok(FrameInferenceOutcome::NoFace) => {
+                        update_status(&status, |s| {
+                            s.record_no_face(frame.seq, finished_at, elapsed);
+                            s.clear_consecutive_errors();
+                        });
+                    }
+                    Err(error) => {
+                        let halt = update_status(&status, |s| {
+                            s.record_frame_error(
+                                FailureStage::FrameInference,
+                                error,
+                                MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                            )
+                        });
+                        if halt {
+                            break;
+                        }
+                    }
+                }
+            }
+            Some(ReadResult::Closed) | None if frame_slot.is_closed() => break,
+            Some(ReadResult::Closed) => break,
+            None => {}
+        }
+    }
+
+    update_status(&status, |s| {
+        if s.state != InferenceWorkerState::Failed {
+            s.transition_to(InferenceWorkerState::Stopping);
+        }
+    });
+
+    let final_metrics = status
+        .lock()
+        .expect("InferenceController status mutex poisoned")
+        .metrics();
+    InferenceWorkerResult { final_metrics }
+}
+
+fn record_composite_timing(
+    status: &SharedStatus,
+    wait_duration: Duration,
+    timing: crate::runtime::FrameInferenceTiming,
+    elapsed: Duration,
+) {
+    update_status(status, |s| {
+        s.record_stage_duration(InferenceStage::Wait, wait_duration);
+        if let Some(duration) = timing.detector {
+            s.record_stage_duration(InferenceStage::Detector, duration);
+        }
+        if let Some(duration) = timing.crop {
+            s.record_stage_duration(InferenceStage::Crop, duration);
+        }
+        if let Some(duration) = timing.landmark {
+            s.record_stage_duration(InferenceStage::Landmark, duration);
+        }
+        if let Some(duration) = timing.decode {
+            s.record_stage_duration(InferenceStage::Decode, duration);
+        }
+        s.record_stage_duration(
+            InferenceStage::Total,
+            if timing.total.is_zero() {
+                elapsed
+            } else {
+                timing.total
+            },
+        );
+    });
 }
 
 fn load_inference_context(

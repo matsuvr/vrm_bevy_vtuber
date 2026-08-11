@@ -41,6 +41,8 @@ pub struct InferenceWorkerStatus {
     pub last_inference_duration: Option<Duration>,
     /// Total frames processed since worker start.
     pub frames_processed: u64,
+    /// Total frames completed with the ordinary no-face result.
+    pub no_face_frames: u64,
     /// Total frames dropped because the output slot could not accept them.
     pub frames_dropped: u64,
     /// Frames overwritten in the input slot before being read.
@@ -119,6 +121,15 @@ impl InferenceWorkerStatus {
         self.last_inference_duration = Some(duration);
         self.frames_processed += 1;
         self.metrics_state.record_processed();
+    }
+
+    /// Records an ordinary no-face frame without treating it as a failure.
+    pub fn record_no_face(&mut self, seq: FrameSeq, finished_at: MonoTimeNs, duration: Duration) {
+        self.last_source_seq = Some(seq);
+        self.last_finished_at = Some(finished_at);
+        self.last_inference_duration = Some(duration);
+        self.no_face_frames += 1;
+        self.metrics_state.record_no_face();
     }
 
     /// Records a dropped frame.
@@ -221,6 +232,17 @@ mod tests {
         assert_eq!(status.frames_processed, 1);
         assert_eq!(status.last_source_seq, Some(FrameSeq(7)));
         assert_eq!(status.last_finished_at, Some(MonoTimeNs(1000)));
+    }
+
+    #[test]
+    fn record_no_face_is_not_a_failure() {
+        let mut status = InferenceWorkerStatus::new();
+        status.transition_to(InferenceWorkerState::Running);
+        status.record_no_face(FrameSeq(8), MonoTimeNs(2000), Duration::from_millis(4));
+        assert_eq!(status.no_face_frames, 1);
+        assert_eq!(status.state, InferenceWorkerState::Running);
+        assert_eq!(status.metrics().drops.no_face, 1);
+        assert_eq!(status.last_source_seq, Some(FrameSeq(8)));
     }
 
     #[test]

@@ -6906,7 +6906,7 @@ cargo clippy -p vtuber-app --all-targets -- -D warnings
 
 #### M1-08-013-007: detector cadenceとROI recoveryを含むcomposite runtimeを実装する
 
-状態: `PENDING`
+状態: `DONE`
 依存: `M1-08-013-006`
 親参照: M1-08-013、DESIGN.md §12、§14、§20.2
 
