@@ -6563,13 +6563,7 @@ cargo run -p vtuber-desktop --release
 
 不足しているもの:
 
-- full-frame face detector artifact
-- detector preprocess／output decode／NMS
-- single-user primary face selection
-- detector boxからPeppa入力cropへのtyped変換
-- detectorとlandmarkを同一workerで所有するcomposite runtime
-- no-face／ROI loss／detector cadenceのcorrect state machine
-- fixed inputとWindows実cameraによるend-to-end gate
+- fixed inputとWindows実cameraでface-in-frameからfinite landmarks／head poseを得るend-to-end gate
 
 ### fixed direction
 
@@ -7018,7 +7012,7 @@ cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 
 #### M1-08-013-009: Windows full-frame camera probeでparent gateを解除する
 
-状態: `PENDING`
+状態: `BLOCKED`（diagnostic実装済み、face-in-frame実機protocol待ち）
 依存: `M1-08-013-008`
 親参照: M1-08-013、docs/PERFORMANCE_TEST_PLAN.md
 

@@ -7630,7 +7630,10 @@ dependencies = [
  "bevy_vrm1",
  "vtuber-app",
  "vtuber-avatar",
+ "vtuber-camera",
+ "vtuber-core",
  "vtuber-inference",
+ "vtuber-tracking",
 ]
 
 [[package]]

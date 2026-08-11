@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 mod acceptance;
+mod face_pipeline_smoke;
 mod vrm_compatibility;
 
 fn main() {
@@ -17,6 +18,7 @@ fn main() {
         println!("tasks:");
         println!("  vrm-compat [fixture-dir]  run bevy_vrm1 compatibility gate");
         println!("  acceptance <command>      Windows acceptance test support");
+        println!("  face-pipeline-smoke       Windows MSMF detector/crop/landmark probe");
         return;
     }
 
@@ -51,6 +53,13 @@ fn main() {
         "acceptance" => {
             handle_acceptance(&args[1..]);
         }
+        "face-pipeline-smoke" => match face_pipeline_smoke::run(&args[1..]) {
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!("face-pipeline-smoke failed: {error}");
+                process::exit(1);
+            }
+        },
         other => {
             eprintln!("unknown task: {other}");
             process::exit(1);

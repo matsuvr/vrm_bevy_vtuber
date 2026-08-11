@@ -86,12 +86,13 @@ the design convention of positive image-right yaw, chin-up pitch, and clockwise
 image roll.
 
 This resolves the 2D/3D type mismatch and has deterministic synthetic sign
-tests. It does not by itself provide face detection or crop selection: the
-current artifact is a landmark model whose upstream usage expects a detected
-face crop. The Windows vertical gate therefore remains conditional/blocked
-until a manifest-tracked, pure-Rust-compatible detector/crop stage is supplied
-and verified on a real camera frame. No camera or production pose success is
-claimed from the current unit tests alone.
+tests. The manifest-tracked UltraFace RFB-320 artifact, pure-Rust detector
+decode/NMS, primary-face selection, square crop, and same-worker composite
+runtime are now implemented and covered by fixed-input golden/replay tests. A
+Windows MSMF diagnostic command is also available. The Windows vertical gate
+remains blocked until a face-in-frame camera run produces finite 98 landmarks
+and a finite planar pose; the current 10-second camera run observed no face and
+makes no production pose success claim.
 
 ## M1-08-013-002 exact UltraFace probe result
 

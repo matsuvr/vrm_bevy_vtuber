@@ -1,8 +1,8 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — automated tests/builds pass; Windows GUI/camera/soak protocol is NOT RUN and M1-08-013 has a correctness blocker  
-**Date:** 2026-08-10  
-**Commit SHA:** `01dce2753ef483069c0eb83f7b740b3814e65349` (working tree contains uncommitted changes)  
+**Status:** BLOCKED — software gates and the diagnostic command pass; the 10-second MSMF probe saw no face, so the full face-in-frame protocol is NOT RUN
+**Date:** 2026-08-11
+**Commit SHA:** see `git rev-parse HEAD` for the commit containing this report
 **Binary:** `vtuber-desktop` (release profile)
 
 ---
@@ -26,8 +26,8 @@
 
 | # | Model Name | Source | License | SHA-256 | VRM Version | Notes |
 |---|-----------|--------|---------|---------|-------------|-------|
-| 1 | Peppa_Pig_Face_Landmark student 256x256 | upstream GitHub + PINTO model zoo | Apache-2.0 | `73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A` | n/a | Landmark-only ONNX; detector/crop still required |
-| 2 | — | — | — | — | n/a | NOT RUN |
+| 1 | UltraFace RFB-320 | ONNX Model Zoo / Hugging Face mirror | MIT | `34CD7E60AEFF28744C657DE7A3DC64E872D506741DE66987F3426F2B79F88017` | n/a | Full-frame detector, `[1,3,240,320]` |
+| 2 | Peppa_Pig_Face_Landmark student 256x256 | upstream GitHub + PINTO model zoo | Apache-2.0 | `73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A` | n/a | Crop landmark model, `[1,98,3]` |
 | 3 | — | — | — | — | n/a | NOT RUN |
 
 ---
@@ -45,8 +45,23 @@ Automated verification completed on the environment above:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo build -p vtuber-desktop --release`
 
-The GUI import, physical MSMF camera, model crop/detection, VRM motion, and
-30-minute soak protocol below were not run in this agent session.
+The GUI import, VRM motion, and 30-minute soak protocol below were not run in
+this agent session. The composite diagnostic was exercised on Windows with
+the connected `c922 Pro Stream Webcam`:
+
+```text
+cargo run -p xtask -- face-pipeline-smoke --duration 10 --json
+camera: msmf:0 (1280x720 @ 30/1 Rgb8)
+frames_captured: 297
+face_count/no_face_count: 0/30
+detector_hz/landmark_hz: 2.836/0.000
+stage_error: none
+```
+
+This is a real MSMF capture and composite-runtime run, but it is not a face
+success: no face was present in the sampled view. The 60-second neutral run,
+face out/return protocol, directional movement, edge protocol, and three
+Stop/Start repetitions remain NOT RUN.
 
 | Row | Model | Camera | Protocol | Result | Notes |
 |-----|-------|--------|----------|--------|-------|
@@ -246,7 +261,7 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 | 6 | No process crash | 0 crashes | NOT RUN | NOT RUN |
 | 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** BLOCKED — the automated checks pass, but the physical Windows protocol was not run and the current landmark-only model still lacks a verified detector/crop stage.
+**Overall Gate:** BLOCKED — the detector/crop/landmark software gate and a real MSMF no-face run pass, but a face-in-frame run yielding finite 98 landmarks and planar pose has not been completed.
 
 ---
 
@@ -254,8 +269,8 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 | # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
 |---|---------|----------|----------|-------------|---------------|
-| 1 | Production Peppa model is landmark-only; camera frames are not yet transformed by a verified face detector/crop stage | correctness | High | Add and verify the model-matched detector/crop artifact and preprocessing contract before accepting M1-08-013 | Yes |
-| 2 | Physical Windows GUI, MSMF camera, VRM motion, and 30-minute soak were not run in this session | test-environment | High | Execute the Windows acceptance protocol on target hardware | Yes |
+| 1 | The 10-second MSMF probe captured frames but observed no face, so detector→crop→landmark→pose could not be measured | test-environment | High | Place a face in the selected camera view and execute the full M1-08-013-009 protocol | Yes |
+| 2 | Physical Windows GUI, VRM motion, and 30-minute soak were not run in this session | test-environment | High | Execute the Windows acceptance protocol on target hardware | Yes |
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment
 
