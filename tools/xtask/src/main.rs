@@ -10,6 +10,7 @@ use std::process;
 mod acceptance;
 mod face_image_probe;
 mod face_pipeline_smoke;
+mod mediapipe_face_smoke;
 mod vrm_compatibility;
 mod vrm_managed_compatibility;
 
@@ -25,6 +26,7 @@ fn main() {
         println!("  acceptance <command>      Windows acceptance test support");
         println!("  face-image-probe <path>  Run UltraFace on one still image");
         println!("  face-pipeline-smoke       Windows MSMF detector/crop/landmark probe");
+        println!("  mediapipe-face-smoke      Windows MSMF MediaPipe Face Landmarker gate");
         return;
     }
 
@@ -80,6 +82,13 @@ fn main() {
             Ok(()) => {}
             Err(error) => {
                 eprintln!("face-pipeline-smoke failed: {error}");
+                process::exit(1);
+            }
+        },
+        "mediapipe-face-smoke" => match mediapipe_face_smoke::run(&args[1..]) {
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!("mediapipe-face-smoke failed: {error}");
                 process::exit(1);
             }
         },
