@@ -97,8 +97,14 @@ containing a face. The cause was landmark-model visibility values above the
 engine contract; the ONNX landmark decoder now clamps that channel to `[0,1]`,
 matching the generic decoder contract. A subsequent 20-second C922 run
 produced 6 face observations, 98 finite landmarks, and 5 finite planar poses
-with no stage error. The full manual camera protocol remains pending, so the
-parent gate is not yet accepted.
+with no stage error. The full M1-08-013 camera protocol was then exercised
+with the guided CUI on the same C922: 4,944 frames, 50 face observations, 19
+expected no-face observations during out-of-frame phases, 98 finite
+landmarks, 44 finite planar poses, detector/landmark rates of 0.387/0.347 Hz,
+and no stage error. The protocol included five loss/return cycles, directional
+movement, an edge phase, and three capture Stop/Start cycles. The parent
+camera gate is accepted for this Windows environment; GUI/VRM and long-run
+acceptance remain separate gates.
 
 ## M1-08-013-002 exact UltraFace probe result
 

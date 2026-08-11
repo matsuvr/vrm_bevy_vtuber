@@ -1,6 +1,6 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — the 20-second MSMF face-in-frame probe passes through 98 landmarks and planar pose; the required full manual protocol is NOT RUN
+**Status:** BLOCKED — the M1-08-013 C922 guided camera protocol passes; GUI/VRM, performance, and 30-minute soak acceptance remain NOT RUN
 **Date:** 2026-08-11
 **Commit SHA:** see `git rev-parse HEAD` for the commit containing this report
 **Binary:** `vtuber-desktop` (release profile)
@@ -92,22 +92,35 @@ pose yaw/pitch/roll ranges: [-1.402699,0.477511] [-1.695925,2.557055] [-1.651763
 stage_error: none
 ```
 
-This is a basic live face-in-frame success, not completion of the full
-acceptance protocol. The 60-second neutral run, face out/return protocol,
-directional movement, edge protocol, and three Stop/Start repetitions remain
-NOT RUN.
-
-To make the remaining manual timing reproducible, the diagnostic now provides
-a guided CUI mode. It prints each phase and a one-second countdown for the
-last three seconds; the mode itself remains NOT RUN in this report:
+The full M1-08-013 camera protocol was then run with the guided CUI mode. It
+prints each phase and a one-second countdown for the last three seconds:
 
 ```text
 cargo run -p xtask -- face-pipeline-smoke --camera 0 --guided-protocol --json
 ```
 
+```text
+camera: c922 Pro Stream Webcam (MSMF index 0)
+format: 1280x720 @ 30/1 Rgb8
+frames_captured: 4944
+face_count/no_face_count: 50/19
+detector_hz/landmark_hz: 0.387/0.347
+stage_error: none
+detector_confidence: 0.779927
+finite_landmarks/finite_pose_count: 98/44
+pose yaw/pitch/roll ranges: [-5.145444,2.186486] [-2.124861,4.208844] [-2.604939,1.199027]
+```
+
+The guided run emitted and executed the 60-second neutral, five loss/return
+cycles, left/right/up/down, edge, and three capture Stop/Start phases. The
+`no_face_count` is expected during the out-of-frame phases. The first run
+returned exit code 1 after printing the complete summary because the exact
+deadline bookkeeping did not mark the protocol complete; the command now
+normalizes that boundary and has a regression test.
+
 | Row | Model | Camera | Protocol | Result | Notes |
 |-----|-------|--------|----------|--------|-------|
-| 1 | Model 1 | Camera 1 | Full | NOT RUN | Physical camera and GUI protocol unavailable in this session |
+| 1 | Model 1 | Camera 1 | M1-08-013 guided camera | PASS | Full guided camera phases completed; GUI/VRM acceptance is recorded separately as NOT RUN |
 | 2 | Model 2 | Camera 1 | Full | NOT RUN | No manifest model |
 | 3 | Model 3 | Camera 1 | Full | NOT RUN | No manifest model |
 | 4 | Model 1 | Camera 2 | Full | NOT RUN | No physical camera inventory |
@@ -303,7 +316,7 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 | 6 | No process crash | 0 crashes | NOT RUN | NOT RUN |
 | 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** BLOCKED — the still-image detector probe and 20-second MSMF face-in-frame run pass, but the required full manual camera protocol and GUI/VRM/soak checks have not been completed.
+**Overall Gate:** BLOCKED — M1-08-013 camera correctness is PASS, but GUI/VRM functional checks, latency measurements, and the 30-minute soak have not been completed.
 
 ---
 
@@ -311,12 +324,12 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 | # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
 |---|---------|----------|----------|-------------|---------------|
-| 1 | The basic 20-second MSMF probe passes, but the full face-in-frame protocol has not been run | test-environment | High | Execute the 60-second neutral, loss/recovery, movement, edge, and Stop/Start protocol | Yes |
+| 1 | The M1-08-013 camera protocol is complete, but the broader Windows GUI/VRM acceptance has not been run | test-environment | High | Execute the Windows functional, recovery, latency, and soak protocol | Yes |
 | 2 | Physical Windows GUI, VRM motion, and 30-minute soak were not run in this session | test-environment | High | Execute the Windows acceptance protocol on target hardware | Yes |
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment
 
-**M1-09 Go/No-Go Decision:** HOLD — M1-08-013/019 are not accepted; macOS work remains explicitly deferred.
+**M1-09 Go/No-Go Decision:** HOLD — M1-08-019 and the broader Windows gate are not accepted; macOS work remains explicitly deferred.
 
 ---
 

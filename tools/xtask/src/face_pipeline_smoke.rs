@@ -282,6 +282,24 @@ fn flush_stdout() {
     let _ = std::io::stdout().flush();
 }
 
+#[cfg(test)]
+mod tests {
+    use super::GuidedProtocol;
+    use std::time::Duration;
+
+    #[test]
+    fn guided_protocol_marks_the_exact_deadline_complete() {
+        let mut protocol = GuidedProtocol::new();
+        let total = protocol.total_duration();
+
+        protocol.tick(Duration::ZERO);
+        assert!(!protocol.is_complete());
+        protocol.tick(total);
+
+        assert!(protocol.is_complete());
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn run_windows(options: Options) -> Result<(), String> {
     use std::sync::{Arc, Mutex};
@@ -432,6 +450,14 @@ fn run_windows(options: Options) -> Result<(), String> {
     }
 
     let snapshot_missing = options.snapshot.is_some() && !snapshot_written;
+    let deadline_reached = Instant::now() >= deadline;
+    if deadline_reached
+        && let Some(protocol) = guided.as_mut()
+        && !protocol.is_complete()
+    {
+        let total = protocol.total_duration();
+        let _ = protocol.tick(total);
+    }
     let guided_incomplete = guided
         .as_ref()
         .is_some_and(|protocol| !protocol.is_complete());

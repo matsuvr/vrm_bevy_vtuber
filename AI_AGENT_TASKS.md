@@ -36,14 +36,14 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-07` | `LEGACY_PROGRESS` | action／view-model／orchestrator境界と`bevy_egui 0.41.1` GUIが実装済み。GUI frameworkを再選定・再実装しない。 |
 | `M1-08-001`〜`M1-08-008` | `LEGACY_PROGRESS` | acceptance用の文書・matrix・metrics基盤まで実装済み。ただしWindows物理受入は未実施であり、PASSと解釈しない。 |
 | `M1-08-009`〜`M1-08-012` | `DONE` | GUI import、avatar lifecycle、synthetic tracking、Windows camera契約、capture／preview接続まで実装・自動検証済み。 |
-| `M1-08-013` | `BLOCKED` | Peppa 98点landmark modelへ渡すfull-frame face detector／crop段が欠落。planar pose solver自体は実装済み。repair leaf `M1-08-013-001`〜`009`で解除する。 |
+| `M1-08-013` | `DONE` | UltraFace→crop→Peppa 98点landmark→planar poseのWindows C922実機gateを、face loss／return、方向、edge、capture Stop／Startを含むguided protocolで確認済み。 |
 | `M1-08-014`〜`M1-08-017` | `PENDING` | worker、tracking、avatar bridge、diagnostics、shutdownの既存実装を捨てず、二段推論pipelineへ適合させて実機監査する。 |
 | `M1-08-018`〜`M1-08-019` | `PENDING` | Windows functional／recovery／latency／30分soakを実施してfinal gateを閉じる。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-現在の次実行単位は**`M1-08-013-004`**である。`M1-08-013`本体をもう一度丸ごと委嘱してはならない。
+現在の次実行単位は**`M1-08-014`**である。完了済みの`M1-08-013`本体をもう一度丸ごと委嘱してはならない。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -7014,7 +7014,7 @@ cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 
 #### M1-08-013-009: Windows full-frame camera probeでparent gateを解除する
 
-状態: `IN_PROGRESS`（20秒face-in-frame pass、full実機protocol待ち）
+状態: `DONE`
 依存: `M1-08-013-008`
 親参照: M1-08-013、docs/PERFORMANCE_TEST_PLAN.md
 
@@ -7059,6 +7059,28 @@ cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 - detector／crop／landmarkのどこでlossしたかをreportへ記録する。
 - success時に`M1-08-013`を`DONE`へ変更し、`M1-08-014`を次実行単位とする。
 - failure時は`M1-08-013`をBLOCKEDのままにし、exact failureを分類して`M1-08-013-010`以降のrepair leafを追加する。`M1-08-014`へ進まない。
+
+**Windows実機結果（2026-08-11）**
+
+`c922 Pro Stream Webcam`（MSMF index 0、1280x720 @ 30/1、Rgb8）で、次の
+commandを実行してguided protocolの全フェーズを完了した。顔を画面外へ
+出すフェーズを含むため、`no_face_count`は失敗ではなく期待される観測である。
+
+```text
+cargo run -p xtask -- face-pipeline-smoke --camera 0 --guided-protocol --json
+frames_captured: 4944
+face_count/no_face_count: 50/19
+detector_hz/landmark_hz: 0.387/0.347
+stage_error: none
+detector_confidence: 0.779927
+finite_landmarks/finite_pose_count: 98/44
+pose yaw/pitch/roll ranges: [-5.145444,2.186486] [-2.124861,4.208844] [-2.604939,1.199027]
+```
+
+最初の実行は全フェーズの指示とsummaryを出力した後、終了時刻ちょうどの
+境界で完了フラグを立て損ねて終了コード1になった。このCUI bookkeeping
+bugを修正し、exact deadlineの回帰テストを追加した。summaryの実測値と
+worker／cameraの終了処理には異常はなかった。
 
 **このleafで行わないこと**
 
