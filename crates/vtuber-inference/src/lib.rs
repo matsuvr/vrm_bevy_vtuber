@@ -52,7 +52,7 @@ pub use descriptor::{
 };
 pub use error::{InferenceError, Result};
 pub use metrics::{DropCounters, InferenceMetrics, InferenceStage, StageTimingSnapshot};
-pub use runtime::FaceInference;
 #[cfg(feature = "onnx")]
-pub use runtime::OnnxRuntime;
+pub use runtime::{CompositeFrameInference, OnnxRuntime};
+pub use runtime::{FaceInference, FrameFaceInference, FrameInferenceOutcome};
 pub use state::{FailureStage, InferenceWorkerState, InferenceWorkerStatus, WorkerFailure};

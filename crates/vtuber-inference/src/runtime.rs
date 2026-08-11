@@ -3,7 +3,32 @@
 #[cfg(feature = "onnx")]
 use crate::error::InferenceError;
 use crate::error::Result;
-use vtuber_core::types::{LandmarkSchemaId, RawFaceObservation};
+use vtuber_core::types::{LandmarkSchemaId, RawFaceObservation, VideoFrame};
+
+/// Result of one production frame-level inference attempt.
+///
+/// `NoFace` is an ordinary observation and must not be counted as a runtime
+/// failure. A `Face` observation uses unmirrored source-image normalized
+/// coordinates. Implementations own all live model state in the inference
+/// worker thread; this contract moves only borrowed frame data across the
+/// call boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrameInferenceOutcome {
+    /// A face was found and decoded into a source-image observation.
+    Face(RawFaceObservation),
+    /// No face met the detector and landmark validity policy.
+    NoFace,
+}
+
+/// Frame-level production inference boundary.
+///
+/// The worker owns the implementing value and its model runtimes. The caller
+/// supplies a borrowed [`VideoFrame`]; detector-specific tensors and runtime
+/// values remain private to the inference crate.
+pub trait FrameFaceInference: Send {
+    /// Runs the complete detector-to-landmark pipeline for one frame.
+    fn infer_frame(&mut self, frame: &VideoFrame) -> Result<FrameInferenceOutcome>;
+}
 
 /// Trait for a face inference runtime.
 pub trait FaceInference: Send + Sync {
@@ -103,6 +128,85 @@ impl FaceInference for OnnxRuntime {
 
     fn schema_id(&self) -> LandmarkSchemaId {
         self.schema
+    }
+}
+
+/// Composite production runtime that owns the detector and landmark stages.
+///
+/// Construction is intended to happen inside the inference worker. The
+/// `artifact_root` is the manifest directory; model paths in the plain
+/// [`FacePipelineDescriptor`] are relative to that directory. Frame execution
+/// is introduced by the later composite-runtime task, so this type currently
+/// exposes ownership and descriptor validation without connecting the legacy
+/// worker loop.
+#[cfg(feature = "onnx")]
+#[allow(dead_code)] // The stage fields are consumed by M1-08-013-007 frame execution.
+pub struct CompositeFrameInference {
+    descriptor: crate::descriptor::FacePipelineDescriptor,
+    detector: crate::detector::UltraFaceDetector,
+    landmark: OnnxRuntime,
+    detector_buffers: crate::detector::UltraFacePreprocessBuffers,
+    crop_buffers: crate::crop::FaceCropPreprocessBuffers,
+}
+
+#[cfg(feature = "onnx")]
+impl CompositeFrameInference {
+    /// Constructs both live runtimes and their reusable worker-owned buffers.
+    ///
+    /// This method must be called by the inference worker, not by the Bevy
+    /// main thread. The returned value contains no `World`, entity, or asset
+    /// handle and is safe to retain only within that worker's ownership domain.
+    pub fn from_pipeline_descriptor(
+        descriptor: &crate::descriptor::FacePipelineDescriptor,
+        artifact_root: &std::path::Path,
+    ) -> Result<Self> {
+        if descriptor.detector.role != crate::descriptor::ModelRole::FaceDetector {
+            return Err(crate::error::InferenceError::InvalidInput(
+                "pipeline detector descriptor has the wrong role".into(),
+            ));
+        }
+        if descriptor.landmarks.role != crate::descriptor::ModelRole::FaceLandmarks {
+            return Err(crate::error::InferenceError::InvalidInput(
+                "pipeline landmark descriptor has the wrong role".into(),
+            ));
+        }
+        let schema = match descriptor.landmarks.schema.as_deref() {
+            Some("peppapig-98") => LandmarkSchemaId("peppapig-98"),
+            Some(other) => {
+                return Err(crate::error::InferenceError::InvalidInput(format!(
+                    "unsupported landmark schema `{other}`"
+                )));
+            }
+            None => {
+                return Err(crate::error::InferenceError::InvalidInput(
+                    "landmark descriptor has no schema".into(),
+                ));
+            }
+        };
+
+        let detector_path = artifact_root.join(&descriptor.detector.file);
+        let landmark_path = artifact_root.join(&descriptor.landmarks.file);
+        crate::backend::tract::verify_model_file(&landmark_path, &descriptor.landmarks.sha256)?;
+        let detector = crate::detector::UltraFaceDetector::from_path(detector_path)
+            .map_err(|error| crate::error::InferenceError::LoadFailed(error.to_string()))?;
+        let landmark = OnnxRuntime::new(landmark_path, schema)?;
+        let detector_buffers = crate::detector::UltraFacePreprocessBuffers::new();
+        let crop_buffers = crate::crop::FaceCropPreprocessBuffers::new(descriptor.crop.output_size)
+            .map_err(|error| crate::error::InferenceError::InvalidInput(error.to_string()))?;
+
+        Ok(Self {
+            descriptor: descriptor.clone(),
+            detector,
+            landmark,
+            detector_buffers,
+            crop_buffers,
+        })
+    }
+
+    /// Returns the plain descriptor used to construct this composite runtime.
+    #[must_use]
+    pub fn descriptor(&self) -> &crate::descriptor::FacePipelineDescriptor {
+        &self.descriptor
     }
 }
 

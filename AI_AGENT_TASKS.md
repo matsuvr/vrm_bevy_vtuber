@@ -6856,7 +6856,7 @@ cargo clippy -p vtuber-inference --features onnx --all-targets -- -D warnings
 
 #### M1-08-013-006: frame-level composite inference contractを導入する
 
-状態: `PENDING`
+状態: `DONE`
 依存: `M1-08-013-005`
 親参照: M1-08-013、DESIGN.md §12、§14
 
