@@ -9,6 +9,8 @@
 pub mod backend;
 /// Inference worker controller and command protocol.
 pub mod controller;
+/// Detector-box to landmark-crop transforms and crop preprocessing.
+pub mod crop;
 /// Output decoding from runtime tensors to engine-independent observations.
 pub mod decode;
 /// Model descriptor and runtime settings.
@@ -39,6 +41,9 @@ pub mod state;
 pub mod worker;
 
 pub use controller::{ControlCommand, InferenceController, InferenceWorkerResult};
+pub use crop::{
+    CropError, FaceCropPreprocessBuffers, FaceCropTransform, LandmarkCoordinateEncoding,
+};
 pub use descriptor::{
     ChannelOrder, CropInterpolation, CropOutsideFill, DetectorPostprocessConfig, FaceCropConfig,
     FacePipelineDescriptor, InputValueDomain, ModelArtifactDescriptor, ModelDescriptor,

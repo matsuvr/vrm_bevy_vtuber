@@ -144,7 +144,7 @@ fn spatial_size(input_shape: &[usize; 4]) -> Result<(usize, usize)> {
     }
 }
 
-fn validate_frame(frame: &VideoFrame) -> Result<()> {
+pub(crate) fn validate_frame(frame: &VideoFrame) -> Result<()> {
     if frame.width == 0 || frame.height == 0 {
         return Err(InferenceError::InvalidInput("zero frame dimension".into()));
     }
@@ -213,7 +213,7 @@ fn resize_to_rgb(
     }
 }
 
-fn read_rgb_pixel(frame: &VideoFrame, x: u32, y: u32) -> [u8; 3] {
+pub(crate) fn read_rgb_pixel(frame: &VideoFrame, x: u32, y: u32) -> [u8; 3] {
     let stride = frame.stride_bytes;
     let base = y as usize * stride
         + match frame.format {

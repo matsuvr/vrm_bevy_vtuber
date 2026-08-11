@@ -6805,7 +6805,7 @@ cargo test -p vtuber-inference primary_face_selection --features onnx
 
 #### M1-08-013-005: detector boxからPeppa cropへのtyped transformを実装する
 
-状態: `PENDING`
+状態: `DONE`
 依存: `M1-08-013-004`
 親参照: M1-08-013、DESIGN.md §11、§14
 
