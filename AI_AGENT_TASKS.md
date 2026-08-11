@@ -38,13 +38,14 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-009`〜`M1-08-012` | `DONE` | GUI import、avatar lifecycle、synthetic tracking、Windows camera契約、capture／preview接続まで実装・自動検証済み。 |
 | `M1-08-013` | `DONE` | UltraFace→crop→Peppa 98点landmark→planar poseのWindows C922実機gateを、face loss／return、方向、edge、capture Stop／Startを含むguided protocolで確認済み。 |
 | `M1-08-014` | `DONE` | managed VRM import／avatar lifecycleの既存blockerを解消し、自動互換性検査済み。 |
-| `M1-08-015`〜`M1-08-017` | `IN_PROGRESS` | composite tracking、real-source avatar bridge、diagnostics／recovery／shutdownの実装・自動検証は完了。GUIの実VRM motion／校正確認が未完了。 |
+| `M1-08-015` | `IN_PROGRESS` | M1-08-015-001〜012のMediaPipe rewrite sequenceを実施中。旧composite trackingの実機証拠は新backendの受入証拠として再利用しない。 |
+| `M1-08-016`〜`M1-08-017` | `PENDING` | MediaPipe rewrite後にreal-VRM bridgeとdiagnostics／recovery／shutdownを再検証する。 |
 | `M1-08-018`〜`M1-08-019` | `BLOCKED` | GUI functional／recovery、latency export、30分soakが未実施のためfinal gateを閉じられない。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-現在の次実行単位は**`M1-08-015`のGUI実機確認**である。実装・自動検証済みの範囲を再実装せず、未確認のWindows GUI／VRM項目だけを受入する。完了済みの`M1-08-013`本体をもう一度丸ごと委嘱してはならない。
+現在の実行単位は、ユーザー指示で定義された**`M1-08-015-001`から始まるMediaPipe rewrite sequence**である。旧UltraFace／PeppaPig／planar poseの実装・実機証拠は新backendの受入証拠として扱わず、歴史的なfailure baselineとして保持する。`M1-08-018`／`M1-08-019`は引き続きBLOCKED、`M1-09`はDEFERREDとする。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -7188,6 +7189,16 @@ cargo build -p vtuber-desktop --release
 依存: `M1-08-014`
 親参照: DESIGN.md §11、§15、§17.2、§20.1、§21.1
 
+> **2026-08-11 rewrite:** この親taskの旧UltraFace／PeppaPig／planar-pose
+> 指示と実装証拠はproduction decisionとしてsupersededである。以下の
+> `M1-08-015-001`〜`M1-08-015-012`を現在の実行順序とし、旧camera gateを
+> MediaPipeの受入証拠として再利用しない。旧コードは後続leafでproduction
+> reachabilityを除去する。
+
+以下の「現状の扱い」「変更候補」「実装指示」「このsubtaskで行わないこと」
+「完了条件」「検証」は旧composite tracking pathの履歴であり、現在の実行指示
+ではない。現在は直後の`M1-08-015 rewrite leaf sequence`だけを実行する。
+
 **現状の扱い**
 
 `crates/vtuber-app/src/tracking_runtime.rs`、`CalibrationCollector`、`CalibrationSession`、`TrackingPipeline`、planar pose branchは既に実装されている。新しいtracking pipelineを作らず、detector／crop後のsource-normalized 98 landmarksとtyped no-face outcomeを既存runtimeへ正しく流す。
@@ -7242,11 +7253,87 @@ cargo test -p vtuber-app tracking_crop_invariance
 cargo clippy -p vtuber-tracking -p vtuber-app --all-targets -- -D warnings
 ```
 
+### M1-08-015 rewrite leaf sequence (current)
+
+#### M1-08-015-001: Record failure baseline and supersede the old design
+
+状態: `IN_PROGRESS`
+
+`AGENTS.md`、`DESIGN.md`、ADR-001をMediaPipe rewriteに整合させ、ADR-009を追加する。旧rate／pose range、Peppa normalization mismatch、98-point expression index mismatchをfailure baselineとして記録する。ADR-001の旧production decisionをsupersededとし、MediaPipe native exceptionを監査済みbinding経由に限定する。M1-08-016／017を`PENDING`へ戻し、018／019は`BLOCKED`、M1-09は`DEFERRED`のまま維持する。
+
+Commit: `docs(mocap): supersede custom planar tracking design`
+
+#### M1-08-015-002: MediaPipe dependency and standalone Windows gate
+
+`mediapipe-rs`のexact revision、official task bundle、既存camera layer、worker-owned VIDEO modeを追加し、`mediapipe-face-smoke`でWindows gateを実施する。60秒測定、15 Hz以上、478 landmarks、52 blendshapes、one valid matrix、queue depth 1以下、Stop/Start 3回を証明する。旧backendへfallbackしない。
+
+Commit: `feat(mocap): add MediaPipe Face Landmarker Windows gate`
+
+#### M1-08-015-003: Add canonical face-tracking contracts
+
+`vtuber-core`へtyped `FaceTrackingOutcome`、face sample、camera transform、landmark、typed blendshape set、quality fieldsを追加し、fake backendとunit testを適合させる。`NoFace`とmalformed output errorを区別する。
+
+Commit: `refactor(mocap): add canonical MediaPipe face sample contract`
+
+#### M1-08-015-004: Replace the production worker backend
+
+MediaPipe VIDEO modeをexisting inference workerへ統合する。strict timestamp、stride-aware pixel conversion、latest-only output、typed error、worker内construct/drop、deterministic shutdownを満たし、Bevyへ依存しない。
+
+Commit: `feat(mocap): replace production worker with MediaPipe Face Landmarker`
+
+#### M1-08-015-005: Implement matrix conversion and guided sign proof
+
+column-major matrix validation、proper rotation extraction、relative transform、basis mapping、synthetic fixtures、`mediapipe-pose-probe`を実装する。Windows実cameraでright/left/up/down/rollのsignを証明するまで先へ進めない。
+
+Commit: `feat(mocap): derive neutral-relative pose from MediaPipe transforms`
+
+#### M1-08-015-006: Replace calibration with auto-neutral and instant Recenter
+
+30-frame collector gateをproduction pathから除去し、first-valid auto-neutral、300 ms／15 sampleのrobust recent window、one-sample fallback、instant Recenter、waiting-for-face、filter resetを実装する。expression/head motionをreject理由にしない。
+
+Commit: `feat(mocap): replace blocking calibration with instant recenter`
+
+#### M1-08-015-007: Add tracking hysteresis, SO(3) filter, and recovery
+
+3-hit acquire、5-miss/300 ms loss、hold/neutral return/reacquire、SO(3) biquad、limits/outlier quarantine、deterministic replayを実装する。
+
+Commit: `feat(mocap): add stable head tracking and loss recovery`
+
+#### M1-08-015-008: Map MediaPipe blendshapes to VRM control
+
+exact typed 52-category parser、blink、A/I/U、gaze、missing/duplicate diagnostics、capability fallbackを実装する。invalid Peppa expression mappingと`BasicExpressionFallback`のproduction reachabilityを削除する。
+
+Commit: `feat(mocap): drive VRM expressions from MediaPipe blendshapes`
+
+#### M1-08-015-009: Integrate app UI, diagnostics, and avatar bridge
+
+MediaPipe outcomeからtracking、`AvatarControlFrame`、generation-safe avatar bridge、real/synthetic source exclusivity、diagnostics UIまで接続する。
+
+Commit: `feat(mocap): integrate MediaPipe tracking with desktop runtime`
+
+#### M1-08-015-010: Remove the legacy production path
+
+UltraFace、PeppaPig、custom crop、planar pose、placeholder expression、old calibration collectorのdefault production reachabilityを削除する。research commandとして残す場合だけ理由を記録する。
+
+Commit: `refactor(mocap): remove legacy custom face pipeline`
+
+#### M1-08-015-011: Windows functional and performance acceptance
+
+section 16 protocolをC922とapproved VRMで実施し、10/10 Recenter、physical signs、real VRM head/blink/mouth/gaze、15 Hz以上、capture-to-apply p95 180 ms以下、Stop/Start 3回を測定する。thresholdを下げて合格扱いにしない。
+
+Commit: `test(mocap): complete Windows MediaPipe tracking acceptance`
+
+#### M1-08-015-012: Final documentation and task state
+
+acceptance report、manifest、native/runtime provenance、license notices、task statesを更新する。全acceptanceが通った場合のみM1-08-015を`DONE`とし、016／017はnew backendのrevalidation state、018／019はblocked、M1-09はdeferredを維持する。
+
+Commit: `docs(mocap): record MediaPipe rewrite acceptance`
+
 
 #### M1-08-016: 既存avatar bridgeをreal tracking sourceで閉じる
 
-状態: `IN_PROGRESS`
-備考: real tracking source接続、generation／stale frame排他、synthetic source排他、binding／expression／gazeの自動検証は完了。GUI上の実顔→実VRM motion確認は未完了。
+状態: `PENDING`
+備考: MediaPipe rewrite後のcanonical outcome、generation／stale frame排他、synthetic source排他、binding／expression／gazeを再検証する。旧real-source evidenceは新backendの完了証拠として扱わない。
 依存: `M1-08-015`
 親参照: DESIGN.md §15、§16、§20.1、ADR-004
 
@@ -7307,8 +7394,8 @@ cargo build -p vtuber-desktop --release
 
 #### M1-08-017: 既存Diagnostics／error recovery／shutdownを実pipelineで監査する
 
-状態: `IN_PROGRESS`
-備考: composite stage diagnostics、worker exit／panic recovery、逆順shutdown、retry、全workspace test／clippyは完了。GUI Diagnostics表示とrelease appの反復Start／Stopは未完了。
+状態: `PENDING`
+備考: MediaPipe backend identity、478/52/matrix contract diagnostics、worker exit／panic recovery、逆順shutdown、retry、GUI Diagnostics表示を再検証する。旧composite evidenceは新backendの完了証拠として扱わない。
 依存: `M1-08-016`
 親参照: DESIGN.md §17、§20.2〜§20.4、§21、§24
 

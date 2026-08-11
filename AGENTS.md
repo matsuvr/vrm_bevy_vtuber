@@ -79,7 +79,7 @@ Owns OS camera backends and `nokhwa`. Never expose backend buffers or OS handles
 
 ### `vtuber-inference`
 
-Owns model loading, preprocessing, pure-Rust inference, and output decoding. It must not depend on Bevy. Construct and own the inference runtime inside the inference worker instead of moving a live runtime object across threads.
+Owns model loading, preprocessing, inference, and output decoding. The approved production face backend is the official MediaPipe Tasks 0.10.35 native runtime accessed only through the pinned `mediapipe-rs` revision recorded in ADR-009. It must not depend on Bevy. Construct and own the inference runtime inside the inference worker instead of moving a live runtime object across threads.
 
 ### `vtuber-tracking`
 
@@ -98,12 +98,18 @@ Owns orchestration, UI, settings, model import, diagnostics, and application sta
 Production runtime must not use:
 
 - Python subprocesses
-- MediaPipe native runtime
 - TensorFlow Lite C API
 - ONNX Runtime
 - OpenCV
 - Unity
-- an opaque native inference library hidden behind a Rust wrapper
+- arbitrary native inference plugins or an unreviewed native runtime hidden behind a Rust wrapper
+
+The sole approved exception is the official MediaPipe Tasks 0.10.35 runtime,
+accessed through the exact reviewed `mediapipe-rs` revision in ADR-009. This
+exception is audited, worker-owned, CPU-only for the current Windows gate, and
+must remain behind the `vtuber-inference` boundary. Application crates still
+use `#![forbid(unsafe_code)]`; no Python, OpenCV, Unity, ONNX Runtime, or
+sidecar process may be added.
 
 OS camera FFI used by `nokhwa`, Bevy/wgpu internals, Windows manifests, and macOS bundle metadata are permitted.
 
@@ -111,11 +117,22 @@ OS camera FFI used by `nokhwa`, Bevy/wgpu internals, Windows manifests, and macO
 
 - Pin Bevy exactly to `0.19.0`.
 - Pin the approved `bevy_vrm1` Git revision exactly.
+- Pin MediaPipe Tasks to 0.10.35 through `mediapipe-rs` revision
+  `527037fa0fe1339750140283930bbb9560460e9e`; do not use an unpinned branch.
 - Use target-specific `nokhwa` features: MSMF on Windows and AVFoundation on macOS.
 - Do not enable both TFLite and ONNX inference production features simultaneously.
 - Record source, version, purpose, license, and alternatives for every new direct dependency.
 - Commit `Cargo.lock`.
 - Do not update unrelated dependencies while implementing a feature task.
+
+The approved face task bundle is `assets/models/face_landmarker.task` with
+SHA-256
+`64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF`.
+The task bundle is consumed as a bundle; its internal models must not be
+extracted into a replacement application pipeline. The verified native
+runtime may be downloaded on first use through the binding's documented
+MediaPipe 0.10.35 package path. Offline release packaging is a later task and
+must not be represented as complete here.
 
 ## Concurrency rules
 
@@ -149,6 +166,10 @@ Any conversion to Bevy local transforms belongs in `vtuber-avatar` and requires 
 - Do not use `unwrap` or `expect` on external data or OS results.
 - `expect` is permitted only for a proven internal invariant and must state the invariant.
 - No-face is a normal tracking state, not an error.
+- A malformed MediaPipe result is a typed output-contract error, not `NoFace`.
+- MediaPipe face processing is on-device. Camera frames and landmarks must not
+  be transmitted. The MediaPipe project may collect performance/utilization
+  metrics; do not claim zero network activity without measurement.
 
 ## Unsafe code
 

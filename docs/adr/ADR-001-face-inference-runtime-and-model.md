@@ -1,7 +1,12 @@
 # ADR-001: 顔推論runtimeとmodel artifact
 
-Status: Accepted with deviation; G0-05で確定済み
+Status: Superseded by ADR-009 for production face tracking; retained as historical evidence
 Date: 2026-08-04 (updated 2026-08-05)
+
+> 2026-08-11のM1-08-015 rewriteにより、このADRのpure-Rust
+> `tract-onnx`/PeppaPig/planar-pose production decisionはsupersededとなった。
+> この文書は、旧実装の選定過程、再現可能なblocker、artifact provenanceを
+> Git historyとともに保存する。現行production decisionはADR-009である。
 
 ## Context
 
@@ -9,13 +14,40 @@ Date: 2026-08-04 (updated 2026-08-05)
 
 TFLiteまたはONNXを読めることと、採用候補modelが実際に動くことは別である。unsupported operator、dynamic shape、quantization、custom postprocessのいずれかで失敗し得るため、runtime名を先に確定して実装を進めない。
 
-## Fixed decision
+## Failure baseline retained for the rewrite
+
+The recorded Windows C922 guided runs established a correctness failure in the
+old calibration and planar-pose path, rather than a user-behaviour problem:
+
+- default calibration required 30 accepted observations within 5 seconds;
+- measured landmark rates were approximately 0.293 Hz, 0.347 Hz, and 0.074 Hz,
+  so the required sample count could not complete inside the timeout;
+- recorded pose ranges reached yaw `[-5.145, 2.186]` rad, pitch
+  `[-2.125, 4.209]` rad, roll `[-2.605, 1.199]` rad, with a later pitch maximum
+  of `8.091` rad;
+- the PeppaPig manifest declared ImageNet normalization
+  `mean=[0.485,0.456,0.406]`, `std=[0.229,0.224,0.225]`, while the upstream
+  implementation and PINTO demo use RGB divided by `255.0` with zero mean and
+  unit standard deviation;
+- the old 98-point expression mapping used MediaPipe 478-point indices
+  `133, 160, 263, 291, 362, 382, 388`, which are out of range for a 98-point
+  result and therefore cannot be a valid production blink/mouth mapping.
+
+These measurements supersede the old assumption that a stricter stillness gate
+or a wider rejection threshold would repair the pipeline. They are retained as
+the baseline against which the MediaPipe rewrite is evaluated.
+
+## Historical fixed decision (superseded)
 
 - production runtimeはpure Rustとする。
 - Python subprocess、MediaPipe native runtime、TensorFlow Lite C API、ONNX Runtime、OpenCV DNNをproduction pathへ含めない。
 - WindowsとmacOSで同一artifact、同一前後処理、同一golden contractを使う。
 - TFLite backendとONNX backendをproduction buildで同時に有効化しない。
 - compatibility failure時にnative runtimeへ無断で切り替えない。
+
+The current user-authorized exception is recorded in ADR-009: official
+MediaPipe Tasks 0.10.35 through the pinned audited `mediapipe-rs` revision.
+This is not a general authorization for arbitrary native inference runtimes.
 
 ## Candidate order
 

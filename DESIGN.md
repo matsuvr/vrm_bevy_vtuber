@@ -46,8 +46,8 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 6. 顔追跡はカメラワーカー、推論ワーカー、Bevyメインスレッドの三領域に分離する。
 7. ワーカー間は容量無制限のqueueで接続しない。最新値一件だけを保持する`LatestSlot<T>`を利用し、古いフレームを捨てて遅延の累積を防ぐ。
 8. WindowsとmacOSのカメラ取得には`nokhwa 0.10.11`を第一候補とし、WindowsではMedia Foundation、macOSではAVFoundation backendを明示的に有効化する。
-9. 顔推論は純Rustランタイムを用いる。第一候補は`tract-tflite 0.23.0`であるが、採用モデルの演算子互換性、前後処理、ライセンス、golden出力をGate 0で検証するまで確定しない。
-10. 頭部姿勢は、キャリブレーション時の中立ランドマークと現在ランドマークの相対剛体変換から求める。MVPでは重み付きKabsch法を採用する。
+9. 顔推論のproduction backendは、公式MediaPipe Face Landmarker Tasks 0.10.35を、監査済みの`mediapipe-rs` revision `527037fa0fe1339750140283930bbb9560460e9e`経由で使用する。CPU delegate、VIDEO mode、`assets/models/face_landmarker.task`を固定し、実行runtimeはinference worker内で所有する。
+10. 頭部姿勢はMediaPipeのface transformation matrixから、初期自動neutralまたは即時`Recenter`で保存した中立transformに対する相対剛体変換として求める。Euler角の差分や30フレーム静止ゲートは使用しない。
 11. 頭・首の姿勢は`bevy_vrm1`の`BodyTracking`へ渡さない。追跡で得た実姿勢を、`HeadBoneEntity`、`NeckBoneEntity`等へ独自adapterが加算適用する。
 12. 表情は`bevy_vrm1::ModifyExpressions`を利用する。`isBinary`、`overrideBlink`、`overrideMouth`、`overrideLookAt`の解決は`bevy_vrm1`へ委譲する。
 13. `bevy_vrm1::LookAt`はMVPでは使用しない。現行revisionでは`lookAt.type = expression`が`todo!()`へ到達するためである。視線はlook-direction Expressionまたは眼球boneの独自適用で行う。
@@ -64,7 +64,7 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 
 - アプリケーション、カメラ制御、推論前処理、推論実行、推論後処理、姿勢推定、フィルタ、VRM制御をRustで記述する。
 - シェーダーはBevyおよび`bevy_vrm1`が利用するWGSLを使用する。
-- 実行時にPythonプロセス、MediaPipe C++ runtime、TensorFlow Lite C API、ONNX Runtime、OpenCV、Unityを起動またはリンクしない。
+- 実行時にPythonプロセス、TensorFlow Lite C API、ONNX Runtime、OpenCV、Unityを起動またはリンクしない。公式MediaPipe Tasks 0.10.35 native runtimeだけは、ADR-009で監査した`mediapipe-rs` revisionを介するproduction例外として許可する。
 - カメラ画像を外部サービスへ送信しない。
 - 開発用のモデル検査やgolden生成で一時的に他言語を利用する場合も、再現手順を隔離し、配布物と通常buildへ含めない。ただし原則として検査ツールもRustで作る。
 
@@ -83,7 +83,7 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 
 ### 3.3 禁止事項
 
-- Rust wrapperの背後でC/C++推論runtimeを黙って導入する。
+- Rust wrapperの背後で、ADR-009に記録されていないC/C++推論runtimeを導入する。MediaPipe例外はversion、binding revision、task bundle SHA-256、native library sourceをdiagnosticsへ出す。
 - Windowsだけ動かすために共通データ型へCOM pointerやMedia Foundation bufferを露出する。
 - macOSだけ動かすために共通データ型へObjective-C objectを露出する。
 - Bevyメインスレッドから同期的にカメラframe取得や推論を実行する。
@@ -533,7 +533,7 @@ vtuber-camera   -X-> Bevy / bevy_vrm1
 vtuber-inference -X-> Bevy / bevy_vrm1
 ```
 
-`vtuber-tracking`は`vtuber-inference`へ依存しない。両crateは`vtuber-core::RawFaceObservation`契約を介して接続する。
+`vtuber-tracking`は`vtuber-inference`へ依存しない。両crateは`vtuber-core`のcanonical face-tracking outcome契約を介して接続する。旧`RawFaceObservation`は移行中の互換型に限り、MediaPipe結果をPeppa固有schemaへ戻す変換はproduction pathに置かない。
 
 ---
 
@@ -548,8 +548,9 @@ vtuber-inference -X-> Bevy / bevy_vrm1
 | VRM preflight parser | `gltf` | `=1.4.1`、`extensions`有効 |
 | debug UI | `bevy_egui` | `=0.41.1`候補 |
 | camera | `nokhwa` | `=0.10.11` |
-| TFLite inference | `tract-tflite` | `=0.23.0`候補 |
-| ONNX fallback | `tract-onnx` | `=0.23.4`候補、同時採用しない |
+| Face inference | `mediapipe-rs` | Git rev `527037fa0fe1339750140283930bbb9560460e9e`、MediaPipe Tasks 0.10.35 |
+| Legacy TFLite candidate | `tract-tflite` | ADR-001に記録した評価履歴。productionではない |
+| Legacy ONNX candidate | `tract-onnx` | ADR-001に記録した評価履歴。productionではない |
 | image decode / resize | `image` | lockfile固定 |
 | matrix / SVD | `nalgebra` | lockfile固定 |
 | serialization | `serde`, `serde_json`, `toml` | lockfile固定 |
@@ -570,16 +571,21 @@ versionは実装開始時に`cargo tree`とlicenseを確認し、Cargo.lockをco
 - VRM textureのPNG/JPEG対応を落としやすい。
 - 初期段階のfeature最小化は原因不明の描画欠落を増やす。
 
-### 10.3 mutually exclusive inference backend
+### 10.3 production inference backend
 
-production buildではTFLiteとONNXを同時に有効化しない。
+production buildではMediaPipe Face Landmarker Tasksを唯一の顔推論backendとする。UltraFace、PeppaPig、tractのTFLite/ONNX実行はlegacy research/evaluation artifactであり、default desktop runtimeへ到達させない。MediaPipeとlegacy face stackを同時実行しない。
 
 ```text
-feature inference-tflite  # Gate 0で通ればdefault
-feature inference-onnx    # TFLite互換性が成立しない場合のみ
+mediapipe-face-landmarker = true
+legacy-face-stack = false
 ```
 
-両feature同時有効は`compile_error!`とする。最終的に一方だけを残せるなら、unused backend dependencyを削除する。
+MediaPipeは`FaceLandmarker::builder(ModelSource::path(task_path))`、CPU
+delegate、one-face、VIDEO mode、blendshapes、transformation matricesを
+固定する。runtimeはworker内でconstruct/use/dropする。first-useのverified
+native library downloadは許可するが、download失敗はrecoverable startup
+errorとし、offline release packagingは別taskで扱う。legacy dependencyの
+削除とdefault graphの監査はM1-08-015の後続leafで実施する。
 
 ### 10.4 target-specific camera dependency
 
@@ -890,6 +896,59 @@ camera previewはoptionalである。
 ---
 
 ## 14. inference subsystem
+
+> **M1-08-015 rewrite notice (2026-08-11).** この節の旧UltraFace + PeppaPig
+> + planar-pose pipeline、ImageNet normalization、98点へMediaPipe indexを
+> 適用するexpression mapping、および30 accepted frameのcalibration gateは
+> supersededである。production仕様はADR-009および以下のcanonical
+> MediaPipe contractへ移行する。旧実装の評価結果と失敗原因はADR-001へ保持し、
+> 後続leafでdead production pathを削除する。
+
+### 14.0 Current production: MediaPipe Face Landmarker
+
+`vtuber-inference`はofficial MediaPipe Face Landmarker Tasks 0.10.35を
+`mediapipe-rs` revision
+`527037fa0fe1339750140283930bbb9560460e9e`経由で使用する。task bundleは
+`assets/models/face_landmarker.task`、SHA-256は
+`64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF`である。
+VIDEO modeの同期`detect_for_video`を既存のcapacity-one inference worker内で
+呼び出し、MediaPipe taskをBevy main threadへ移動しない。CPU delegateを初期
+acceptanceの固定値とし、GPU delegateはこのtaskでは使用しない。
+
+入力はcamera layerが出す`VideoFrame`をworker-owned reusable bufferへ
+変換する。RGBはtight rowなら直接利用し、BGR/RGBA/Grayとstrideは契約に
+従ってRGBへ変換またはrepackする。preview mirrorは推論入力へ適用しない。
+captureのmonotonic nanosecond timestampはstrictly increasing millisecond
+domainへ変換するが、出力には元の`captured_at`を保持する。
+
+valid one-face resultは478 finite landmarks、52 finite blendshape scores、
+one finite affine transformation matrixを持つ。zero facesは正常な
+`NoFace`、複数face・数不足・未知/duplicate blendshape・非finite値・不正
+matrixはtyped output-contract errorとする。detector confidenceを
+fabricateせず、visibility/presence/tracking scoreを混同しない。
+
+### 14.0.1 Canonical outcome and neutral-relative pose
+
+engine-independent contractは`FaceTrackingOutcome::Face`または`NoFace`
+であり、各結果にsource sequence、capture timestamp、inference start/end
+timestampを保持する。face sampleはcamera-to-face rotation quaternion、
+translation、normalized face centre、478 landmarks、typed 52-category
+blendshape set、matrix qualityを持つ。
+
+初回のvalid faceで自動neutralを確立する。`Recenter`は最大15 sample、最大
+300 msのrecent valid transform windowを使い、3 sample以上ならquaternion
+medoid/Markley average、translation/face centreのcomponent medianを
+即時commitする。windowが足りなければ最新valid sampleを使用し、expression
+motionや通常のhead motionでrejectしない。relative transformは
+`inverse(T0) * Tt`で計算し、rotation/translationをEuler差分で求めない。
+
+### 14.0.2 Legacy material retained for migration
+
+旧`FaceInference`、Peppa-specific preprocessing、planar solver、98-point
+expression fallbackの説明は履歴・移行比較のために残す場合があるが、
+production constructorまたはdefault desktop runtimeから到達可能であっては
+ならない。M1-08-015-010でdead pathを削除し、評価artifactはmanifestとADRへ
+legacyとして記録する。
 
 ### 14.1 FaceInference trait
 
