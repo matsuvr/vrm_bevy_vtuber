@@ -22,6 +22,27 @@ pub enum FrameInferenceOutcome {
     NoFace,
 }
 
+/// Latest-only outcome published by an inference worker.
+///
+/// Unlike [`FrameInferenceOutcome`], this type carries enough source metadata
+/// for the application bridge to explicitly clear the last face observation
+/// when a frame has no face. It is intentionally bounded by the same
+/// capacity-one slot as face observations.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InferenceOutcome {
+    /// A validated face observation.
+    Face(RawFaceObservation),
+    /// A frame was processed but no valid face was found.
+    NoFace {
+        /// Source frame sequence that produced the result.
+        source_seq: vtuber_core::types::FrameSeq,
+        /// Source capture timestamp.
+        captured_at: vtuber_core::types::MonoTimeNs,
+        /// Monotonic completion timestamp.
+        inference_finished_at: vtuber_core::types::MonoTimeNs,
+    },
+}
+
 /// Per-frame timing reported by a composite runtime.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameInferenceTiming {

@@ -120,9 +120,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
             DetectorDecodeOutcome::Detections(detections) => select_primary_face(detections, None),
             DetectorDecodeOutcome::NoFace => None,
         };
-        let mut runtime =
-            CompositeFrameInference::from_pipeline_descriptor(&pipeline, &artifact_root)
-                .map_err(|error| format!("composite runtime load failed: {error}"))?;
+        let mut runtime = CompositeFrameInference::from_pipeline_descriptor(
+            &pipeline,
+            &artifact_root,
+            &vtuber_inference::RuntimeSettings::default(),
+        )
+        .map_err(|error| format!("composite runtime load failed: {error}"))?;
         let outcome = runtime
             .infer_frame(&frame)
             .map_err(|error| format!("composite inference failed: {error}"))?;

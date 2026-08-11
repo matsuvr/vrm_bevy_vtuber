@@ -7115,7 +7115,7 @@ cargo build -p vtuber-desktop --release
 
 #### M1-08-014: composite runtimeを既存InferenceRuntime／orchestratorへ接続する
 
-状態: `PENDING`
+状態: `IN_PROGRESS`
 依存: `M1-08-013-009`
 親参照: DESIGN.md §12、§14、§17、§20.2〜§20.3、§21.2
 

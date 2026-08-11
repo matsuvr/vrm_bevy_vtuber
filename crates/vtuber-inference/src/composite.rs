@@ -369,20 +369,17 @@ impl CompositeFrameInference {
     pub fn from_pipeline_descriptor(
         descriptor: &FacePipelineDescriptor,
         artifact_root: &std::path::Path,
+        settings: &RuntimeSettings,
     ) -> Result<Self> {
         let schema = landmark_schema(descriptor)?;
         let detector_path = artifact_root.join(&descriptor.detector.file);
         let landmark_path = artifact_root.join(&descriptor.landmarks.file);
+        crate::backend::tract::verify_model_file(&detector_path, &descriptor.detector.sha256)?;
         crate::backend::tract::verify_model_file(&landmark_path, &descriptor.landmarks.sha256)?;
         let detector =
             ProductionDetectorStage::from_path(detector_path, descriptor.detector_postprocess)?;
         let landmark = ProductionLandmarkStage::new(OnnxRuntime::new(landmark_path, schema)?);
-        let runtime = CompositeRuntime::new(
-            descriptor.clone(),
-            detector,
-            landmark,
-            &RuntimeSettings::default(),
-        )?;
+        let runtime = CompositeRuntime::new(descriptor.clone(), detector, landmark, settings)?;
         Ok(Self { runtime })
     }
 

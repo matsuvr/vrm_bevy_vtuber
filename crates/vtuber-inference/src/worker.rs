@@ -7,12 +7,12 @@ use vtuber_core::types::{FrameSeq, RawFaceObservation, VideoFrame};
 use vtuber_core::{LatestSlot, ReadResult, StopToken};
 
 use crate::controller::{ControlCommand, InferenceWorkerResult};
-use crate::descriptor::{ModelDescriptor, RuntimeSettings};
-use crate::error::Result;
+use crate::descriptor::{FacePipelineDescriptor, ModelDescriptor, RuntimeSettings};
+use crate::error::{InferenceError, Result};
 use crate::metrics::InferenceStage;
 use crate::pipeline::Pipeline;
 use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
-use crate::runtime::{FaceInference, FrameFaceInference, FrameInferenceOutcome};
+use crate::runtime::{FaceInference, FrameFaceInference, FrameInferenceOutcome, InferenceOutcome};
 use crate::state::{FailureStage, InferenceWorkerState, SharedStatus};
 
 /// Maximum consecutive recoverable per-frame errors before the worker halts.
@@ -39,8 +39,10 @@ pub fn run_inference_worker(
     status: SharedStatus,
     frame_slot: Arc<LatestSlot<VideoFrame>>,
     output_slot: Arc<LatestSlot<RawFaceObservation>>,
+    outcome_slot: Arc<LatestSlot<InferenceOutcome>>,
 ) -> InferenceWorkerResult {
     let mut context: Option<InferenceContext> = None;
+    let mut composite_runtime: Option<Box<dyn FrameFaceInference>> = None;
     let mut last_gen = 0u64;
     let mut last_overwritten = 0u64;
     let mut last_processed_seq: Option<FrameSeq> = None;
@@ -66,6 +68,34 @@ pub fn run_inference_worker(
                     match load_inference_context(&descriptor, &settings) {
                         Ok(ctx) => {
                             context = Some(ctx);
+                            composite_runtime = None;
+                            failed = false;
+                            update_status(&status, |s| {
+                                s.transition_to(InferenceWorkerState::Running);
+                                s.clear_consecutive_errors();
+                            });
+                        }
+                        Err(err) => {
+                            failed = true;
+                            update_status(&status, |s| {
+                                s.record_failure(FailureStage::ModelLoad, err);
+                            });
+                        }
+                    }
+                }
+                Ok(ControlCommand::LoadPipeline {
+                    descriptor,
+                    artifact_root,
+                    settings,
+                }) => {
+                    update_status(&status, |s| {
+                        s.transition_to(InferenceWorkerState::LoadingModel);
+                    });
+
+                    match load_composite_runtime(&descriptor, &artifact_root, &settings) {
+                        Ok(runtime) => {
+                            context = None;
+                            composite_runtime = Some(runtime);
                             failed = false;
                             update_status(&status, |s| {
                                 s.transition_to(InferenceWorkerState::Running);
@@ -88,6 +118,7 @@ pub fn run_inference_worker(
                 }
                 Ok(ControlCommand::Reset) => {
                     context = None;
+                    composite_runtime = None;
                     failed = false;
                     last_gen = 0;
                     last_processed_seq = None;
@@ -111,7 +142,7 @@ pub fn run_inference_worker(
             }
         }
 
-        if paused || context.is_none() || failed {
+        if paused || (context.is_none() && composite_runtime.is_none()) || failed {
             // Wait briefly before polling again so the loop remains responsive.
             std::thread::sleep(Duration::from_millis(10));
             continue;
@@ -134,6 +165,20 @@ pub fn run_inference_worker(
                     continue;
                 }
                 last_processed_seq = Some(frame.seq);
+
+                if let Some(runtime) = composite_runtime.as_mut() {
+                    if process_composite_frame(
+                        runtime,
+                        &frame,
+                        wait_duration,
+                        &status,
+                        &output_slot,
+                        &outcome_slot,
+                    ) {
+                        failed = true;
+                    }
+                    continue;
+                }
 
                 let InferenceContext {
                     runtime,
@@ -193,9 +238,11 @@ pub fn run_inference_worker(
                                     };
 
                                     let output_overwritten_before = output_slot.overwritten_count();
-                                    if !output_slot.publish(observation) {
+                                    let outcome = InferenceOutcome::Face(observation.clone());
+                                    if !output_slot.publish(observation.clone()) {
                                         update_status(&status, |s| s.record_dropped());
                                     }
+                                    let _ = outcome_slot.publish(outcome);
                                     let output_overwritten_delta = output_slot
                                         .overwritten_count()
                                         .saturating_sub(output_overwritten_before);
@@ -223,6 +270,7 @@ pub fn run_inference_worker(
                                         s.record_stage_duration(InferenceStage::Total, elapsed);
                                         s.record_output_overwritten(output_overwritten_delta);
                                         s.record_processed(frame.seq, finished_at, elapsed);
+                                        s.set_last_roi(Some(observation.roi));
                                     });
                                     update_status(&status, |s| s.clear_consecutive_errors());
                                 }
@@ -287,6 +335,90 @@ pub fn run_inference_worker(
     InferenceWorkerResult { final_metrics }
 }
 
+/// Processes one frame through the worker-owned composite runtime.
+///
+/// Returns `true` when the caller should transition the worker to failed after
+/// the bounded consecutive-error policy is exceeded.
+fn process_composite_frame(
+    runtime: &mut Box<dyn FrameFaceInference>,
+    frame: &VideoFrame,
+    wait_duration: Duration,
+    status: &SharedStatus,
+    output_slot: &LatestSlot<RawFaceObservation>,
+    outcome_slot: &LatestSlot<InferenceOutcome>,
+) -> bool {
+    let total_started = Instant::now();
+    let outcome = runtime.infer_frame(frame);
+    let timing = runtime.take_timing();
+    let elapsed = total_started.elapsed();
+    let finished_at = vtuber_core::monotonic_now();
+    record_composite_timing(status, wait_duration, timing, elapsed);
+
+    match outcome {
+        Ok(FrameInferenceOutcome::Face(observation)) => {
+            if let Err(error) = validate_observation(&observation) {
+                return update_status(status, |s| {
+                    s.record_frame_error(
+                        FailureStage::Decode,
+                        error,
+                        MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+                    )
+                });
+            }
+
+            let output_overwritten_before = output_slot.overwritten_count();
+            if !output_slot.publish(observation.clone()) {
+                update_status(status, |s| s.record_dropped());
+            }
+            let output_overwritten_delta = output_slot
+                .overwritten_count()
+                .saturating_sub(output_overwritten_before);
+            let _ = outcome_slot.publish(InferenceOutcome::Face(observation.clone()));
+            update_status(status, |s| {
+                s.record_output_overwritten(output_overwritten_delta);
+                s.record_processed(frame.seq, finished_at, elapsed);
+                s.set_last_roi(Some(observation.roi));
+                s.clear_consecutive_errors();
+            });
+            false
+        }
+        Ok(FrameInferenceOutcome::NoFace) => {
+            let _ = outcome_slot.publish(InferenceOutcome::NoFace {
+                source_seq: frame.seq,
+                captured_at: frame.captured_at,
+                inference_finished_at: finished_at,
+            });
+            update_status(status, |s| {
+                s.record_no_face(frame.seq, finished_at, elapsed);
+                s.set_last_roi(None);
+                s.clear_consecutive_errors();
+            });
+            false
+        }
+        Err(error) => update_status(status, |s| {
+            s.record_frame_error(
+                composite_failure_stage(&error),
+                error,
+                MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+            )
+        }),
+    }
+}
+
+fn composite_failure_stage(error: &InferenceError) -> FailureStage {
+    match error {
+        InferenceError::ExecutionFailed(message) if message.starts_with("detector:") => {
+            FailureStage::Detector
+        }
+        InferenceError::ExecutionFailed(message) if message.starts_with("landmark:") => {
+            FailureStage::Landmark
+        }
+        InferenceError::InvalidInput(message) if message.starts_with("crop:") => FailureStage::Crop,
+        InferenceError::InvalidRoi(_) => FailureStage::Crop,
+        _ => FailureStage::FrameInference,
+    }
+}
+
 /// Runs a frame-level composite runtime on a capacity-one frame slot.
 ///
 /// This loop intentionally has no detector cadence gate. Cadence and ROI
@@ -349,7 +481,7 @@ pub fn run_composite_inference_worker(
                         }
 
                         let output_overwritten_before = output_slot.overwritten_count();
-                        if !output_slot.publish(observation) {
+                        if !output_slot.publish(observation.clone()) {
                             update_status(&status, |s| s.record_dropped());
                         }
                         let output_overwritten_delta = output_slot
@@ -358,19 +490,21 @@ pub fn run_composite_inference_worker(
                         update_status(&status, |s| {
                             s.record_output_overwritten(output_overwritten_delta);
                             s.record_processed(frame.seq, finished_at, elapsed);
+                            s.set_last_roi(Some(observation.roi));
                             s.clear_consecutive_errors();
                         });
                     }
                     Ok(FrameInferenceOutcome::NoFace) => {
                         update_status(&status, |s| {
                             s.record_no_face(frame.seq, finished_at, elapsed);
+                            s.set_last_roi(None);
                             s.clear_consecutive_errors();
                         });
                     }
                     Err(error) => {
                         let halt = update_status(&status, |s| {
                             s.record_frame_error(
-                                FailureStage::FrameInference,
+                                composite_failure_stage(&error),
                                 error,
                                 MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
                             )
@@ -444,6 +578,29 @@ fn load_inference_context(
         buffers,
         pipeline: Pipeline::new(settings),
     })
+}
+
+fn load_composite_runtime(
+    descriptor: &FacePipelineDescriptor,
+    artifact_root: &std::path::Path,
+    settings: &RuntimeSettings,
+) -> Result<Box<dyn FrameFaceInference>> {
+    #[cfg(feature = "onnx")]
+    {
+        let runtime = crate::composite::CompositeFrameInference::from_pipeline_descriptor(
+            descriptor,
+            artifact_root,
+            settings,
+        )?;
+        Ok(Box::new(runtime))
+    }
+    #[cfg(not(feature = "onnx"))]
+    {
+        let _ = (descriptor, artifact_root, settings);
+        Err(crate::error::InferenceError::LoadFailed(
+            "the production composite pipeline requires the onnx feature".into(),
+        ))
+    }
 }
 
 fn update_status<F, R>(status: &SharedStatus, f: F) -> R

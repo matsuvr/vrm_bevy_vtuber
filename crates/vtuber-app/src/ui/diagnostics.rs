@@ -29,6 +29,10 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
             ui.label(format!("{:.1} Hz", diagnostics.inference_rate));
             ui.end_row();
 
+            ui.label("No-face frames");
+            ui.label(format!("{}", diagnostics.inference_no_face_frames));
+            ui.end_row();
+
             ui.label("Tracking rate");
             ui.label(format!("{:.1} Hz", diagnostics.tracking_rate));
             ui.end_row();
@@ -114,6 +118,12 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
     ui.separator();
 
     // Last error.
+    if let Some(code) = &diagnostics.last_error_code {
+        ui.label(format!("Error code: {code}"));
+    }
+    if let Some(stage) = &diagnostics.inference_failure_stage {
+        ui.label(format!("Inference failure stage: {stage}"));
+    }
     if let Some(error) = &diagnostics.last_error {
         ui.heading("Last Error");
         ui.colored_label(bevy_egui::egui::Color32::LIGHT_RED, error);

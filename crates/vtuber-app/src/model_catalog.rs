@@ -4,12 +4,10 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use vtuber_core::types::LandmarkSchemaId;
 use vtuber_inference::{
     ChannelOrder, CropInterpolation, CropOutsideFill, DetectorPostprocessConfig, FaceCropConfig,
-    FacePipelineDescriptor, InputValueDomain, ModelArtifactDescriptor, ModelDescriptor,
-    ModelFormat, ModelRole, Normalization, NormalizationContract, OutputTensorContract,
-    TensorContract, TensorLayout,
+    FacePipelineDescriptor, InputValueDomain, ModelArtifactDescriptor, ModelRole,
+    NormalizationContract, OutputTensorContract, TensorContract, TensorLayout,
 };
 
 /// Errors while reading or validating the face pipeline manifest.
@@ -113,6 +111,13 @@ pub fn load_production_pipeline(
     )
 }
 
+/// Returns the directory containing artifacts referenced by the production
+/// pipeline descriptor.
+#[must_use]
+pub fn production_artifact_root(project_root: &Path) -> PathBuf {
+    project_root.join("assets").join("models")
+}
+
 /// Loads a production pipeline from an explicit manifest path.
 pub fn load_pipeline_from_manifest(
     manifest_path: &Path,
@@ -134,61 +139,6 @@ pub fn verify_pipeline_artifacts(
     verify_artifact(manifest_dir, &pipeline.detector)?;
     verify_artifact(manifest_dir, &pipeline.landmarks)?;
     Ok(pipeline)
-}
-
-/// Loads the landmark model descriptor used by the existing inference worker.
-///
-/// The returned descriptor is derived from the resolved pipeline landmark
-/// artifact, so model ordering in the TOML array cannot change the selected
-/// production model.
-pub fn load_production_descriptor(
-    project_root: &Path,
-) -> Result<ModelDescriptor, ModelCatalogError> {
-    let pipeline = load_production_pipeline(project_root)?;
-    let artifact = pipeline.landmarks;
-    let schema = artifact.schema.as_deref().ok_or_else(|| {
-        invalid(
-            "models.landmarks.schema",
-            "landmark artifacts must declare a schema",
-        )
-    })?;
-    let schema = match schema {
-        "peppapig-98" => LandmarkSchemaId("peppapig-98"),
-        other => {
-            return Err(invalid(
-                "models.landmarks.schema",
-                format!("unsupported landmark schema `{other}`"),
-            ));
-        }
-    };
-    if artifact.input.value_domain != InputValueDomain::UnitFloat {
-        return Err(invalid(
-            "models.landmarks.input.value_domain",
-            "the current landmark worker requires unit_float input",
-        ));
-    }
-
-    let normalization = Normalization::MeanStd {
-        mean: artifact.input.normalization.mean,
-        std: artifact.input.normalization.scale,
-    };
-
-    Ok(ModelDescriptor {
-        id: artifact.id,
-        format: ModelFormat::Onnx,
-        path: project_root
-            .join("assets")
-            .join("models")
-            .join(artifact.file),
-        sha256: artifact.sha256,
-        input_name: artifact.input_name,
-        input_shape: artifact.input.shape,
-        input_dtype: artifact.input.dtype,
-        channel_order: artifact.input.channel_order,
-        normalization,
-        schema,
-        expression_mapping: None,
-    })
 }
 
 fn parse_pipeline_manifest(
@@ -805,23 +755,6 @@ mod tests {
         assert_eq!(pipeline.landmarks.id, "peppapig-98");
         assert_eq!(pipeline.detector_postprocess.max_pre_nms_candidates, 256);
         assert_eq!(pipeline.crop.output_size, [256, 256]);
-    }
-
-    #[test]
-    fn descriptor_is_derived_from_landmark_role_not_array_position() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("crate is nested beneath workspace root");
-        let descriptor = load_production_descriptor(root).expect("manifest should parse");
-        assert_eq!(descriptor.format, ModelFormat::Onnx);
-        assert_eq!(descriptor.input_shape, vec![1, 3, 256, 256]);
-        assert_eq!(descriptor.schema, LandmarkSchemaId("peppapig-98"));
-        assert!(
-            descriptor
-                .path
-                .ends_with("peppapig_student_1x3x256x256.onnx")
-        );
     }
 
     #[test]

@@ -10,9 +10,10 @@ use std::sync::Arc;
 use vtuber_core::types::{RawFaceObservation, VideoFrame};
 use vtuber_core::{LatestSlot, WorkerHandle, WorkerResult};
 
-use crate::descriptor::{ModelDescriptor, RuntimeSettings};
+use crate::descriptor::{FacePipelineDescriptor, ModelDescriptor, RuntimeSettings};
 use crate::error::InferenceError;
 use crate::metrics::InferenceMetrics;
+use crate::runtime::InferenceOutcome;
 use crate::state::{FailureStage, InferenceWorkerState, SharedStatus};
 use crate::worker::run_inference_worker;
 
@@ -27,6 +28,15 @@ pub enum ControlCommand {
         /// Model descriptor. Boxed to keep the enum small.
         descriptor: Box<ModelDescriptor>,
         /// Runtime settings.
+        settings: RuntimeSettings,
+    },
+    /// Load the manifest-resolved production detector-to-landmark pipeline.
+    LoadPipeline {
+        /// Runtime-free composite pipeline descriptor.
+        descriptor: Box<FacePipelineDescriptor>,
+        /// Directory containing the descriptor's relative artifact paths.
+        artifact_root: std::path::PathBuf,
+        /// Runtime settings, including detector cadence.
         settings: RuntimeSettings,
     },
     /// Stop inference but keep the worker alive.
@@ -46,6 +56,7 @@ pub struct InferenceController {
     pub(crate) command_tx: Option<std::sync::mpsc::SyncSender<ControlCommand>>,
     pub(crate) frame_slot: Arc<LatestSlot<VideoFrame>>,
     pub(crate) output_slot: Arc<LatestSlot<RawFaceObservation>>,
+    pub(crate) outcome_slot: Arc<LatestSlot<InferenceOutcome>>,
     pub(crate) worker: Option<WorkerHandle<InferenceWorkerResult>>,
 }
 
@@ -57,6 +68,7 @@ impl Drop for InferenceController {
             let _ = worker.join();
         }
         self.output_slot.close();
+        self.outcome_slot.close();
     }
 }
 
@@ -74,6 +86,7 @@ impl InferenceController {
         frame_slot: Arc<LatestSlot<VideoFrame>>,
         output_slot: Arc<LatestSlot<RawFaceObservation>>,
     ) -> Self {
+        let outcome_slot = Arc::new(LatestSlot::new());
         Self {
             status: Arc::new(std::sync::Mutex::new(
                 crate::state::InferenceWorkerStatus::new(),
@@ -81,6 +94,7 @@ impl InferenceController {
             command_tx: None,
             frame_slot,
             output_slot,
+            outcome_slot,
             worker: None,
         }
     }
@@ -95,6 +109,12 @@ impl InferenceController {
     #[must_use]
     pub fn output_slot(&self) -> Arc<LatestSlot<RawFaceObservation>> {
         Arc::clone(&self.output_slot)
+    }
+
+    /// Returns the latest-only face/no-face outcome slot.
+    #[must_use]
+    pub fn outcome_slot(&self) -> Arc<LatestSlot<InferenceOutcome>> {
+        Arc::clone(&self.outcome_slot)
     }
 
     /// Returns a snapshot of the current worker status.
@@ -122,9 +142,10 @@ impl InferenceController {
         let status = Arc::clone(&self.status);
         let frame_slot = Arc::clone(&self.frame_slot);
         let output_slot = Arc::clone(&self.output_slot);
+        let outcome_slot = Arc::clone(&self.outcome_slot);
 
         let worker = WorkerHandle::spawn("inference-worker", move |stop| {
-            run_inference_worker(rx, stop, status, frame_slot, output_slot)
+            run_inference_worker(rx, stop, status, frame_slot, output_slot, outcome_slot)
         });
 
         self.worker = Some(worker);
@@ -160,6 +181,38 @@ impl InferenceController {
 
         tx.send(ControlCommand::LoadModel {
             descriptor: Box::new(descriptor),
+            settings,
+        })
+        .map_err(|_| InferenceError::Internal("inference worker command channel closed".into()))?;
+        Ok(())
+    }
+
+    /// Loads the manifest-resolved production pipeline.
+    ///
+    /// Both detector and landmark runtimes are constructed in the worker
+    /// thread from this runtime-free descriptor.
+    pub fn load_pipeline(
+        &mut self,
+        descriptor: FacePipelineDescriptor,
+        artifact_root: std::path::PathBuf,
+        settings: RuntimeSettings,
+    ) -> Result<(), InferenceError> {
+        let tx = self
+            .command_tx
+            .as_ref()
+            .ok_or_else(|| InferenceError::Internal("inference worker not started".into()))?;
+
+        {
+            let mut status = self
+                .status
+                .lock()
+                .expect("InferenceController status mutex poisoned");
+            status.transition_to(InferenceWorkerState::LoadingModel);
+        }
+
+        tx.send(ControlCommand::LoadPipeline {
+            descriptor: Box::new(descriptor),
+            artifact_root,
             settings,
         })
         .map_err(|_| InferenceError::Internal("inference worker command channel closed".into()))?;
@@ -237,6 +290,7 @@ impl InferenceController {
         };
 
         self.output_slot.close();
+        self.outcome_slot.close();
         final_metrics
     }
 }

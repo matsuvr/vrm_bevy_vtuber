@@ -79,6 +79,7 @@ fn composite_golden_actual_ultraface_mean_frame_is_no_face() {
     let mut runtime = vtuber_inference::CompositeFrameInference::from_pipeline_descriptor(
         &fixture::production_descriptor(),
         &root.join("assets").join("models"),
+        &vtuber_inference::RuntimeSettings::default(),
     )
     .expect("manifest-tracked production models should construct");
 

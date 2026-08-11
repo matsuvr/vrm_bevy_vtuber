@@ -7,11 +7,13 @@ use bevy::prelude::*;
 use vtuber_core::metrics::RateCounter;
 use vtuber_core::{FrameSeq, LatestSlot, RawFaceObservation, VideoFrame, monotonic_now};
 use vtuber_inference::InferenceStage;
-use vtuber_inference::{InferenceController, InferenceWorkerState, RuntimeSettings};
+use vtuber_inference::{
+    InferenceController, InferenceOutcome, InferenceWorkerState, RuntimeSettings,
+};
 
 use crate::capture_runtime::CaptureRuntime;
 use crate::diagnostics::DiagnosticsSnapshot;
-use crate::model_catalog::load_production_descriptor;
+use crate::model_catalog::{load_production_pipeline, production_artifact_root};
 use crate::orchestrator::{Orchestrator, OrchestratorError, PipelineState};
 
 /// Filesystem root containing the packaged `assets/models/manifest.toml`.
@@ -29,7 +31,7 @@ pub struct InferenceRuntime {
     project_root: PathBuf,
     worker_started: bool,
     model_requested: bool,
-    last_generation: u64,
+    outcome_generation: u64,
     /// Latest decoded observation made available to tracking on the main thread.
     pub latest_observation: Option<RawFaceObservation>,
 }
@@ -45,7 +47,7 @@ impl InferenceRuntime {
             project_root,
             worker_started: false,
             model_requested: false,
-            last_generation: 0,
+            outcome_generation: 0,
             latest_observation: None,
         }
     }
@@ -71,10 +73,14 @@ impl InferenceRuntime {
             self.worker_started = true;
         }
         if !self.model_requested {
-            let descriptor = load_production_descriptor(&self.project_root)
-                .map_err(|error| error.to_string())?;
+            let descriptor =
+                load_production_pipeline(&self.project_root).map_err(|error| error.to_string())?;
             self.controller
-                .load_model(descriptor, RuntimeSettings::default())
+                .load_pipeline(
+                    descriptor,
+                    production_artifact_root(&self.project_root),
+                    RuntimeSettings::default(),
+                )
                 .map_err(|error| error.to_string())?;
             self.model_requested = true;
         }
@@ -91,21 +97,28 @@ impl InferenceRuntime {
             self.worker_started = false;
         }
         self.model_requested = false;
-        self.last_generation = 0;
+        self.outcome_generation = 0;
         self.latest_observation = None;
     }
 
     /// Reads one latest-only inference result, suppressing duplicate output.
     pub fn read_latest(&mut self) -> Option<RawFaceObservation> {
-        let slot = self.controller.output_slot();
-        match slot.try_read_after(self.last_generation) {
-            Some(vtuber_core::ReadResult::New(observation)) => {
-                self.last_generation = slot.generation();
-                self.latest_observation = Some(observation.clone());
-                Some(observation)
+        let outcome_slot = self.controller.outcome_slot();
+        if let Some(vtuber_core::ReadResult::New(outcome)) =
+            outcome_slot.try_read_after(self.outcome_generation)
+        {
+            self.outcome_generation = outcome_slot.generation();
+            match outcome {
+                InferenceOutcome::Face(observation) => {
+                    self.latest_observation = Some(observation.clone());
+                    return Some(observation);
+                }
+                InferenceOutcome::NoFace { .. } => {
+                    self.latest_observation = None;
+                }
             }
-            Some(vtuber_core::ReadResult::Closed) | None => None,
         }
+        None
     }
 }
 
@@ -193,11 +206,22 @@ pub fn read_inference_output_system(
     diagnostics.inference_state = format!("{:?}", status.state);
     diagnostics.inference_last_source_seq = status.last_source_seq.map(|seq| seq.0);
     diagnostics.inference_frames_processed = status.frames_processed;
+    diagnostics.inference_no_face_frames = status.no_face_frames;
     diagnostics.inference_duplicates_suppressed = status.duplicate_frames_suppressed;
     diagnostics.inference_input_overwrites = status.frames_overwritten;
     diagnostics.last_inference_ms = status
         .last_inference_duration
         .map(|duration| duration.as_secs_f32() * 1_000.0);
+    diagnostics.inference_last_roi = status
+        .last_roi
+        .map(|roi| (roi.x, roi.y, roi.width, roi.height));
+    diagnostics.inference_failure_stage = status
+        .last_failure
+        .as_ref()
+        .map(|failure| format!("{:?}", failure.stage));
+    if let Some(failure) = status.last_failure.as_ref() {
+        diagnostics.last_error_code = Some(inference_error_code(failure).to_string());
+    }
 
     let metrics = status.metrics();
     diagnostics.stage_timings = InferenceStage::ALL
@@ -212,7 +236,79 @@ pub fn read_inference_output_system(
             })
         })
         .collect();
-    if let Some(failure) = status.last_failure {
+    if let Some(failure) = status.last_failure.as_ref() {
         diagnostics.last_error = Some(failure.error.to_string());
+    }
+}
+
+fn inference_error_code(failure: &vtuber_inference::WorkerFailure) -> &'static str {
+    use vtuber_inference::InferenceError;
+
+    if matches!(&failure.error, InferenceError::WorkerPanicked) {
+        return "WORKER_PANICKED";
+    }
+
+    match failure.stage {
+        vtuber_inference::FailureStage::ModelLoad => match &failure.error {
+            InferenceError::HashMismatch { .. } => "INFERENCE_MODEL_HASH_MISMATCH",
+            InferenceError::LoadFailed(message)
+                if message.contains("read model file")
+                    || message.contains("No such file")
+                    || message.contains("cannot find") =>
+            {
+                "INFERENCE_MODEL_MISSING"
+            }
+            InferenceError::OptimizationFailed(_) => "INFERENCE_UNSUPPORTED_OPERATOR",
+            _ => "INFERENCE_MODEL_LOAD_FAILED",
+        },
+        vtuber_inference::FailureStage::Detector => "INFERENCE_DETECTOR_FAILED",
+        vtuber_inference::FailureStage::Crop => "INFERENCE_CROP_FAILED",
+        vtuber_inference::FailureStage::Landmark => "INFERENCE_LANDMARK_FAILED",
+        vtuber_inference::FailureStage::Decode => "INFERENCE_MALFORMED_OUTPUT",
+        vtuber_inference::FailureStage::Preprocess => "INFERENCE_PREPROCESS_FAILED",
+        _ => "INFERENCE_RUN_FAILED",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vtuber_core::MonoTimeNs;
+    use vtuber_inference::{FailureStage, InferenceError, WorkerFailure};
+
+    fn failure(stage: FailureStage, error: InferenceError) -> WorkerFailure {
+        WorkerFailure {
+            observed_at: MonoTimeNs(1),
+            stage,
+            error,
+        }
+    }
+
+    #[test]
+    fn inference_error_codes_distinguish_composite_stages() {
+        assert_eq!(
+            inference_error_code(&failure(
+                FailureStage::Detector,
+                InferenceError::ExecutionFailed("detector: failed".into()),
+            )),
+            "INFERENCE_DETECTOR_FAILED"
+        );
+        assert_eq!(
+            inference_error_code(&failure(
+                FailureStage::Landmark,
+                InferenceError::ExecutionFailed("landmark: failed".into()),
+            )),
+            "INFERENCE_LANDMARK_FAILED"
+        );
+        assert_eq!(
+            inference_error_code(&failure(
+                FailureStage::Decode,
+                InferenceError::InvalidOutputValue {
+                    index: 0,
+                    value: f32::NAN,
+                },
+            )),
+            "INFERENCE_MALFORMED_OUTPUT"
+        );
     }
 }

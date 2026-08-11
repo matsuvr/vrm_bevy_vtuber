@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use vtuber_inference::{CompositeFrameInference, FrameInferenceOutcome};
+use vtuber_inference::{CompositeFrameInference, FrameInferenceOutcome, RuntimeSettings};
 
 #[test]
 fn composite_contract_distinguishes_no_face_from_face() {
@@ -22,6 +22,7 @@ fn composite_contract_constructs_detector_and_landmark_owners_from_pipeline() {
     let runtime = CompositeFrameInference::from_pipeline_descriptor(
         &pipeline,
         &root.join("assets").join("models"),
+        &RuntimeSettings::default(),
     )
     .expect("manifest-tracked detector and landmark should construct");
 

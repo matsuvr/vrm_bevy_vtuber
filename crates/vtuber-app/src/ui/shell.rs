@@ -66,7 +66,7 @@ impl Plugin for UiShellPlugin {
                 (process_ui_actions_system, sync_avatar_lifecycle_system)
                     .chain(),
             )
-            .add_systems(Update, sync_error_presenter)
+            .add_systems(Update, sync_error_presenter.before(inference_bridge_system))
             // Capture bridge: connects orchestrator intent to real camera.
             .add_systems(
                 Update,
@@ -82,7 +82,10 @@ impl Plugin for UiShellPlugin {
                 Update,
                 (inference_bridge_system, read_inference_output_system)
                     .chain()
-                    .after(capture_bridge_system),
+                    // Inference owns the first half of shutdown. Capture is
+                    // started by the following bridge once its state is
+                    // visible, but is stopped only after inference has joined.
+                    .before(capture_bridge_system),
             )
             .add_systems(Update, tracking_bridge_system.after(read_inference_output_system))
             .add_systems(Update, publish_control_frame_system.after(tracking_bridge_system))

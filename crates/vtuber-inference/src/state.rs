@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use vtuber_core::types::{FrameSeq, MonoTimeNs};
+use vtuber_core::types::{FrameSeq, MonoTimeNs, NormalizedRect};
 
 use crate::error::InferenceError;
 use crate::metrics::{InferenceMetrics, InferenceMetricsState, InferenceStage};
@@ -53,6 +53,8 @@ pub struct InferenceWorkerStatus {
     pub last_failure: Option<WorkerFailure>,
     /// Consecutive recoverable per-frame errors since the last success.
     pub consecutive_errors: u32,
+    /// ROI from the most recent face outcome, if one was available.
+    pub last_roi: Option<NormalizedRect>,
     metrics_state: InferenceMetricsState,
 }
 
@@ -72,6 +74,12 @@ pub struct WorkerFailure {
 pub enum FailureStage {
     /// Failure during model load or optimization.
     ModelLoad,
+    /// Failure while running the full-frame detector.
+    Detector,
+    /// Failure while preparing the detector-selected crop.
+    Crop,
+    /// Failure while running the crop landmark model.
+    Landmark,
     /// Failure during a single-frame inference (legacy aggregate stage).
     FrameInference,
     /// Failure while preprocessing a video frame.
@@ -199,6 +207,11 @@ impl InferenceWorkerStatus {
     /// frame or a worker reset.
     pub fn clear_consecutive_errors(&mut self) {
         self.consecutive_errors = 0;
+    }
+
+    /// Records the latest source-image ROI, or clears it for a no-face result.
+    pub fn set_last_roi(&mut self, roi: Option<NormalizedRect>) {
+        self.last_roi = roi;
     }
 }
 

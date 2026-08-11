@@ -355,8 +355,11 @@ fn run_windows(options: Options) -> Result<(), String> {
     let artifact_root = options.project_root.join("assets").join("models");
     let worker_descriptor = pipeline.clone();
     let inference_worker = WorkerHandle::spawn("face-pipeline-inference", move |stop| {
-        match CompositeFrameInference::from_pipeline_descriptor(&worker_descriptor, &artifact_root)
-        {
+        match CompositeFrameInference::from_pipeline_descriptor(
+            &worker_descriptor,
+            &artifact_root,
+            &vtuber_inference::RuntimeSettings::default(),
+        ) {
             Ok(runtime) => vtuber_inference::worker::run_composite_inference_worker(
                 Box::new(runtime),
                 stop,

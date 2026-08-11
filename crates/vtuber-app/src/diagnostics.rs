@@ -24,12 +24,18 @@ pub struct DiagnosticsSnapshot {
     pub inference_last_source_seq: Option<u64>,
     /// Number of frames processed by inference.
     pub inference_frames_processed: u64,
+    /// Number of frames that completed with no detected face.
+    pub inference_no_face_frames: u64,
     /// Number of duplicate inference frames suppressed.
     pub inference_duplicates_suppressed: u64,
     /// Number of input-slot overwrites observed by inference.
     pub inference_input_overwrites: u64,
     /// Last inference duration in milliseconds.
     pub last_inference_ms: Option<f32>,
+    /// Last source-image ROI reported by the composite runtime.
+    pub inference_last_roi: Option<(f32, f32, f32, f32)>,
+    /// Stable worker stage for the last failure, if any.
+    pub inference_failure_stage: Option<String>,
     /// Tracking state description.
     pub tracking_state: String,
     /// Slot overwrite count.
