@@ -117,4 +117,54 @@ mod tests {
 
         assert!(app.world().resource::<ActiveControlFrame>().frame.is_none());
     }
+
+    #[test]
+    fn ready_avatar_receives_the_latest_real_tracking_frame() {
+        let mut app = App::new();
+        app.init_resource::<TrackingRuntime>()
+            .init_resource::<AvatarLifecycle>()
+            .init_resource::<ActiveControlFrame>()
+            .add_systems(Update, publish_control_frame_system);
+
+        let root = app.world_mut().spawn_empty().id();
+        {
+            let mut lifecycle = app.world_mut().resource_mut::<AvatarLifecycle>();
+            lifecycle.request_load(root).unwrap();
+            lifecycle.start_binding(root);
+            lifecycle.finish_ready();
+        }
+        let expected_generation = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .current_generation();
+
+        let frame = vtuber_core::AvatarControlFrame {
+            source_seq: vtuber_core::FrameSeq(4),
+            captured_at: vtuber_core::MonoTimeNs(10),
+            produced_at: vtuber_core::MonoTimeNs(12),
+            confidence: 0.9,
+            state: vtuber_core::TrackingState::Tracking,
+            head: vtuber_core::HeadPose {
+                yaw_rad: 0.2,
+                ..Default::default()
+            },
+            gaze: None,
+            expressions: vtuber_core::ExpressionCoefficients::default(),
+        };
+        {
+            let mut tracking = app.world_mut().resource_mut::<TrackingRuntime>();
+            tracking.control_active = true;
+            tracking.latest_control = Some(frame.clone());
+            assert!(tracking.control_slot.publish(frame));
+        }
+
+        app.update();
+
+        let active = app.world().resource::<ActiveControlFrame>();
+        assert_eq!(active.generation, expected_generation);
+        assert_eq!(
+            active.frame.as_ref().map(|frame| frame.source_seq.0),
+            Some(4)
+        );
+    }
 }

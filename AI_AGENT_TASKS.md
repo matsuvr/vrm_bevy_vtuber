@@ -7367,7 +7367,7 @@ Commit: `docs(mocap): record MediaPipe rewrite acceptance`
 
 #### M1-08-016: 既存avatar bridgeをreal tracking sourceで閉じる
 
-状態: `PENDING`
+状態: `DONE`
 備考: MediaPipe rewrite後のcanonical outcome、generation／stale frame排他、synthetic source排他、binding／expression／gazeを再検証する。旧real-source evidenceは新backendの完了証拠として扱わない。
 依存: `M1-08-015`
 親参照: DESIGN.md §15、§16、§20.1、ADR-004
