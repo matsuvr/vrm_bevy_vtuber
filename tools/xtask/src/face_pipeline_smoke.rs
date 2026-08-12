@@ -43,7 +43,7 @@ pub fn print_help() {
     println!("OPTIONS:");
     println!("  --camera <id-or-index>   MSMF camera descriptor id or enumeration index");
     println!("  --duration <seconds>     Capture duration (default: 60)");
-    println!("  --pipeline <id>          Production pipeline id");
+    println!("  --pipeline <id>          Legacy research pipeline id");
     println!("  --project-root <path>    Workspace/project root (default: current directory)");
     println!("  --snapshot <path>        Save one captured frame as a local JPEG");
     println!("  --guided-protocol        Print timed prompts for the full camera protocol");

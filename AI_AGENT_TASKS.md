@@ -27,7 +27,7 @@ repository基準: `main`が少なくとも次を含むこと。
 確認済みrelease binary SHA-256:
 
 ```text
-97F82B36E7C97C621C7C41672220F828ECDD971D9593CF59A35871AE66E34F00
+69B71344032ABDB18C5DE1EAD785AB9ECFE98BBE75B4240B4470B94B70831C3E
 ```
 
 | 範囲 | 状態 | 扱い |
@@ -39,13 +39,14 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-013` | `DONE` | UltraFace→crop→Peppa 98点landmark→planar poseのWindows C922実機gateを、face loss／return、方向、edge、capture Stop／Startを含むguided protocolで確認済み。 |
 | `M1-08-014` | `DONE` | managed VRM import／avatar lifecycleの既存blockerを解消し、自動互換性検査済み。 |
 | `M1-08-015` | `IN_PROGRESS` | M1-08-015-001〜012のMediaPipe rewrite sequenceを実施中。旧composite trackingの実機証拠は新backendの受入証拠として再利用しない。 |
-| `M1-08-016`〜`M1-08-017` | `PENDING` | MediaPipe rewrite後にreal-VRM bridgeとdiagnostics／recovery／shutdownを再検証する。 |
-| `M1-08-018`〜`M1-08-019` | `BLOCKED` | GUI functional／recovery、latency export、30分soakが未実施のためfinal gateを閉じられない。 |
+| `M1-08-016` | `DONE` | MediaPipe canonical tracking sourceからreal-VRM bridgeへの接続、generation／stale排他、synthetic排他を自動検証済み。 |
+| `M1-08-017` | `DONE` | MediaPipe identity／contract diagnostics、worker recovery、reverse shutdown、retry、no-face通常状態を自動検証済み。 |
+| `M1-08-018`〜`M1-08-019` | `BLOCKED` | MediaPipe実顔動作／recovery、latency export、30分soakが未実施のためfinal gateを閉じられない。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-現在の実行単位は、ユーザー指示で定義された**`M1-08-015-001`から始まるMediaPipe rewrite sequence**である。旧UltraFace／PeppaPig／planar poseの実装・実機証拠は新backendの受入証拠として扱わず、歴史的なfailure baselineとして保持する。`M1-08-018`／`M1-08-019`は引き続きBLOCKED、`M1-09`はDEFERREDとする。
+現在の実行単位は、ユーザー指示で定義された**`M1-08-015-001`から始まるMediaPipe rewrite sequence**である。015-016／017の自動再検証は完了したが、015-011の実顔動作／性能受入が未完了のため親015は`IN_PROGRESS`、018／019は`BLOCKED`、`M1-09`は`DEFERRED`とする。旧UltraFace／PeppaPig／planar poseの実装・実機証拠は新backendの受入証拠として扱わず、歴史的なfailure baselineとして保持する。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -7354,13 +7355,21 @@ Commit: `refactor(mocap): remove legacy custom face pipeline`
 
 #### M1-08-015-011: Windows functional and performance acceptance
 
+状態: `BLOCKED`
+
 section 16 protocolをC922とapproved VRMで実施し、10/10 Recenter、physical signs、real VRM head/blink/mouth/gaze、15 Hz以上、capture-to-apply p95 180 ms以下、Stop/Start 3回を測定する。thresholdを下げて合格扱いにしない。
+
+2026-08-12のrelease GUI runではC922選択、VRM 1.0 import/Ready、Start/Stop、MediaPipe worker Running（capture/inference 30 Hz）まで確認したが、入力がno-face（447件、landmark/tracking 0 Hz）だったため、表情protocolと性能閾値は未実施。PASSへ繰り上げない。
 
 Commit: `test(mocap): complete Windows MediaPipe tracking acceptance`
 
 #### M1-08-015-012: Final documentation and task state
 
+状態: `DONE`
+
 acceptance report、manifest、native/runtime provenance、license notices、task statesを更新する。全acceptanceが通った場合のみM1-08-015を`DONE`とし、016／017はnew backendのrevalidation state、018／019はblocked、M1-09はdeferredを維持する。
+
+Acceptance report、MediaPipe task manifest、ADR-009、015-011/016/017/018/019の状態を更新した。functional/performance gate未完了のため親M1-08-015は`IN_PROGRESS`を維持する。
 
 Commit: `docs(mocap): record MediaPipe rewrite acceptance`
 
@@ -7498,7 +7507,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 #### M1-08-018: Windows functional／recovery acceptanceを実pipelineで実施する
 
 状態: `BLOCKED`
-備考: release build、C922 composite guided smoke、managed VRM Ready、automated recoveryは確認済み。GUI import／校正／avatar motion／replace／unloadの受入証跡がないためBLOCKED。
+備考: release build、C922でのMediaPipe worker起動（capture／inference 30 Hz）、managed VRM Ready、Start／Stopは確認済み。no-face状態で実顔動作／校正／avatar motion／replace／unload／recoveryの受入証跡がないためBLOCKED。
 依存: `M1-08-017`
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 

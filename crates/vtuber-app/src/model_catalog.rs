@@ -53,7 +53,7 @@ pub enum ModelCatalogError {
     /// A pipeline model reference does not resolve to an artifact.
     #[error("pipeline `{pipeline_id}` references missing model `{model_id}`")]
     PipelineReferenceMissing {
-        /// Production pipeline ID.
+        /// Legacy research pipeline ID.
         pipeline_id: String,
         /// Missing model ID.
         model_id: String,
@@ -63,7 +63,7 @@ pub enum ModelCatalogError {
         "pipeline `{pipeline_id}` model `{model_id}` has role `{actual_role}`, expected `{expected_role}`"
     )]
     PipelineReferenceRoleMismatch {
-        /// Production pipeline ID.
+        /// Legacy research pipeline ID.
         pipeline_id: String,
         /// Referenced model ID.
         model_id: String,
@@ -154,10 +154,10 @@ fn parse_pipeline_manifest(
     let root = value
         .as_table()
         .ok_or_else(|| invalid("root", "manifest root must be a table"))?;
-    let pipeline = required_table(root, "production_pipeline")?;
-    let pipeline_id = required_string(pipeline, "id", "production_pipeline")?;
-    let detector_id = required_string(pipeline, "detector_model", "production_pipeline")?;
-    let landmark_id = required_string(pipeline, "landmark_model", "production_pipeline")?;
+    let pipeline = required_table(root, "legacy_research_pipeline")?;
+    let pipeline_id = required_string(pipeline, "id", "legacy_research_pipeline")?;
+    let detector_id = required_string(pipeline, "detector_model", "legacy_research_pipeline")?;
+    let landmark_id = required_string(pipeline, "landmark_model", "legacy_research_pipeline")?;
     let model_values = root
         .get("models")
         .and_then(toml::Value::as_array)
@@ -406,7 +406,7 @@ fn parse_detector_postprocess(
         required_usize(table, "max_post_nms_detections", "detector_postprocess")?;
     if max_pre_nms_candidates == 0 || max_post_nms_detections == 0 {
         return Err(invalid(
-            "production_pipeline.detector_postprocess",
+            "legacy_research_pipeline.detector_postprocess",
             "candidate limits must be positive",
         ));
     }
@@ -425,20 +425,23 @@ fn parse_crop_config(
     let square_scale = parse_positive_float(table, "square_scale", "crop")?;
     let center_y_offset_fraction = parse_float_field(table, "center_y_offset_fraction", "crop")?;
     let output_size_values = parse_usize_array(
-        table
-            .get("output_size")
-            .ok_or_else(|| invalid("production_pipeline.crop.output_size", "field is required"))?,
-        "production_pipeline.crop.output_size",
+        table.get("output_size").ok_or_else(|| {
+            invalid(
+                "legacy_research_pipeline.crop.output_size",
+                "field is required",
+            )
+        })?,
+        "legacy_research_pipeline.crop.output_size",
     )?;
     let output_size: [usize; 2] = output_size_values.try_into().map_err(|_| {
         invalid(
-            "production_pipeline.crop.output_size",
+            "legacy_research_pipeline.crop.output_size",
             "expected exactly width and height",
         )
     })?;
     if output_size.contains(&0) {
         return Err(invalid(
-            "production_pipeline.crop.output_size",
+            "legacy_research_pipeline.crop.output_size",
             "dimensions must be positive",
         ));
     }
@@ -446,7 +449,7 @@ fn parse_crop_config(
         "bilinear" => CropInterpolation::Bilinear,
         _ => {
             return Err(invalid(
-                "production_pipeline.crop.interpolation",
+                "legacy_research_pipeline.crop.interpolation",
                 "unsupported mode",
             ));
         }
@@ -455,7 +458,7 @@ fn parse_crop_config(
         "normalization_mean" => CropOutsideFill::NormalizationMean,
         _ => {
             return Err(invalid(
-                "production_pipeline.crop.outside_fill",
+                "legacy_research_pipeline.crop.outside_fill",
                 "unsupported mode",
             ));
         }

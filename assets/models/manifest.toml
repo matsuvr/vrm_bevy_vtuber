@@ -5,8 +5,9 @@ name = "vrm-bevy-vtuber face inference models"
 version = "0.1.0"
 downloaded_at = "2026-08-05"
 notes = [
-    "MediaPipe Face Landmarker TFLite artifacts were evaluated but cannot be loaded by tract-tflite 0.23.4 due to unsupported F16 ADD operator.",
-    "Production ONNX fallback: Peppa_Pig_Face_Landmark student 256x256.",
+    "MediaPipe Face Landmarker is the sole production face backend through the pinned native binding in ADR-009.",
+    "The task bundle is consumed as a bundle; internal models are not extracted into an application pipeline.",
+    "The legacy composite artifacts below are retained only for explicit research/evaluation commands.",
 ]
 
 [[artifacts]]
@@ -18,7 +19,7 @@ upstream = "https://developers.google.com/edge/mediapipe/solutions/vision/face_l
 license = "Apache-2.0"
 license_url = "https://www.apache.org/licenses/LICENSE-2.0.html"
 redistribution = "allowed under Apache-2.0; prefer original upstream URL for updates"
-notes = ["Evaluated only; blocked by tract-tflite F16 ADD operator."]
+notes = ["Approved production bundle; verified by SHA-256 before worker construction."]
 
 [[artifacts]]
 file = "face_detector.tflite"
@@ -56,18 +57,18 @@ input = { shape = [1, 192, 192, 3], dtype = "float32", layout = "NHWC", mean = 0
 output = { names = ["face_landmarks"], description = "468 3D landmarks" }
 notes = ["Legacy float32 model evaluated as TFLite fallback; also blocked by tract-tflite F16 ADD operator."]
 
-[production_pipeline]
+[legacy_research_pipeline]
 id = "ultraface-rfb-320-peppapig-98"
 detector_model = "ultraface-rfb-320"
 landmark_model = "peppapig-98"
 
-[production_pipeline.detector_postprocess]
+[legacy_research_pipeline.detector_postprocess]
 score_threshold = 0.7
 nms_iou = 0.3
 max_pre_nms_candidates = 256
 max_post_nms_detections = 16
 
-[production_pipeline.crop]
+[legacy_research_pipeline.crop]
 square_scale = 1.35
 center_y_offset_fraction = -0.05
 output_size = [256, 256]

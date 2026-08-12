@@ -1,8 +1,8 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — the C922 composite/guided camera protocol and automated M1-08-015〜017 gates pass; GUI/VRM motion, performance, and 30-minute soak acceptance remain NOT RUN
-**Date:** 2026-08-11
-**Commit SHA:** `c193e1bc96b148d9ece041e879bf970f246a881b`
+**Status:** BLOCKED — MediaPipe worker and GUI setup/Start/Stop were exercised with C922 and an approved VRM; face motion, recovery, latency export, and 30-minute soak remain NOT RUN
+**Date:** 2026-08-12
+**Commit SHA:** `ee88dfa`
 **Binary:** `vtuber-desktop` (release profile)
 
 ---
@@ -12,8 +12,8 @@
 | Item | Value |
 |------|-------|
 | OS | Windows 11 Pro 10.0.26200 (build 26200) |
-| CPU | NOT RECORDED — no hardware claim |
-| GPU | NOT RECORDED — no hardware claim |
+| CPU | 13th Gen Intel(R) Core(TM) i9-13900 |
+| GPU | Virtual Desktop Monitor; driver 13.50.53.699 |
 | RAM | NOT RECORDED — no hardware claim |
 | Screen | NOT RECORDED — no hardware claim |
 | Camera 1 | c922 Pro Stream Webcam — MSMF index 0 |
@@ -26,9 +26,33 @@
 
 | # | Model Name | Source | License | SHA-256 | VRM Version | Notes |
 |---|-----------|--------|---------|---------|-------------|-------|
-| 1 | UltraFace RFB-320 | ONNX Model Zoo / Hugging Face mirror | MIT | `34CD7E60AEFF28744C657DE7A3DC64E872D506741DE66987F3426F2B79F88017` | n/a | Full-frame detector, `[1,3,240,320]` |
-| 2 | Peppa_Pig_Face_Landmark student 256x256 | upstream GitHub + PINTO model zoo | Apache-2.0 | `73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A` | n/a | Crop landmark model, `[1,98,3]` |
-| 3 | — | — | — | — | n/a | NOT RUN |
+| 1 | MediaPipe Face Landmarker task bundle | Official MediaPipe model URL; ADR-009 | Apache-2.0 | `64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF` | n/a | CPU VIDEO mode; 478 landmarks, 52 blendshapes, one matrix |
+| 2 | inore-vrm1.vrm | Local approved fixture | project fixture | `B5A3D4126C4A30EF3BFBCFC764A24DC48511B558799D98D4C2FF1DB0BDC7AB01` | VRM 1.0 | Imported in GUI; Ready |
+
+The former UltraFace/Peppa entries and their hashes are retained only in the
+historical composite evidence below. They are not the current production
+backend.
+
+### Current MediaPipe GUI run (partial evidence)
+
+The release binary was launched on Windows and exercised through the desktop
+UI. C922 was enumerated and selected as `MSMF index 0`, `inore-vrm1.vrm` was
+imported and reached `Avatar lifecycle: Ready`, and Start/Stop completed without
+a process restart. Diagnostics while the camera was running showed:
+
+```text
+capture rate: 30.0 Hz
+inference rate: 30.0 Hz
+capture worker: Running
+inference worker: Running
+no-face frames: 447
+landmark/tracking rate: 0.0 Hz
+```
+
+The input contained no detectable face during this run. Therefore no neutral
+sample, Recenter, head pose, expression, gaze, face-loss/reacquire, avatar
+replace, or unplug/reconnect result is claimed. The observed no-face state was
+normal tracking state, not an inference failure.
 
 ---
 
@@ -45,8 +69,9 @@ Automated verification completed on the environment above:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo build -p vtuber-desktop --release`
 
-The GUI import, VRM motion, and 30-minute soak protocol below were not run in
-this agent session. The composite diagnostic was exercised on Windows with
+The GUI motion and 30-minute soak protocol below were not completed in this
+agent session. The historical composite diagnostic was exercised on Windows
+with
 the connected `c922 Pro Stream Webcam`:
 
 ```text
@@ -342,7 +367,7 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 | 6 | No process crash | 0 crashes | NOT RUN | NOT RUN |
 | 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** BLOCKED — M1-08-013 camera correctness is PASS, but GUI/VRM functional checks, latency measurements, and the 30-minute soak have not been completed.
+**Overall Gate:** BLOCKED — MediaPipe worker startup and GUI setup are evidenced, but face motion/recovery, latency measurements, and the 30-minute soak have not been completed.
 
 ---
 
@@ -363,14 +388,14 @@ Categories: correctness, compatibility, performance, hardware-specific, test-env
 
 | Artifact | SHA-256 | Path |
 |----------|---------|------|
-| vtuber-desktop.exe | `97F82B36E7C97C621C7C41672220F828ECDD971D9593CF59A35871AE66E34F00` | target/release/vtuber-desktop.exe |
-| Model 1 | `73EDF90954F05EBEF4639E7FA8620C5F83CCA09D2476DE66AB100F26C2B25E7A` | assets/models/peppapig_student_1x3x256x256.onnx |
-| Model 2 | — | not present |
-| Model 3 | — | not present |
+| vtuber-desktop.exe | `69B71344032ABDB18C5DE1EAD785AB9ECFE98BBE75B4240B4470B94B70831C3E` | target/release/vtuber-desktop.exe |
+| face_landmarker.task | `64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF` | assets/models/face_landmarker.task |
+| inore-vrm1.vrm | `B5A3D4126C4A30EF3BFBCFC764A24DC48511B558799D98D4C2FF1DB0BDC7AB01` | tests/fixtures/vrm/inore-vrm1.vrm |
 | Metrics CSV | — | not generated — protocol not run |
 | Soak metrics | — | not generated — protocol not run |
 
 ---
 
-_Report generated from the automated Windows evidence above. GUI/VRM motion,
-latency export, and the 30-minute soak remain intentionally unfilled._
+_Report generated from the automated and partial GUI Windows evidence above.
+GUI/VRM motion, latency export, and the 30-minute soak remain intentionally
+unfilled._
