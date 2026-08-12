@@ -7257,7 +7257,7 @@ cargo clippy -p vtuber-tracking -p vtuber-app --all-targets -- -D warnings
 
 #### M1-08-015-001: Record failure baseline and supersede the old design
 
-状態: `IN_PROGRESS`
+状態: `DONE`
 
 `AGENTS.md`、`DESIGN.md`、ADR-001をMediaPipe rewriteに整合させ、ADR-009を追加する。旧rate／pose range、Peppa normalization mismatch、98-point expression index mismatchをfailure baselineとして記録する。ADR-001の旧production decisionをsupersededとし、MediaPipe native exceptionを監査済みbinding経由に限定する。M1-08-016／017を`PENDING`へ戻し、018／019は`BLOCKED`、M1-09は`DEFERRED`のまま維持する。
 
@@ -7265,11 +7265,20 @@ Commit: `docs(mocap): supersede custom planar tracking design`
 
 #### M1-08-015-002: MediaPipe dependency and standalone Windows gate
 
+状態: `DONE`
+
+Windows C922 gate passed on 2026-08-12: 28.085 result Hz, 1,487 face results,
+162 no-face results, 478 landmarks, 52 blendshapes, one valid matrix, zero
+contract failures, zero capture overwrites, and three Stop/Start cycles. The
+task bundle hash matched and the native library loaded from the verified cache.
+
 `mediapipe-rs`のexact revision、official task bundle、既存camera layer、worker-owned VIDEO modeを追加し、`mediapipe-face-smoke`でWindows gateを実施する。60秒測定、15 Hz以上、478 landmarks、52 blendshapes、one valid matrix、queue depth 1以下、Stop/Start 3回を証明する。旧backendへfallbackしない。
 
 Commit: `feat(mocap): add MediaPipe Face Landmarker Windows gate`
 
 #### M1-08-015-003: Add canonical face-tracking contracts
+
+状態: `DONE`
 
 `vtuber-core`へtyped `FaceTrackingOutcome`、face sample、camera transform、landmark、typed blendshape set、quality fieldsを追加し、fake backendとunit testを適合させる。`NoFace`とmalformed output errorを区別する。
 

@@ -14,6 +14,8 @@ pub mod control;
 /// Fixed-size metrics collection for acceptance testing.
 pub mod metrics;
 
+/// Canonical MediaPipe face-tracking contract.
+pub mod face_tracking;
 /// Raw observation contract between inference and tracking.
 pub mod observation;
 /// Latest-value slot for single-producer / single-consumer communication.
@@ -26,6 +28,7 @@ pub mod time;
 pub mod worker;
 
 pub use control::{CalibrationError, CalibrationSettings};
+pub use face_tracking::*;
 pub use observation::RawExpressionObservation;
 pub use slot::{LatestSlot, ReadResult};
 pub use stop::StopToken;
