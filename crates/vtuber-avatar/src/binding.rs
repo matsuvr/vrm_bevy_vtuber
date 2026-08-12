@@ -317,14 +317,8 @@ pub fn bind_humanoid_bones(
                 Visibility::Inherited,
             ));
             if capabilities.gaze_backend != SelectedGazeBackend::None {
-                let mut effective_properties = look_at_properties
-                    .cloned()
-                    .unwrap_or_else(|| fallback_look_at_properties(capabilities.gaze_backend));
-                effective_properties.r#type = match capabilities.gaze_backend {
-                    SelectedGazeBackend::Bone => LookAtType::Bone,
-                    SelectedGazeBackend::Expression => LookAtType::Expression,
-                    SelectedGazeBackend::None => effective_properties.r#type,
-                };
+                let effective_properties =
+                    effective_look_at_properties(look_at_properties, capabilities.gaze_backend);
                 commands
                     .entity(root_entity)
                     .insert((effective_properties, DirectLookAtInput::default()));
@@ -342,6 +336,34 @@ pub fn bind_humanoid_bones(
             }
         }
     }
+}
+
+fn effective_look_at_properties(
+    source: Option<&LookAtProperties>,
+    selected: SelectedGazeBackend,
+) -> LookAtProperties {
+    let fallback = fallback_look_at_properties(selected);
+    let Some(source) = source else {
+        return fallback;
+    };
+    let selected_type = match selected {
+        SelectedGazeBackend::Bone => LookAtType::Bone,
+        SelectedGazeBackend::Expression => LookAtType::Expression,
+        SelectedGazeBackend::None => source.r#type,
+    };
+    if source.r#type == selected_type {
+        return source.clone();
+    }
+
+    let mut converted = source.clone();
+    converted.r#type = selected_type;
+    converted.range_map_horizontal_inner.output_scale =
+        fallback.range_map_horizontal_inner.output_scale;
+    converted.range_map_horizontal_outer.output_scale =
+        fallback.range_map_horizontal_outer.output_scale;
+    converted.range_map_vertical_down.output_scale = fallback.range_map_vertical_down.output_scale;
+    converted.range_map_vertical_up.output_scale = fallback.range_map_vertical_up.output_scale;
+    converted
 }
 
 fn fail_binding(
@@ -487,6 +509,50 @@ fn is_descendant(entity: Entity, ancestor: Entity, parents: &Query<&ChildOf>) ->
 mod tests {
     use super::*;
 
+    fn look_at_properties(r#type: LookAtType, output_scale: f32) -> LookAtProperties {
+        LookAtProperties {
+            offset_from_head_bone: [0.1, 0.2, 0.3],
+            range_map_horizontal_inner: RangeMap {
+                input_max_value: 11.0,
+                output_scale,
+            },
+            range_map_horizontal_outer: RangeMap {
+                input_max_value: 22.0,
+                output_scale,
+            },
+            range_map_vertical_down: RangeMap {
+                input_max_value: 33.0,
+                output_scale,
+            },
+            range_map_vertical_up: RangeMap {
+                input_max_value: 44.0,
+                output_scale,
+            },
+            r#type,
+        }
+    }
+
+    fn assert_all_output_scales(properties: &LookAtProperties, expected: f32) {
+        assert_eq!(properties.range_map_horizontal_inner.output_scale, expected);
+        assert_eq!(properties.range_map_horizontal_outer.output_scale, expected);
+        assert_eq!(properties.range_map_vertical_down.output_scale, expected);
+        assert_eq!(properties.range_map_vertical_up.output_scale, expected);
+    }
+
+    fn assert_fallback_profile(
+        actual: &LookAtProperties,
+        expected_type: LookAtType,
+        expected_output: f32,
+    ) {
+        assert_eq!(actual.r#type, expected_type);
+        assert_eq!(actual.offset_from_head_bone, [0.0; 3]);
+        assert_eq!(actual.range_map_horizontal_inner.input_max_value, 30.0);
+        assert_eq!(actual.range_map_horizontal_outer.input_max_value, 30.0);
+        assert_eq!(actual.range_map_vertical_down.input_max_value, 30.0);
+        assert_eq!(actual.range_map_vertical_up.input_max_value, 30.0);
+        assert_all_output_scales(actual, expected_output);
+    }
+
     fn bone_entity(world: &mut World) -> Entity {
         world
             .spawn((
@@ -520,5 +586,40 @@ mod tests {
         assert!(binding.neck.is_none());
         assert!(binding.left_eye.is_none());
         assert!(binding.right_eye.is_none());
+    }
+
+    #[test]
+    fn expression_metadata_converts_output_units_when_bone_is_selected() {
+        let source = look_at_properties(LookAtType::Expression, 1.0);
+        let effective = effective_look_at_properties(Some(&source), SelectedGazeBackend::Bone);
+
+        assert_eq!(effective.r#type, LookAtType::Bone);
+        assert_all_output_scales(&effective, 10.0);
+        assert_eq!(effective.range_map_horizontal_inner.input_max_value, 11.0);
+        assert_eq!(effective.range_map_vertical_up.input_max_value, 44.0);
+    }
+
+    #[test]
+    fn bone_metadata_converts_output_units_when_expression_is_selected() {
+        let source = look_at_properties(LookAtType::Bone, 10.0);
+        let effective =
+            effective_look_at_properties(Some(&source), SelectedGazeBackend::Expression);
+
+        assert_eq!(effective.r#type, LookAtType::Expression);
+        assert_all_output_scales(&effective, 1.0);
+        assert_eq!(effective.range_map_horizontal_outer.input_max_value, 22.0);
+        assert_eq!(effective.range_map_vertical_down.input_max_value, 33.0);
+    }
+
+    #[test]
+    fn missing_metadata_uses_complete_bone_fallback_profile() {
+        let effective = effective_look_at_properties(None, SelectedGazeBackend::Bone);
+        assert_fallback_profile(&effective, LookAtType::Bone, 10.0);
+    }
+
+    #[test]
+    fn missing_metadata_uses_complete_expression_fallback_profile() {
+        let effective = effective_look_at_properties(None, SelectedGazeBackend::Expression);
+        assert_fallback_profile(&effective, LookAtType::Expression, 1.0);
     }
 }
