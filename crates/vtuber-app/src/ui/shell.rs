@@ -12,7 +12,7 @@ use crate::avatar_bridge::publish_control_frame_system;
 use crate::avatar_bridge::sync_avatar_diagnostics;
 use crate::capture_runtime::{
     CaptureRuntime, LatestVideoFrame, capture_bridge_system, read_latest_frame,
-    sync_capture_diagnostics, update_preview_texture_system,
+    register_preview_texture_system, sync_capture_diagnostics, update_preview_texture_system,
 };
 use crate::diagnostics::DiagnosticsSnapshot;
 use crate::error_presenter::ErrorPresenter;
@@ -73,6 +73,7 @@ impl Plugin for UiShellPlugin {
                     capture_bridge_system,
                     read_latest_frame,
                     update_preview_texture_system,
+                    register_preview_texture_system,
                     sync_capture_diagnostics,
                 )
                     .chain(),

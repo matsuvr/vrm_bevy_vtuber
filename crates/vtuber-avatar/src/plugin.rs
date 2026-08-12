@@ -11,6 +11,7 @@ use bevy_vrm1::prelude::*;
 use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
 use crate::expression::apply_tracked_expressions;
+use crate::framing::{AvatarViewportCamera, frame_avatar_camera};
 use crate::gaze::apply_tracked_eye_gaze;
 use crate::lifecycle::{
     AvatarLifecycle, LoadAvatarRequest, LoadAvatarResult, ReplaceAvatarRequest,
@@ -62,6 +63,10 @@ impl Plugin for VtuberAvatarPlugin {
             .add_systems(Update, clear_control_cache_on_lifecycle_change)
             .add_systems(Update, log_loaded_vrm)
             .add_systems(Update, log_head_bone)
+            .add_systems(
+                PostUpdate,
+                frame_avatar_camera.after(TransformSystems::Propagate),
+            )
             .add_systems(
                 PostUpdate,
                 apply_tracked_head_pose
@@ -119,6 +124,7 @@ fn setup_scene(
     // Camera framing the upper body.
     commands.spawn((
         Camera3d::default(),
+        AvatarViewportCamera,
         Transform::from_translation(Vec3::new(0.0, 0.0, 2.5))
             .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
     ));

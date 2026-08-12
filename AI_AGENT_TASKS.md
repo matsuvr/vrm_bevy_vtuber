@@ -42,11 +42,12 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-016` | `DONE` | MediaPipe canonical tracking sourceからreal-VRM bridgeへの接続、generation／stale排他、synthetic排他を自動検証済み。 |
 | `M1-08-017` | `DONE` | MediaPipe identity／contract diagnostics、worker recovery、reverse shutdown、retry、no-face通常状態を自動検証済み。 |
 | `M1-08-018`〜`M1-08-019` | `BLOCKED` | MediaPipe実顔動作／recovery、latency export、30分soakが未実施のためfinal gateを閉じられない。 |
+| `M1-08-020` | `DONE` | Live preview texture登録とavatar骨基準viewport framingを修正し、自動検証とapproved VRMのrelease GUI framing確認を完了した。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-現在の実行単位は、ユーザー指示で定義された**`M1-08-015-001`から始まるMediaPipe rewrite sequence**である。015-016／017の自動再検証は完了したが、015-011の実顔動作／性能受入が未完了のため親015は`IN_PROGRESS`、018／019は`BLOCKED`、`M1-09`は`DEFERRED`とする。旧UltraFace／PeppaPig／planar poseの実装・実機証拠は新backendの受入証拠として扱わず、歴史的なfailure baselineとして保持する。
+現在の実行単位は、表示repair後の**`M1-08-015-011`／`M1-08-018`実機functional受入**である。M1-08-020は自動検証とapproved VRMのrelease GUI framing確認を完了したが、その確認時はcameraが列挙されず、実camera preview／head／blink／mouth／gazeは再実施待ちである。親015は`IN_PROGRESS`、018／019は`BLOCKED`、`M1-09`は`DEFERRED`とする。旧UltraFace／PeppaPig／planar poseの実装・実機証拠は新backendの受入証拠として扱わず、歴史的なfailure baselineとして保持する。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -83,7 +84,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-05` | `M1-05-001`〜`M1-05-008` | 8 | `LEGACY_PROGRESS` |
 | `M1-06` | `M1-06-001`〜`M1-06-009` | 9 | `LEGACY_PROGRESS` |
 | `M1-07` | `M1-07-001`〜`M1-07-009` | 9 | `LEGACY_PROGRESS`＋GUI補完済み |
-| `M1-08` | top-level `M1-08-001`〜`019`、repair `M1-08-013-001`〜`009` | 19 + repair 9 | `BLOCKED`（009〜012 done、013 repair中） |
+| `M1-08` | top-level `M1-08-001`〜`020`、repair `M1-08-013-001`〜`009` | 20 + repair 9 | `BLOCKED`（020 done、015-011／018／019再受入待ち） |
 | `M1-09` | `M1-09-001`〜`M1-09-008` | 8 | `DEFERRED` |
 | `Q2-01` | `Q2-01-001`〜`Q2-01-008` | 8 | `PENDING` |
 | `Q2-02` | `Q2-02-001`〜`Q2-02-008` | 8 | `PENDING` |
@@ -7508,7 +7509,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 状態: `BLOCKED`
 備考: release build、C922でのMediaPipe worker起動、auto-neutral、face loss/reacquire、Start／Stop、avatar replace／unload／reload、camera unplug/replug後のStop→Start復旧、2秒以内の再取得観測、59秒RSS/thread sample、clean shutdown、30分soakは確認済み。ただしLive previewが`Waiting for camera frames…`で、固定camera framingによりavatar headがviewport外となり、head／blink／mouth／gazeを直接確認できないためBLOCKED。
-依存: `M1-08-017`
+依存: `M1-08-020`
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -7620,6 +7621,45 @@ cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 cargo build -p vtuber-desktop --release
 # 上記に加え、60秒measurementと30分soakを実施しartifactを保存する。
 ```
+
+
+#### M1-08-020: Live preview登録とavatar viewport framingを修復する
+
+状態: `DONE`
+依存: `M1-08-017`
+親参照: DESIGN.md §19.2、§21.5、docs/acceptance/windows-m1.md
+
+**実装指示**
+
+- camera previewの再利用Imageをmain worldに保持し、`bevy_egui` user textureへ明示登録する。
+- preview表示だけを変更し、inferenceへ渡す非mirror frameを変更しない。
+- avatar Ready時にhead／hips boneのworld位置から上半身framingを計算し、generationごとに一度だけviewport cameraへ適用する。
+- bone位置が非有限または不正な場合は既存固定cameraをfallbackとして維持する。
+- 実camera／approved VRMでpreviewとhead表示を再確認する前に、functional gateをPASSへ変更しない。
+
+**完了条件**
+
+- preview image handleがegui texture IDへ解決され、動的Imageが継続更新可能である。
+- synthetic bone配置でheadが画面上部、hipsが画面下部に入るframingを自動検証する。
+- model replacement時に新generationでframingが再計算される。
+- workspace test／clippyが成功する。
+
+**検証**
+
+```powershell
+cargo fmt --all -- --check
+cargo test -p vtuber-app -p vtuber-avatar --no-fail-fast
+cargo clippy -p vtuber-app -p vtuber-avatar --all-targets -- -D warnings
+cargo build -p vtuber-desktop --release
+```
+
+2026-08-12にpreviewのdynamic `Image`をmain/render両worldへ保持し、
+`EguiUserTextures`へ明示登録する経路を実装した。viewport cameraはReady時の
+head／hips world位置からgenerationごとに一度だけ上半身framingを計算する。
+workspace test／clippyとrelease buildが成功し、release GUIでapproved
+`inore-vrm1.vrm`の顔／上半身がviewportへ表示されることを確認した。
+このGUI確認時はcamera列挙が`None`だったため、実camera previewとfunctional
+motionは015-011／018の再受入で確認する。
 
 
 ## M1-09: macOS vertical acceptance（保留）

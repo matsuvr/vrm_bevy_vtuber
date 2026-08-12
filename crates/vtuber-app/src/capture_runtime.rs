@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
+use bevy_egui::{EguiTextureHandle, EguiUserTextures};
 use vtuber_camera::capture::{CaptureController, CaptureServiceState};
 use vtuber_camera::device::{CameraBackend, CameraDescriptor, CameraRequest};
 use vtuber_core::metrics::RateCounter;
@@ -238,21 +239,9 @@ pub fn update_preview_texture_system(
         return;
     }
 
-    let Some(rgba) = frame_to_rgba(frame) else {
+    let Some(image) = preview_image(frame) else {
         return;
     };
-    let size = bevy::render::render_resource::Extent3d {
-        width: frame.width,
-        height: frame.height,
-        depth_or_array_layers: 1,
-    };
-    let image = Image::new_fill(
-        size,
-        bevy::render::render_resource::TextureDimension::D2,
-        &rgba,
-        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    );
 
     if let Some(handle) = preview.image_handle.as_ref() {
         if let Some(mut existing) = images.get_mut(handle.id()) {
@@ -262,6 +251,36 @@ pub fn update_preview_texture_system(
         preview.image_handle = Some(images.add(image));
     }
     *last_upload = Some(now);
+}
+
+/// Registers the reusable preview image with egui once it exists.
+pub fn register_preview_texture_system(
+    preview: Res<PreviewState>,
+    mut textures: ResMut<EguiUserTextures>,
+) {
+    if let Some(handle) = preview.image_handle.as_ref()
+        && textures.image_id(handle.id()).is_none()
+    {
+        textures.add_image(EguiTextureHandle::Weak(handle.id()));
+    }
+}
+
+fn preview_image(frame: &VideoFrame) -> Option<Image> {
+    let rgba = frame_to_rgba(frame)?;
+    let size = bevy::render::render_resource::Extent3d {
+        width: frame.width,
+        height: frame.height,
+        depth_or_array_layers: 1,
+    };
+    Some(Image::new_fill(
+        size,
+        bevy::render::render_resource::TextureDimension::D2,
+        &rgba,
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        // Preview pixels change every frame, so the CPU-side asset must stay
+        // in the main world while also being extracted for rendering.
+        bevy::asset::RenderAssetUsages::default(),
+    ))
 }
 
 fn frame_to_rgba(frame: &VideoFrame) -> Option<Vec<u8>> {
@@ -391,5 +410,63 @@ pub fn capture_bridge_system(
         )
     {
         orchestrator.complete_capture_stop();
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use vtuber_core::{MonoTimeNs, PixelFormat};
+
+    fn rgb_frame() -> VideoFrame {
+        VideoFrame {
+            seq: FrameSeq(1),
+            captured_at: MonoTimeNs(1),
+            width: 1,
+            height: 1,
+            stride_bytes: 3,
+            format: PixelFormat::Rgb8,
+            data: Arc::from([10, 20, 30]),
+        }
+    }
+
+    #[test]
+    fn preview_image_remains_mutable_in_main_world() {
+        let image = preview_image(&rgb_frame()).expect("valid RGB frame should produce an image");
+        assert!(
+            image
+                .asset_usage
+                .contains(bevy::asset::RenderAssetUsages::MAIN_WORLD)
+        );
+        assert!(
+            image
+                .asset_usage
+                .contains(bevy::asset::RenderAssetUsages::RENDER_WORLD)
+        );
+    }
+
+    #[test]
+    fn preview_handle_is_registered_for_egui() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<PreviewState>()
+            .init_resource::<EguiUserTextures>()
+            .add_systems(Update, register_preview_texture_system);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(preview_image(&rgb_frame()).expect("valid preview image"));
+        app.world_mut().resource_mut::<PreviewState>().image_handle = Some(handle.clone());
+
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<EguiUserTextures>()
+                .image_id(handle.id())
+                .is_some()
+        );
     }
 }

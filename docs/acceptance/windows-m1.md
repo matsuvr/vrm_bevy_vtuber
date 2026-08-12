@@ -94,6 +94,16 @@ the live protocol is repeated. The screenshot was not copied into the
 repository because raw camera/UI captures are not required as a release
 artifact.
 
+The `M1-08-020` repair now keeps the dynamic preview `Image` in both the main
+and render worlds, registers its handle with `bevy_egui`, and frames the
+viewport once per avatar generation from the head and hips world positions.
+The release GUI was rebuilt and the approved `inore-vrm1.vrm` fixture rendered
+with its face and upper body visible, closing the viewport-framing source
+failure. The camera selector showed `None` during this follow-up run, so the
+real C922 preview and head/blink/mouth/gaze protocol were not rerun and remain
+BLOCKED rather than being inferred from the automated texture-registration
+tests.
+
 The 60-second diagnostics observation showed approximately:
 
 ```text
