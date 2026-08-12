@@ -1,5 +1,7 @@
 //! Integration tests for detector-box crop geometry and preprocessing.
 
+#![cfg(feature = "legacy-face-stack")]
+
 use std::sync::Arc;
 
 use vtuber_core::types::{

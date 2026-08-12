@@ -20,10 +20,11 @@ thiserror = "2"
 anyhow = "=1.0.103"
 
 [features]
-# The accepted production path is the pure-Rust tract ONNX backend. TFLite
-# support remains compiled for provenance/evaluation fixtures, but is not
-# selected by the production model catalog.
-default = ["onnx"]
+# The desktop application selects MediaPipe directly and must not compile the
+# legacy detector/crop/ONNX stack by default. The old stack remains available
+# only for explicitly named research and evaluation commands.
+default = []
+legacy-face-stack = ["onnx"]
 onnx = ["dep:tract-onnx", "dep:tract-core"]
 
 [dev-dependencies]

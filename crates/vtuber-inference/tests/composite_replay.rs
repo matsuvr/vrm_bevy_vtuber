@@ -1,5 +1,7 @@
 //! Fixed-sequence replay and allocation-boundedness checks.
 
+#![cfg(feature = "legacy-face-stack")]
+
 #[path = "support/composite_fixture.rs"]
 mod fixture;
 

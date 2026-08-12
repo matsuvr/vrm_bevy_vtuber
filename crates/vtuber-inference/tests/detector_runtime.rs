@@ -1,6 +1,6 @@
 //! Integration test for the worker-owned UltraFace runtime boundary.
 
-#![cfg(feature = "onnx")]
+#![cfg(feature = "legacy-face-stack")]
 
 use std::path::PathBuf;
 use std::sync::Arc;

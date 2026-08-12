@@ -1,5 +1,7 @@
 //! Integration coverage for UltraFace output decoding and primary selection.
 
+#![cfg(feature = "legacy-face-stack")]
+
 use vtuber_core::types::NormalizedRect;
 use vtuber_inference::DetectorPostprocessConfig;
 use vtuber_inference::detector::{

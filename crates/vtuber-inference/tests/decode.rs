@@ -1,5 +1,7 @@
 //! Integration tests for inference output decode.
 
+#![cfg(feature = "legacy-face-stack")]
+
 use vtuber_inference::decode::landmarks::*;
 use vtuber_inference::error::InferenceError;
 use vtuber_inference::roi::FaceRoi;

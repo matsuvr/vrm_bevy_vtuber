@@ -4,6 +4,8 @@
 //! tensor. No unlicensed or user-captured image is stored in the repository;
 //! the actual model provenance remains pinned by the production descriptor.
 
+#![cfg(feature = "legacy-face-stack")]
+
 #[path = "support/composite_fixture.rs"]
 mod fixture;
 

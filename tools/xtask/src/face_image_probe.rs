@@ -41,7 +41,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .join("assets")
         .join("models")
         .join("manifest.toml");
-    let pipeline = vtuber_app::model_catalog::verify_pipeline_artifacts(&manifest)
+    let pipeline = vtuber_app::model_catalog::verify_research_pipeline_artifacts(&manifest)
         .map_err(|error| format!("model verification failed: {error}"))?;
     let artifact_root = project_root.join("assets").join("models");
     let detector_path = artifact_root.join(&pipeline.detector.file);

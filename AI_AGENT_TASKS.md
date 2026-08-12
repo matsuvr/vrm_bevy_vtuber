@@ -7344,7 +7344,11 @@ Commit: `feat(mocap): integrate MediaPipe tracking with desktop runtime`
 
 #### M1-08-015-010: Remove the legacy production path
 
+状態: `DONE`
+
 UltraFace、PeppaPig、custom crop、planar pose、placeholder expression、old calibration collectorのdefault production reachabilityを削除する。research commandとして残す場合だけ理由を記録する。
+
+`vtuber-inference`のlegacy detector/crop/ONNX stackはdefault featureから外し、`legacy-face-stack`を明示したresearch/evaluation commandだけが有効化する。desktop appはMediaPipe task bundleのみを起動し、旧manifest/catalogは歴史的replayとartifact検証のためにresearch moduleとして残す。
 
 Commit: `refactor(mocap): remove legacy custom face pipeline`
 

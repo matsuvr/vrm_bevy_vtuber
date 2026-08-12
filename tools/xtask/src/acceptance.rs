@@ -84,15 +84,15 @@ pub fn print_env() {
     println!("- Camera device names + descriptors");
 }
 
-/// Verify every artifact in the production face pipeline manifest.
+/// Verify every artifact in the legacy research face pipeline manifest.
 pub fn verify_models(
     manifest_path: &Path,
 ) -> Result<(), vtuber_app::model_catalog::ModelCatalogError> {
-    let pipeline = vtuber_app::model_catalog::verify_pipeline_artifacts(manifest_path)?;
+    let pipeline = vtuber_app::model_catalog::verify_research_pipeline_artifacts(manifest_path)?;
 
     let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     println!("Model manifest: {}", manifest_path.display());
-    println!("Production pipeline: {}", pipeline.id);
+    println!("Legacy research pipeline: {}", pipeline.id);
     println!(
         "Detector: {}",
         manifest_dir.join(&pipeline.detector.file).display()

@@ -1,4 +1,9 @@
-//! Manifest-driven production model and pipeline descriptor construction.
+//! Legacy manifest-driven composite pipeline descriptors for research tools.
+//!
+//! The desktop runtime does not call this module. It remains available because
+//! the old detector/crop artifacts are useful for historical replay and
+//! evaluation, but callers must opt into the `legacy-face-stack` inference
+//! feature through an explicitly named research command.
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -99,8 +104,8 @@ pub enum ModelCatalogError {
     },
 }
 
-/// Loads the production pipeline from the workspace model manifest.
-pub fn load_production_pipeline(
+/// Loads the legacy research pipeline from the workspace model manifest.
+pub fn load_research_pipeline(
     project_root: &Path,
 ) -> Result<FacePipelineDescriptor, ModelCatalogError> {
     load_pipeline_from_manifest(
@@ -111,14 +116,14 @@ pub fn load_production_pipeline(
     )
 }
 
-/// Returns the directory containing artifacts referenced by the production
-/// pipeline descriptor.
+/// Returns the directory containing artifacts referenced by the legacy
+/// research pipeline descriptor.
 #[must_use]
-pub fn production_artifact_root(project_root: &Path) -> PathBuf {
+pub fn research_artifact_root(project_root: &Path) -> PathBuf {
     project_root.join("assets").join("models")
 }
 
-/// Loads a production pipeline from an explicit manifest path.
+/// Loads a legacy research pipeline from an explicit manifest path.
 pub fn load_pipeline_from_manifest(
     manifest_path: &Path,
 ) -> Result<FacePipelineDescriptor, ModelCatalogError> {
@@ -130,8 +135,8 @@ pub fn load_pipeline_from_manifest(
     parse_pipeline_manifest(&text, manifest_dir)
 }
 
-/// Verifies both artifacts of a production pipeline against size and SHA-256.
-pub fn verify_pipeline_artifacts(
+/// Verifies both legacy research artifacts against size and SHA-256.
+pub fn verify_research_pipeline_artifacts(
     manifest_path: &Path,
 ) -> Result<FacePipelineDescriptor, ModelCatalogError> {
     let pipeline = load_pipeline_from_manifest(manifest_path)?;
@@ -749,7 +754,7 @@ mod tests {
             .parent()
             .and_then(Path::parent)
             .expect("crate is nested beneath workspace root");
-        let pipeline = load_production_pipeline(root).expect("pipeline should parse");
+        let pipeline = load_research_pipeline(root).expect("pipeline should parse");
         assert_eq!(pipeline.id, "ultraface-rfb-320-peppapig-98");
         assert_eq!(pipeline.detector.id, "ultraface-rfb-320");
         assert_eq!(pipeline.landmarks.id, "peppapig-98");
@@ -775,7 +780,8 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let manifest = directory.path().join("manifest.toml");
         std::fs::write(&manifest, text).expect("manifest should be written");
-        let error = verify_pipeline_artifacts(&manifest).expect_err("missing model should fail");
+        let error =
+            verify_research_pipeline_artifacts(&manifest).expect_err("missing model should fail");
         assert!(matches!(
             error,
             ModelCatalogError::ArtifactMissing { ref model_id, .. }

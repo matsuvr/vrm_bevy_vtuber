@@ -100,9 +100,11 @@ and sidecar inference processes remain prohibited.
 
 M1-08-016 and M1-08-017 are reset to `PENDING` and must be revalidated against
 the new outcome contract and runtime. M1-08-018 and M1-08-019 remain blocked;
-M1-09 remains deferred. The old model artifacts may remain only as explicitly
-identified legacy evaluation evidence until M1-08-015-010 removes their default
-production reachability. The standalone Windows gate must prove at least 15
+M1-09 remains deferred. The old model artifacts remain only as explicitly
+identified legacy evaluation evidence. M1-08-015-010 removes their default
+production reachability by making the legacy detector/crop/ONNX feature opt-in
+and keeping its commands explicitly research-only. The standalone Windows gate
+must prove at least 15
 results per second after warm-up, the 478/52/one-matrix contract, clean
 Stop/Start, and no queue growth before later leaves are accepted.
 

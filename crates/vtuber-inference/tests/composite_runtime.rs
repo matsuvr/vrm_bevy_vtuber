@@ -1,5 +1,7 @@
 //! Camera-free tests for detector cadence and composite ROI recovery.
 
+#![cfg(feature = "legacy-face-stack")]
+
 use std::collections::VecDeque;
 use std::sync::{
     Arc,

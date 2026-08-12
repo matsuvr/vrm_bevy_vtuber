@@ -1,5 +1,7 @@
 //! Integration tests for the UltraFace detector preprocessor.
 
+#![cfg(feature = "legacy-face-stack")]
+
 use std::sync::Arc;
 
 use vtuber_core::types::{FrameSeq, MonoTimeNs, PixelFormat, VideoFrame};

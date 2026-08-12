@@ -318,7 +318,7 @@ fn run_windows(options: Options) -> Result<(), String> {
         .join("assets")
         .join("models")
         .join("manifest.toml");
-    let pipeline = vtuber_app::model_catalog::verify_pipeline_artifacts(&manifest)
+    let pipeline = vtuber_app::model_catalog::verify_research_pipeline_artifacts(&manifest)
         .map_err(|error| format!("model verification failed: {error}"))?;
     if let Some(requested) = options.pipeline.as_deref()
         && requested != pipeline.id

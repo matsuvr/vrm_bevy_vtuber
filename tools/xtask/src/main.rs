@@ -25,8 +25,8 @@ fn main() {
             "  vrm-managed-compat <path-to-model.vrm>  run the managed user:// lifecycle gate"
         );
         println!("  acceptance <command>      Windows acceptance test support");
-        println!("  face-image-probe <path>  Run UltraFace on one still image");
-        println!("  face-pipeline-smoke       Windows MSMF detector/crop/landmark probe");
+        println!("  face-image-probe <path>  Legacy research UltraFace/Peppa probe");
+        println!("  face-pipeline-smoke       Legacy research detector/crop/landmark probe");
         println!("  mediapipe-face-smoke      Windows MSMF MediaPipe Face Landmarker gate");
         println!("  mediapipe-pose-probe      Guided MediaPipe neutral-relative pose proof");
         return;

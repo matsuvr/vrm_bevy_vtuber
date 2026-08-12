@@ -584,8 +584,10 @@ MediaPipeは`FaceLandmarker::builder(ModelSource::path(task_path))`、CPU
 delegate、one-face、VIDEO mode、blendshapes、transformation matricesを
 固定する。runtimeはworker内でconstruct/use/dropする。first-useのverified
 native library downloadは許可するが、download失敗はrecoverable startup
-errorとし、offline release packagingは別taskで扱う。legacy dependencyの
-削除とdefault graphの監査はM1-08-015の後続leafで実施する。
+errorとし、offline release packagingは別taskで扱う。legacy dependencyは
+`legacy-face-stack` featureへ隔離し、desktop appの依存ではdefault featureを
+無効化する。旧artifactの検証commandはresearch/evaluation用途として明示し、
+default graphの監査はM1-08-015-010で完了した。
 
 ### 10.4 target-specific camera dependency
 

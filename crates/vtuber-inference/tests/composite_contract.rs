@@ -1,5 +1,7 @@
 //! Contract tests for the frame-level composite inference boundary.
 
+#![cfg(feature = "legacy-face-stack")]
+
 use std::path::{Path, PathBuf};
 
 use vtuber_inference::{CompositeFrameInference, FrameInferenceOutcome, RuntimeSettings};

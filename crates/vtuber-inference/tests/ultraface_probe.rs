@@ -1,5 +1,5 @@
-#![cfg(feature = "onnx")]
 #![doc = "Exact UltraFace RFB-320 tract-onnx probe acceptance test."]
+#![cfg(feature = "legacy-face-stack")]
 
 use std::path::PathBuf;
 

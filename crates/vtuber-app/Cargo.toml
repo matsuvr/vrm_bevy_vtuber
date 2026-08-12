@@ -11,7 +11,7 @@ description = "Orchestration, UI, settings, model import, and diagnostics for vr
 [dependencies]
 vtuber-core = { path = "../vtuber-core" }
 vtuber-camera = { path = "../vtuber-camera" }
-vtuber-inference = { path = "../vtuber-inference" }
+vtuber-inference = { path = "../vtuber-inference", default-features = false }
 vtuber-tracking = { path = "../vtuber-tracking" }
 vtuber-avatar = { path = "../vtuber-avatar" }
 bevy = "=0.19.0"

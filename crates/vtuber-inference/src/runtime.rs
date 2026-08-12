@@ -262,7 +262,7 @@ fn decode_landmarks(
     Ok(landmarks)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-face-stack"))]
 mod tests {
     use super::decode_landmarks;
 
