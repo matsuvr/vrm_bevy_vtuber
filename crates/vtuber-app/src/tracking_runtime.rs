@@ -6,12 +6,9 @@ use std::time::Duration;
 use bevy::prelude::*;
 use vtuber_core::metrics::RateCounter;
 use vtuber_core::{
-    AvatarControlFrame, FrameSeq, LatestSlot, MonoTimeNs, RawFaceObservation, TrackingState,
+    AvatarControlFrame, FaceTrackingSample, FrameSeq, LatestSlot, MonoTimeNs, TrackingState,
 };
-use vtuber_tracking::{
-    CalibrationCollector, CalibrationInput, CalibrationSession, NeutralContext, NeutralReference,
-    PipelineConfig, TrackingPipeline,
-};
+use vtuber_tracking::{AutoNeutralCollector, AutoNeutralState, PipelineConfig, TrackingPipeline};
 
 use crate::diagnostics::DiagnosticsSnapshot;
 use crate::inference_runtime::InferenceRuntime;
@@ -33,7 +30,7 @@ enum ObservationDispatch {
     /// No new inference result and the last result is still fresh.
     NoUpdate,
     /// A new, fresh face observation is ready for tracking.
-    Face(RawFaceObservation),
+    Face(Box<FaceTrackingSample>),
     /// The current inference result is absent or stale.
     NoFace,
 }
@@ -55,7 +52,7 @@ impl ObservationGate {
 
     fn dispatch(
         &mut self,
-        latest: Option<&RawFaceObservation>,
+        latest: Option<&FaceTrackingSample>,
         now: MonoTimeNs,
     ) -> ObservationDispatch {
         let Some(observation) = latest else {
@@ -68,7 +65,7 @@ impl ObservationGate {
         if is_new {
             self.last_source_seq = Some(observation.source_seq);
             return if fresh {
-                ObservationDispatch::Face(observation.clone())
+                ObservationDispatch::Face(Box::new(observation.clone()))
             } else {
                 ObservationDispatch::NoFace
             };
@@ -86,12 +83,11 @@ impl ObservationGate {
 #[derive(Resource)]
 pub struct TrackingRuntime {
     pipeline: TrackingPipeline,
-    collector: CalibrationCollector,
-    session: CalibrationSession,
+    auto_neutral: AutoNeutralCollector,
+    recenter_requested: bool,
     last_update: Option<MonoTimeNs>,
-    last_calibration_source_seq: Option<FrameSeq>,
     last_avatar_generation: vtuber_avatar::AvatarGeneration,
-    last_calibration_reject_reason: Option<String>,
+    last_recenter_error: Option<String>,
     observation_gate: ObservationGate,
     /// Whether the avatar bridge may retain the most recently published
     /// control frame for the current capture session.
@@ -105,17 +101,15 @@ pub struct TrackingRuntime {
 impl Default for TrackingRuntime {
     fn default() -> Self {
         let config = PipelineConfig::default();
-        let collector = CalibrationCollector::new(config.calibration.clone());
         let pipeline = TrackingPipeline::new(config)
             .expect("default tracking configuration is an internal invariant");
         Self {
             pipeline,
-            collector,
-            session: CalibrationSession::default(),
+            auto_neutral: AutoNeutralCollector::new(),
+            recenter_requested: false,
             last_update: None,
-            last_calibration_source_seq: None,
             last_avatar_generation: vtuber_avatar::AvatarGeneration::default(),
-            last_calibration_reject_reason: None,
+            last_recenter_error: None,
             observation_gate: ObservationGate::default(),
             control_active: false,
             control_slot: Arc::new(LatestSlot::new()),
@@ -129,14 +123,6 @@ impl TrackingRuntime {
     #[must_use]
     pub fn control_slot(&self) -> Arc<LatestSlot<AvatarControlFrame>> {
         Arc::clone(&self.control_slot)
-    }
-
-    fn reset_calibration(&mut self) {
-        self.collector.reset();
-        self.session = CalibrationSession::default();
-        self.pipeline.reset_calibration();
-        self.last_calibration_source_seq = None;
-        self.last_calibration_reject_reason = None;
     }
 }
 
@@ -152,14 +138,10 @@ pub fn tracking_bridge_system(
 ) {
     if lifecycle.current_generation() != tracking.last_avatar_generation {
         tracking.last_avatar_generation = lifecycle.current_generation();
-        // A completed neutral profile is avatar-independent. Preserve it so
-        // a model replacement can resume tracking without forcing a second
-        // calibration, while an in-progress or failed calibration is reset.
-        if tracking.session.profile().is_some() {
-            tracking.pipeline.reset();
-        } else {
-            tracking.reset_calibration();
-        }
+        // The camera neutral is independent of the avatar model. Preserve it
+        // across replacement, but always reset the smoothing and recovery
+        // state so a new avatar cannot receive a stale frame.
+        tracking.pipeline.reset();
         tracking.observation_gate.reset();
         tracking.control_slot.clear();
         tracking.latest_control = None;
@@ -184,24 +166,21 @@ pub fn tracking_bridge_system(
         view_model.tracking = tracking_view(TrackingState::Starting, 0.0);
         view_model.calibration = calibration_view(&tracking);
         diagnostics.tracking_state = format!("{:?}", TrackingState::Starting);
+        diagnostics.tracking_backend = Some("mediapipe-face-landmarker".into());
+        diagnostics.tracking_contract = Some("478 landmarks / 52 blendshapes / pose matrix".into());
+        diagnostics.auto_neutral_state = Some(format!("{:?}", tracking.auto_neutral.state()));
         return;
     }
 
     if let Some(request) = orchestrator.take_calibration_request() {
         match request {
             CalibrationRequest::Begin | CalibrationRequest::Retry => {
-                tracking.reset_calibration();
-                let now = vtuber_core::monotonic_now();
-                tracking.session =
-                    tracking
-                        .session
-                        .start(now)
-                        .unwrap_or(CalibrationSession::Collecting {
-                            started_at: now,
-                            samples_collected: 0,
-                        });
+                // Calibration is instant in the MediaPipe path: the next
+                // valid face becomes the new neutral reference.
+                tracking.recenter_requested = true;
+                tracking.last_recenter_error = None;
             }
-            CalibrationRequest::Cancel => tracking.reset_calibration(),
+            CalibrationRequest::Cancel => tracking.recenter_requested = false,
         }
     }
 
@@ -212,9 +191,9 @@ pub fn tracking_bridge_system(
         .unwrap_or_else(|| Duration::from_nanos(33_333_333));
     tracking.last_update = Some(now);
 
-    let observation = match tracking
+    let sample = match tracking
         .observation_gate
-        .dispatch(inference.latest_observation.as_ref(), now)
+        .dispatch(inference.latest_face_sample.as_ref(), now)
     {
         ObservationDispatch::NoUpdate => {
             // Do not feed the same inference result into the filters again.
@@ -223,53 +202,34 @@ pub fn tracking_bridge_system(
             view_model.calibration = calibration_view(&tracking);
             return;
         }
-        ObservationDispatch::Face(observation) => Some(observation),
+        ObservationDispatch::Face(sample) => Some(*sample),
         ObservationDispatch::NoFace => None,
     };
 
-    if let Some(observation) = observation.as_ref()
-        && matches!(tracking.session, CalibrationSession::Collecting { .. })
-    {
-        let input = CalibrationInput {
-            source_seq: observation.source_seq,
-            captured_at: observation.captured_at,
-            face_confidence: observation.face_confidence,
-            landmarks: observation.landmarks.clone(),
-            expressions: observation.expressions,
-            schema: observation.schema,
+    if let Some(sample) = sample.as_ref() {
+        let neutral_update = if tracking.recenter_requested {
+            tracking.auto_neutral.recenter(sample)
+        } else {
+            tracking.auto_neutral.observe(sample)
         };
-        let should_offer = tracking.last_calibration_source_seq != Some(observation.source_seq);
-        let decision = should_offer.then(|| tracking.collector.offer(input));
-        if should_offer {
-            tracking.last_calibration_source_seq = Some(observation.source_seq);
-        }
-        if let Some(vtuber_tracking::SampleDecision::Rejected(reason)) = decision {
-            tracking.last_calibration_reject_reason = Some(format!("{reason:?}"));
-        }
-        if tracking.collector.is_ready() {
-            let context = NeutralContext::new(now, None, None);
-            match NeutralReference::aggregate(
-                &tracking.collector,
-                &PipelineConfig::default().validation,
-                &context,
-            ) {
-                Ok(profile) => {
-                    if tracking.pipeline.apply_calibration(profile.clone()).is_ok() {
-                        tracking.session = tracking
-                            .session
-                            .ready(profile)
-                            .and_then(|session| session.complete())
-                            .unwrap_or_default();
-                    }
+        match neutral_update {
+            Ok(update) => {
+                if update.reference_changed {
+                    tracking.pipeline.reset();
                 }
-                Err(error) => {
-                    tracking.last_calibration_reject_reason = Some(format!("neutral: {error:?}"));
-                }
+                tracking.recenter_requested = false;
+                tracking.last_recenter_error = None;
+            }
+            Err(error) => {
+                tracking.last_recenter_error = Some(error.to_string());
             }
         }
     }
 
-    let update = tracking.pipeline.update(observation.as_ref(), now, dt);
+    let neutral = tracking.auto_neutral.reference();
+    let update = tracking
+        .pipeline
+        .update_mediapipe(sample.as_ref(), neutral, now, dt);
     if let Some(frame) = update.frame {
         let _ = tracking.control_slot.publish(frame.clone());
         tracking.latest_control = Some(frame);
@@ -286,20 +246,23 @@ pub fn tracking_bridge_system(
     view_model.calibration = calibration_view(&tracking);
     view_model.tracking = tracking_view(update.state, update.confidence.frame_confidence);
     diagnostics.tracking_state = format!("{:?}", update.state);
+    diagnostics.tracking_backend = Some("mediapipe-face-landmarker".into());
+    diagnostics.tracking_contract = Some("478 landmarks / 52 blendshapes / pose matrix".into());
+    diagnostics.auto_neutral_state = Some(format!("{:?}", tracking.auto_neutral.state()));
 }
 
 fn calibration_view(runtime: &TrackingRuntime) -> CalibrationViewModel {
-    let settings = runtime.collector.settings();
-    let metrics = runtime.collector.metrics();
+    let recent = runtime.auto_neutral.recent_sample_count();
     CalibrationViewModel {
-        is_calibrating: matches!(runtime.session, CalibrationSession::Collecting { .. }),
-        samples_collected: metrics.accepted.min(u64::from(u32::MAX)) as u32,
-        samples_target: settings.required_sample_count().min(u32::MAX as usize) as u32,
-        quality_score: (metrics.accepted > 0).then(|| {
-            (metrics.accepted as f32 / settings.required_sample_count() as f32).clamp(0.0, 1.0)
+        is_calibrating: runtime.recenter_requested
+            || runtime.auto_neutral.state() == AutoNeutralState::WaitingForFace,
+        samples_collected: recent.min(u32::MAX as usize) as u32,
+        samples_target: vtuber_tracking::AUTO_NEUTRAL_MIN_SAMPLES as u32,
+        quality_score: (recent > 0).then(|| {
+            (recent as f32 / vtuber_tracking::AUTO_NEUTRAL_MIN_SAMPLES as f32).clamp(0.0, 1.0)
         }),
-        last_reject_reason: runtime.last_calibration_reject_reason.clone(),
-        is_complete: matches!(runtime.session, CalibrationSession::Completed { .. }),
+        last_reject_reason: runtime.last_recenter_error.clone(),
+        is_complete: runtime.auto_neutral.state() == AutoNeutralState::Ready,
     }
 }
 
@@ -325,38 +288,32 @@ fn tracking_view(state: TrackingState, confidence: f32) -> crate::ui_model::Trac
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vtuber_core::types::{
-        Landmark3, LandmarkSchemaId, NamedCoefficient, NormalizedRect, RawExpressionObservation,
+    use vtuber_core::face_tracking::{
+        FaceBlendshapeSet, FaceLandmark, FaceTrackingQuality, MEDIAPIPE_FACE_LANDMARK_COUNT,
     };
 
-    fn observation(seq: u64, finished_at: u64) -> RawFaceObservation {
-        RawFaceObservation {
+    fn sample(seq: u64, finished_at: u64) -> FaceTrackingSample {
+        FaceTrackingSample {
             source_seq: FrameSeq(seq),
             captured_at: MonoTimeNs(finished_at.saturating_sub(1_000_000)),
             inference_started_at: MonoTimeNs(finished_at.saturating_sub(500_000)),
             inference_finished_at: MonoTimeNs(finished_at),
-            face_confidence: 1.0,
-            landmarks: vec![Landmark3::default()],
-            blendshapes: Some(vec![NamedCoefficient {
-                name: "blinkLeft".into(),
-                value: 0.0,
-            }]),
-            expressions: RawExpressionObservation::default(),
-            roi: NormalizedRect {
-                x: 0.25,
-                y: 0.25,
-                width: 0.5,
-                height: 0.5,
-                rotation_rad: 0.0,
+            camera_to_face: vtuber_core::CameraFaceTransform::identity(),
+            face_center: [0.5, 0.5],
+            landmarks: vec![FaceLandmark::default(); MEDIAPIPE_FACE_LANDMARK_COUNT].into(),
+            blendshapes: FaceBlendshapeSet::default(),
+            quality: FaceTrackingQuality {
+                landmark_presence_median: Some(1.0),
+                matrix_orthogonality_error: 0.0,
+                matrix_determinant: 1.0,
             },
-            schema: LandmarkSchemaId("tracking-runtime-test"),
         }
     }
 
     #[test]
     fn observation_gate_does_not_replay_a_fresh_face() {
         let mut gate = ObservationGate::default();
-        let face = observation(7, 1_000_000_000);
+        let face = sample(7, 1_000_000_000);
 
         assert!(matches!(
             gate.dispatch(Some(&face), MonoTimeNs(1_050_000_000)),
@@ -371,7 +328,7 @@ mod tests {
     #[test]
     fn observation_gate_turns_a_stale_face_into_face_loss() {
         let mut gate = ObservationGate::default();
-        let face = observation(7, 1_000_000_000);
+        let face = sample(7, 1_000_000_000);
 
         let _ = gate.dispatch(Some(&face), MonoTimeNs(1_050_000_000));
         assert_eq!(
@@ -383,8 +340,8 @@ mod tests {
     #[test]
     fn observation_gate_accepts_a_new_face_after_loss() {
         let mut gate = ObservationGate::default();
-        let first = observation(7, 1_000_000_000);
-        let second = observation(8, 1_300_000_000);
+        let first = sample(7, 1_000_000_000);
+        let second = sample(8, 1_300_000_000);
 
         let _ = gate.dispatch(Some(&first), MonoTimeNs(1_050_000_000));
         let _ = gate.dispatch(Some(&first), MonoTimeNs(1_251_000_000));
@@ -406,7 +363,7 @@ mod tests {
     #[test]
     fn observation_gate_reset_accepts_a_reused_capture_sequence() {
         let mut gate = ObservationGate::default();
-        let face = observation(7, 1_000_000_000);
+        let face = sample(7, 1_000_000_000);
 
         assert!(matches!(
             gate.dispatch(Some(&face), MonoTimeNs(1_050_000_000)),

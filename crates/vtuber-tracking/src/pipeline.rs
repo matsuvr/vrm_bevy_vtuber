@@ -21,20 +21,18 @@ use std::fmt;
 use std::time::Duration;
 
 use vtuber_core::control::{CalibrationSettings, TrackingPipelineSettings};
-#[cfg(test)]
-use vtuber_core::types::LandmarkSchemaId;
-#[cfg(test)]
-use vtuber_core::types::NamedCoefficient;
 use vtuber_core::types::{
-    AvatarControlFrame, FrameSeq, GazePose, HeadPose, Landmark3, MonoTimeNs, RawFaceObservation,
-    TrackingState,
+    AvatarControlFrame, FrameSeq, GazePose, HeadPose, Landmark3, LandmarkSchemaId, MonoTimeNs,
+    NamedCoefficient, RawFaceObservation, TrackingState,
 };
+use vtuber_core::{CameraFaceTransform, FaceTrackingSample, NormalizedRect};
 
 use crate::calibration::{NeutralProfile, NeutralValidationSettings};
 use crate::confidence::{
     ConfidenceAssessment, ConfidenceGate, ConfidenceGateParams, ConfidenceInputs,
     ConfidencePolicies, synthesize,
 };
+use crate::expressions::{map_mediapipe_gaze, map_mediapipe_raw_expressions};
 use crate::filter::{
     ExpressionCalibration, ExpressionCalibrationError, ExpressionFilter, ExpressionFilterParams,
     ExpressionRange, HeadFilterParams, HeadRotationFilter,
@@ -48,6 +46,7 @@ use crate::pose::{
     LandmarkSet, PoseError, quaternion_to_semantic_pose, semantic_pose_to_quaternion,
     solve_relative_pose,
 };
+use crate::relative_pose;
 use crate::state_machine::{StateMachineParams, TrackingStateMachine, TransitionInput};
 
 // -----------------------------------------------------------------------------
@@ -532,6 +531,45 @@ impl TrackingPipeline {
             observation.map(|obs| compute_neutral_relative_pose(profile, obs, now))
         });
 
+        self.update_with_pose(observation, now, dt, pose_result, calibration_available)
+    }
+
+    /// Runs one canonical MediaPipe sample through the existing tracking
+    /// state, filter, and recovery pipeline.
+    ///
+    /// `neutral` is the latest auto-neutral transform.  The method accepts an
+    /// optional sample so face loss follows the same hold/return path as the
+    /// legacy observation API without fabricating a face.
+    #[must_use]
+    pub fn update_mediapipe(
+        &mut self,
+        sample: Option<&FaceTrackingSample>,
+        neutral: Option<CameraFaceTransform>,
+        now: MonoTimeNs,
+        dt: Duration,
+    ) -> PipelineUpdate {
+        let observation = sample.map(media_pipe_sample_to_observation);
+        let pose_result = match (sample, neutral) {
+            (Some(sample), Some(neutral)) => Some(media_pipe_pose_frame(sample, neutral, now)),
+            _ => None,
+        };
+        self.update_with_pose(
+            observation.as_ref(),
+            now,
+            dt,
+            pose_result,
+            neutral.is_some(),
+        )
+    }
+
+    fn update_with_pose(
+        &mut self,
+        observation: Option<&RawFaceObservation>,
+        now: MonoTimeNs,
+        dt: Duration,
+        pose_result: Option<Result<HeadPoseFrame, HeadPoseFailure>>,
+        calibration_available: bool,
+    ) -> PipelineUpdate {
         // 2. Frame confidence from all available sources.
         let frame_confidence = self.synthesize_confidence(observation, &pose_result);
 
@@ -638,6 +676,98 @@ impl TrackingPipeline {
                 .unwrap_or_default()
         }
     }
+}
+
+fn media_pipe_pose_frame(
+    sample: &FaceTrackingSample,
+    neutral: CameraFaceTransform,
+    produced_at: MonoTimeNs,
+) -> Result<HeadPoseFrame, HeadPoseFailure> {
+    let pose = relative_pose(neutral, sample.camera_to_face).map_err(|_| HeadPoseFailure {
+        source_seq: sample.source_seq,
+        captured_at: sample.captured_at,
+        reason: PoseFailureReason::InvalidObservation,
+    })?;
+    let confidence = sample
+        .quality
+        .landmark_presence_median
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    Ok(HeadPoseFrame {
+        source_seq: sample.source_seq,
+        captured_at: sample.captured_at,
+        produced_at,
+        pose,
+        confidence,
+    })
+}
+
+fn media_pipe_sample_to_observation(sample: &FaceTrackingSample) -> RawFaceObservation {
+    let landmarks = sample
+        .landmarks
+        .iter()
+        .map(|landmark| Landmark3 {
+            x: landmark.x,
+            y: landmark.y,
+            z: landmark.z,
+            visibility: landmark.visibility.or(landmark.presence).unwrap_or(1.0),
+        })
+        .collect();
+    let raw_expressions = map_mediapipe_raw_expressions(&sample.blendshapes, 1.0);
+    let gaze = map_mediapipe_gaze(&sample.blendshapes);
+    let mut blendshapes = sample
+        .blendshapes
+        .as_array()
+        .iter()
+        .enumerate()
+        .map(|(index, value)| NamedCoefficient {
+            name: vtuber_core::MediaPipeBlendshape::ALL[index]
+                .as_str()
+                .to_owned(),
+            value: *value,
+        })
+        .collect::<Vec<_>>();
+    blendshapes.extend([
+        NamedCoefficient {
+            name: "eyeLookLeft".into(),
+            value: gaze_to_coefficient(gaze.yaw_rad, false),
+        },
+        NamedCoefficient {
+            name: "eyeLookRight".into(),
+            value: gaze_to_coefficient(gaze.yaw_rad, true),
+        },
+        NamedCoefficient {
+            name: "eyeLookUp".into(),
+            value: gaze_to_coefficient(gaze.pitch_rad, true),
+        },
+        NamedCoefficient {
+            name: "eyeLookDown".into(),
+            value: gaze_to_coefficient(gaze.pitch_rad, false),
+        },
+    ]);
+    RawFaceObservation {
+        source_seq: sample.source_seq,
+        captured_at: sample.captured_at,
+        inference_started_at: sample.inference_started_at,
+        inference_finished_at: sample.inference_finished_at,
+        face_confidence: 1.0,
+        landmarks,
+        blendshapes: Some(blendshapes),
+        expressions: raw_expressions,
+        roi: NormalizedRect {
+            x: sample.face_center[0].clamp(0.0, 1.0),
+            y: sample.face_center[1].clamp(0.0, 1.0),
+            width: 0.0,
+            height: 0.0,
+            rotation_rad: 0.0,
+        },
+        schema: LandmarkSchemaId("mediapipe-478"),
+    }
+}
+
+fn gaze_to_coefficient(value: f32, positive_direction: bool) -> f32 {
+    let signed = if positive_direction { value } else { -value };
+    (signed / 0.6).clamp(0.0, 1.0)
 }
 
 fn mean_landmark_confidence(landmarks: &[Landmark3]) -> Option<f32> {

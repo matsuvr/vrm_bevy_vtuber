@@ -147,6 +147,14 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
             ui.label(diagnostics.camera_backend.as_deref().unwrap_or("(none)"));
             ui.end_row();
 
+            ui.label("Tracking backend");
+            ui.label(diagnostics.tracking_backend.as_deref().unwrap_or("(none)"));
+            ui.end_row();
+
+            ui.label("Tracking contract");
+            ui.label(diagnostics.tracking_contract.as_deref().unwrap_or("(none)"));
+            ui.end_row();
+
             ui.label("Avatar capabilities");
             ui.label(
                 diagnostics
@@ -161,6 +169,13 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
     // Tracking state.
     ui.heading("Tracking");
     ui.label(format!("State: {}", diagnostics.tracking_state));
+    ui.label(format!(
+        "Auto-neutral: {}",
+        diagnostics
+            .auto_neutral_state
+            .as_deref()
+            .unwrap_or("(none)")
+    ));
     ui.separator();
 
     // Last error.

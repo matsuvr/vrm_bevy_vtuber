@@ -25,8 +25,10 @@ pub mod pose;
 pub mod state_machine;
 
 pub use calibration::{
-    CalibrationCollector, CalibrationInput, CalibrationSession, CollectorMetrics, NeutralContext,
-    NeutralProfile, NeutralReference, NeutralValidationSettings, RejectionReason, SampleDecision,
+    AUTO_NEUTRAL_MIN_SAMPLES, AUTO_NEUTRAL_WINDOW, AutoNeutralCollector, AutoNeutralError,
+    AutoNeutralState, AutoNeutralUpdate, CalibrationCollector, CalibrationInput,
+    CalibrationSession, CollectorMetrics, NeutralContext, NeutralProfile, NeutralReference,
+    NeutralValidationSettings, RejectionReason, SampleDecision,
 };
 pub use confidence::{
     ConfidenceAssessment, ConfidenceConfigError, ConfidenceError, ConfidenceGate,

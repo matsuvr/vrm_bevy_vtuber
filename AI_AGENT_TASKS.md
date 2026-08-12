@@ -7336,6 +7336,8 @@ Commit: `feat(mocap): drive VRM expressions from MediaPipe blendshapes`
 
 #### M1-08-015-009: Integrate app UI, diagnostics, and avatar bridge
 
+状態: `DONE`
+
 MediaPipe outcomeからtracking、`AvatarControlFrame`、generation-safe avatar bridge、real/synthetic source exclusivity、diagnostics UIまで接続する。
 
 Commit: `feat(mocap): integrate MediaPipe tracking with desktop runtime`

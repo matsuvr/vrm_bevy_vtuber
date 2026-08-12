@@ -5,16 +5,18 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use vtuber_core::metrics::RateCounter;
-use vtuber_core::{FrameSeq, LatestSlot, RawFaceObservation, VideoFrame, monotonic_now};
-use vtuber_inference::InferenceStage;
-use vtuber_inference::{
-    InferenceController, InferenceOutcome, InferenceWorkerState, RuntimeSettings,
+use vtuber_core::{
+    FaceTrackingOutcome, FaceTrackingSample, FrameSeq, LatestSlot, RawFaceObservation, VideoFrame,
+    monotonic_now,
 };
+use vtuber_inference::InferenceStage;
+use vtuber_inference::{InferenceController, InferenceWorkerState};
 
 use crate::capture_runtime::CaptureRuntime;
 use crate::diagnostics::DiagnosticsSnapshot;
-use crate::model_catalog::{load_production_pipeline, production_artifact_root};
 use crate::orchestrator::{Orchestrator, OrchestratorError, PipelineState};
+
+const MEDIAPIPE_TASK_FILE: &str = "face_landmarker.task";
 
 /// Filesystem root containing the packaged `assets/models/manifest.toml`.
 ///
@@ -31,8 +33,10 @@ pub struct InferenceRuntime {
     project_root: PathBuf,
     worker_started: bool,
     model_requested: bool,
-    outcome_generation: u64,
-    /// Latest decoded observation made available to tracking on the main thread.
+    canonical_outcome_generation: u64,
+    /// Latest canonical MediaPipe sample made available to tracking.
+    pub latest_face_sample: Option<FaceTrackingSample>,
+    /// Deprecated legacy observation retained for compatibility diagnostics.
     pub latest_observation: Option<RawFaceObservation>,
 }
 
@@ -47,7 +51,8 @@ impl InferenceRuntime {
             project_root,
             worker_started: false,
             model_requested: false,
-            outcome_generation: 0,
+            canonical_outcome_generation: 0,
+            latest_face_sample: None,
             latest_observation: None,
         }
     }
@@ -64,7 +69,7 @@ impl InferenceRuntime {
         self.controller.output_slot()
     }
 
-    /// Starts the worker and queues the manifest-defined production model.
+    /// Starts the worker and queues the approved MediaPipe task bundle.
     pub fn start_model(&mut self) -> Result<(), String> {
         if !self.worker_started {
             self.controller
@@ -73,14 +78,13 @@ impl InferenceRuntime {
             self.worker_started = true;
         }
         if !self.model_requested {
-            let descriptor =
-                load_production_pipeline(&self.project_root).map_err(|error| error.to_string())?;
+            let task_path = self
+                .project_root
+                .join("assets")
+                .join("models")
+                .join(MEDIAPIPE_TASK_FILE);
             self.controller
-                .load_pipeline(
-                    descriptor,
-                    production_artifact_root(&self.project_root),
-                    RuntimeSettings::default(),
-                )
+                .load_mediapipe(task_path)
                 .map_err(|error| error.to_string())?;
             self.model_requested = true;
         }
@@ -97,23 +101,25 @@ impl InferenceRuntime {
             self.worker_started = false;
         }
         self.model_requested = false;
-        self.outcome_generation = 0;
+        self.canonical_outcome_generation = 0;
+        self.latest_face_sample = None;
         self.latest_observation = None;
     }
 
-    /// Reads one latest-only inference result, suppressing duplicate output.
-    pub fn read_latest(&mut self) -> Option<RawFaceObservation> {
-        let outcome_slot = self.controller.outcome_slot();
+    /// Reads one latest-only canonical MediaPipe result, suppressing duplicate output.
+    pub fn read_latest(&mut self) -> Option<FaceTrackingSample> {
+        let outcome_slot = self.controller.canonical_outcome_slot();
         if let Some(vtuber_core::ReadResult::New(outcome)) =
-            outcome_slot.try_read_after(self.outcome_generation)
+            outcome_slot.try_read_after(self.canonical_outcome_generation)
         {
-            self.outcome_generation = outcome_slot.generation();
+            self.canonical_outcome_generation = outcome_slot.generation();
             match outcome {
-                InferenceOutcome::Face(observation) => {
-                    self.latest_observation = Some(observation.clone());
-                    return Some(observation);
+                FaceTrackingOutcome::Face(sample) => {
+                    self.latest_face_sample = Some(sample.clone());
+                    return Some(sample);
                 }
-                InferenceOutcome::NoFace { .. } => {
+                FaceTrackingOutcome::NoFace { .. } => {
+                    self.latest_face_sample = None;
                     self.latest_observation = None;
                 }
             }
@@ -237,11 +243,24 @@ pub(crate) fn read_inference_output_system(
         .map(|roi| (roi.x, roi.y, roi.width, roi.height));
     diagnostics.detector_confidence = status.detector_confidence;
     diagnostics.roi_state = status.roi_state.clone();
-    diagnostics.pipeline_id = status.pipeline_id.clone();
+    diagnostics.pipeline_id = status.pipeline_id.clone().or_else(|| {
+        inference
+            .latest_face_sample
+            .as_ref()
+            .map(|_| "mediapipe-face-landmarker".to_string())
+    });
     diagnostics.model_hash = model_hash_summary(
         status.detector_model_hash.as_deref(),
         status.landmark_model_hash.as_deref(),
-    );
+    )
+    .or_else(|| {
+        (status.pipeline_id.as_deref() == Some("mediapipe-face-landmarker")).then(|| {
+            format!(
+                "task:{}",
+                short_hash(vtuber_inference::backend::mediapipe::TASK_BUNDLE_SHA256)
+            )
+        })
+    });
     diagnostics.inference_failure_stage = status
         .last_failure
         .as_ref()

@@ -49,6 +49,12 @@ pub struct DiagnosticsSnapshot {
     pub inference_failure_stage: Option<String>,
     /// Tracking state description.
     pub tracking_state: String,
+    /// Inference/tracking backend identity.
+    pub tracking_backend: Option<String>,
+    /// Canonical face-output contract summary.
+    pub tracking_contract: Option<String>,
+    /// Auto-neutral state exposed to diagnostics.
+    pub auto_neutral_state: Option<String>,
     /// Slot overwrite count.
     pub slot_overwrites: u64,
     /// Stage timings (name, duration_ms).
