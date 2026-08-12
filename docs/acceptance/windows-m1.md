@@ -1,6 +1,6 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — MediaPipe worker and GUI setup/Start/Stop were exercised with C922 and an approved VRM; face motion, recovery, latency export, and 30-minute soak remain NOT RUN
+**Status:** BLOCKED — live MediaPipe tracking, face loss/reacquire, Start/Stop, avatar replace/unload/reload, latency observation, and 30-minute soak were exercised; direct avatar motion and capture-to-apply latency remain unverified
 **Date:** 2026-08-12
 **Commit SHA:** `ee88dfa`
 **Binary:** `vtuber-desktop` (release profile)
@@ -20,7 +20,7 @@
 | Camera 2 (if available) | NOT RUN |
 | Build profile | release |
 | Rust toolchain | rustc 1.97.1 / cargo 1.97.1 |
-| Binary SHA-256 | `97F82B36E7C97C621C7C41672220F828ECDD971D9593CF59A35871AE66E34F00` |
+| Binary SHA-256 | `69B71344032ABDB18C5DE1EAD785AB9ECFE98BBE75B4240B4470B94B70831C3E` |
 
 ### Model Manifest
 
@@ -33,7 +33,7 @@ The former UltraFace/Peppa entries and their hashes are retained only in the
 historical composite evidence below. They are not the current production
 backend.
 
-### Current MediaPipe GUI run (partial evidence)
+### Previous MediaPipe GUI run (partial evidence)
 
 The release binary was launched on Windows and exercised through the desktop
 UI. C922 was enumerated and selected as `MSMF index 0`, `inore-vrm1.vrm` was
@@ -54,6 +54,47 @@ sample, Recenter, head pose, expression, gaze, face-loss/reacquire, avatar
 replace, or unplug/reconnect result is claimed. The observed no-face state was
 normal tracking state, not an inference failure.
 
+### Current MediaPipe GUI run (live acceptance)
+
+On 2026-08-12 the release binary was exercised with the user present in front
+of the connected `c922 Pro Stream Webcam` (MSMF index 0). The approved
+`inore-vrm1.vrm` fixture reached `Avatar lifecycle: Ready`. Auto-neutral
+calibration completed, and Live showed:
+
+```text
+Tracking: Tracking
+Confidence: 1.00
+Face detected: yes
+```
+
+The six head-pose directions, blink, mouth-open, and left/right gaze prompts
+were executed while the pipeline remained live. Face loss was observed as
+`Face detected: no`, `Tracking: Initializing`, `Confidence: 0.00`; returning to
+the camera reacquired `Face detected: yes`, `Tracking: Tracking`, and
+`Confidence: 1.00` in the same process. Three Stop/Start cycles completed, and
+avatar replace, unload (`Avatar lifecycle: None`), and reload (`Ready`) also
+completed without a process restart. After reload, tracking reacquired again.
+
+The UI did not expose a direct numeric avatar-apply counter or a
+capture-to-apply latency value, and the viewport framing did not provide a
+recordable head/expression visual result in this run. Therefore this evidence
+does not claim the VRM head, blink, mouth, or gaze visual checks as PASS.
+
+The 60-second diagnostics observation showed approximately:
+
+```text
+capture/inference: 30 Hz
+tracking: 30-31 Hz
+inference wait: p50 ~25 ms, p95 ~41.9 ms
+inference total: p50 ~6.0 ms, p95 ~6.8 ms
+capture-to-apply p50/p95: (none)
+```
+
+The subsequent 30-minute soak completed with the process responsive and the
+workers still Running. Final diagnostics were `tracking 30.0 Hz`,
+`slot overwrites 0`, `no-face frames 106`, inference wait p95 `41.46 ms`, and
+inference total p95 `7.45 ms`. No crash, worker exit, or hang was observed.
+
 ---
 
 ## 2. Test Matrix
@@ -69,10 +110,10 @@ Automated verification completed on the environment above:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo build -p vtuber-desktop --release`
 
-The GUI motion and 30-minute soak protocol below were not completed in this
-agent session. The historical composite diagnostic was exercised on Windows
-with
-the connected `c922 Pro Stream Webcam`:
+The current live GUI run above covers the MediaPipe worker and recovery
+evidence. The historical composite diagnostic below is retained only as
+superseded evidence and was exercised on Windows with the connected
+`c922 Pro Stream Webcam`:
 
 ```text
 cargo run -p xtask -- face-pipeline-smoke --duration 10 --json
@@ -186,53 +227,53 @@ Skip conditions:
 
 ### 3.1 Neutral Calibration
 
-- [ ] Start app with model loaded
-- [ ] Face camera in neutral position
-- [ ] Click "Begin Calibration"
-- [ ] Hold neutral pose until complete
-- [ ] Verify: tracking responds to head movement from neutral
+- [x] Start app with model loaded
+- [x] Face camera in neutral position
+- [x] Auto-neutral calibration completed without a blocking calibration phase
+- [x] Hold neutral pose until calibration completed
+- [x] Live state reached `Tracking` with confidence `1.00`
 
 ### 3.2 Head Pose (yaw / pitch / roll)
 
 | Axis | Direction | Expected | Actual | Result |
 |------|-----------|----------|--------|--------|
-| Yaw | Turn right (image right) | Head turns right | | |
-| Yaw | Turn left | Head turns left | | |
-| Pitch | Chin up | Head tilts up | | |
-| Pitch | Chin down | Head tilts down | | |
-| Roll | Tilt right (clockwise) | Head tilts right | | |
-| Roll | Tilt left (counter-clockwise) | Head tilts left | | |
+| Yaw | Turn right (image right) | Head turns right | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Yaw | Turn left | Head turns left | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Pitch | Chin up | Head tilts up | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Pitch | Chin down | Head tilts down | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Roll | Tilt right (clockwise) | Head tilts right | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Roll | Tilt left (counter-clockwise) | Head tilts left | Prompt executed; viewport result not recorded | NOT VERIFIED |
 
 ### 3.3 Blink
 
 | Capability | Expected | Actual | Result |
 |-----------|----------|--------|--------|
-| Per-eye (blinkLeft + blinkRight) | Independent left/right blink | | |
-| Combined (blink only) | Both eyes blink together | | |
-| No blink preset | No blink response (not a failure) | | |
+| Per-eye (blinkLeft + blinkRight) | Independent left/right blink | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Combined (blink only) | Both eyes blink together | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| No blink preset | No blink response (not a failure) | Not applicable to selected fixture | NOT RUN |
 
 ### 3.4 Mouth
 
 | Capability | Expected | Actual | Result |
 |-----------|----------|--------|--------|
-| Full (aa/ih/ou/ee/oh) | Vowel shapes respond | | |
-| aa-only | Mouth opens with "aa" | | |
-| No mouth preset | No mouth response (not a failure) | | |
+| Full (aa/ih/ou/ee/oh) | Vowel shapes respond | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| aa-only | Mouth opens with "aa" | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| No mouth preset | No mouth response (not a failure) | Not applicable to selected fixture | NOT RUN |
 
 ### 3.5 Gaze
 
 | Mode | Expected | Actual | Result |
 |------|----------|--------|--------|
-| Expression (lookLeft/Right/Up/Down) | Eyes move with gaze | | |
-| Eye bones | Eye bones rotate | | |
-| None | No gaze response (not a failure) | | |
+| Expression (lookLeft/Right/Up/Down) | Eyes move with gaze | Prompts executed; viewport result not recorded | NOT VERIFIED |
+| Eye bones | Eye bones rotate | Not separately isolated | NOT RUN |
+| None | No gaze response (not a failure) | Not applicable to selected fixture | NOT RUN |
 
 ### 3.6 Functional Summary
 
-- [ ] No panic or fatal render issue
-- [ ] Head pose three axes move in intended directions
-- [ ] Blink/mouth respond according to capability
-- [ ] Unsupported capabilities show as limitations, not errors
+- [x] No panic or fatal render issue observed
+- [ ] Head pose three axes move in intended directions (viewport evidence missing)
+- [ ] Blink/mouth respond according to capability (viewport evidence missing)
+- [x] No unsupported-capability error was shown
 
 ---
 
@@ -261,43 +302,41 @@ cargo test -p vtuber-core -p vtuber-camera -p vtuber-app --lib --tests
 cargo clippy -p vtuber-core -p vtuber-camera -p vtuber-app --all-targets -- -D warnings
 ```
 
-The physical checklist below remains `NOT RUN` until the release binary is
-tested with a Windows camera and two imported VRM 1.0 models. In particular,
-the automated preflight does not prove camera unplug/replug, GUI avatar
-replacement, thread-count stability, or the two-second reacquisition target.
+The live checklist below was exercised with one imported VRM 1.0 model. Camera
+unplug/replug, thread-count measurement, and a timed two-second reacquisition
+measurement were not performed.
 
 ### 4.1 Face Loss / Return
 
-- [ ] Move face out of frame
-- [ ] Verify: tracking state → Lost
-- [ ] Verify: avatar holds neutral or last pose (no freeze)
-- [ ] Return face to frame
-- [ ] Verify: tracking resumes within 2 seconds
-- [ ] Verify: no stale pose remains
+- [x] Move face out of frame
+- [x] Verify: `Face detected: no`, `Tracking: Initializing`, confidence `0.00`
+- [ ] Verify: avatar holds neutral or last pose (no direct viewport evidence)
+- [x] Return face to frame
+- [ ] Verify: tracking resumes within 2 seconds (not timed)
+- [ ] Verify: no stale pose remains (no direct viewport evidence)
 
 ### 4.2 Camera Stop / Restart
 
-- [ ] Click "Stop"
-- [ ] Verify: all workers stop, tracking state → Idle
-- [ ] Click "Start"
-- [ ] Verify: tracking resumes
+- [x] Click "Stop" and verify lifecycle reached `Idle`
+- [x] Click "Start" and verify lifecycle reached `Running`
+- [x] Repeat Stop/Start three times in the same process
 - [ ] If possible: unplug camera, replug
 - [ ] Verify: app handles disconnect gracefully, reconnect works
 
 ### 4.3 Avatar Replace
 
-- [ ] While tracking, import a different model
-- [ ] Verify: old model is fully despawned
-- [ ] Verify: new model loads and binds
-- [ ] Verify: tracking continues with new model
-- [ ] Verify: no stale state from old model
+- [x] While tracking, import a VRM replacement
+- [x] Verify: lifecycle returned to `Ready` without a process restart
+- [x] Verify: replacement model loads and binds
+- [x] Verify: tracking continues after replacement/reload
+- [ ] Verify: no stale state from old model (no direct viewport evidence)
 
 ### 4.4 Recovery Summary
 
-- [ ] No permanent freeze on face loss
-- [ ] Camera restart recovers tracking
-- [ ] Avatar replace leaves no stale state
-- [ ] Thread count returns to baseline after each operation
+- [ ] No permanent freeze on face loss (viewport evidence missing)
+- [x] Camera restart recovers tracking
+- [ ] Avatar replace leaves no stale state (viewport evidence missing)
+- [ ] Thread count returns to baseline after each operation (not measured)
 
 ---
 
@@ -313,16 +352,17 @@ replacement, thread-count stability, or the two-second reacquisition target.
 
 | Metric | Target | Actual | Result |
 |--------|--------|--------|--------|
-| Render FPS | ≥ 30 | NOT RUN | |
-| Tracking Hz | ≥ 15 | NOT RUN | |
-| p50 capture-to-apply | — | NOT RUN | |
-| p95 capture-to-apply | ≤ 180ms | NOT RUN | |
-| Queue depth | ≤ 1 | NOT RUN | |
-| Slot overwrite count | — | NOT RUN | |
+| Render FPS | ≥ 30 | Not exposed in diagnostics | NOT RUN |
+| Tracking Hz | ≥ 15 | 30-31 Hz | PASS |
+| p50 capture-to-apply | — | `(none)` | NOT VERIFIED |
+| p95 capture-to-apply | ≤ 180ms | `(none)` | NOT VERIFIED |
+| Queue depth | ≤ 1 | Slot overwrites 0 | PASS |
+| Slot overwrite count | — | 0 | PASS |
 
 ### 5.3 Raw Data
 
-_Metrics CSV/JSON artifact path: not generated — protocol not run._
+_Metrics CSV/JSON artifact path: not generated; diagnostics values were read
+from the live release UI._
 
 ---
 
@@ -330,8 +370,8 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 ### 6.1 Setup
 
-- Model: _selected model_
-- Camera: _selected camera_
+- Model: `inore-vrm1.vrm`
+- Camera: `c922 Pro Stream Webcam`, MSMF index 0
 - Duration: 30 minutes
 - Sampling interval: every 60 seconds
 
@@ -339,19 +379,19 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 | Metric | Start | Mid | End | Trend |
 |--------|-------|-----|-----|-------|
-| RSS (MB) | | | | |
-| p95 latency (ms) | | | | |
-| Render FPS | | | | |
-| Tracking Hz | | | | |
-| Worker threads | | | | |
+| RSS (MB) | Not measured | Not measured | Not measured | NOT VERIFIED |
+| p95 latency (ms) | wait ~41.9 / total ~6.8 | wait ~41.8 / total ~7.8 | wait 41.46 / total 7.45 | stable sampled |
+| Render FPS | Not exposed | Not exposed | Not exposed | NOT RUN |
+| Tracking Hz | 30-31 | 30-31 | 30.0 | stable |
+| Worker threads | Running | Running | Running | no exit observed |
 
 ### 6.3 Soak Summary
 
-- [ ] No process crash
-- [ ] No memory continuous increase trend
-- [ ] No latency continuous increase trend
-- [ ] Worker threads terminate cleanly on Stop
-- [ ] Clean shutdown confirmed
+- [x] No process crash
+- [ ] No memory continuous increase trend (RSS not measured)
+- [x] No latency continuous increase trend in sampled diagnostics
+- [x] Worker threads terminated on Stop (user confirmed Stop after soak)
+- [ ] Clean shutdown confirmed (process remained open after Stop)
 
 ---
 
@@ -359,15 +399,15 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 | # | Criterion | Target | Actual | Verdict |
 |---|-----------|--------|--------|---------|
-| 1 | Render FPS | ≥ 30 | NOT RUN | NOT RUN |
-| 2 | Tracking Hz | ≥ 15 | NOT RUN | NOT RUN |
-| 3 | p95 capture-to-apply | ≤ 180ms | NOT RUN | NOT RUN |
-| 4 | Queue depth | ≤ 1 | NOT RUN | NOT RUN |
-| 5 | No memory/latency increase | stable | NOT RUN | NOT RUN |
-| 6 | No process crash | 0 crashes | NOT RUN | NOT RUN |
+| 1 | Render FPS | ≥ 30 | Not exposed | NOT RUN |
+| 2 | Tracking Hz | ≥ 15 | 30-31 Hz | PASS |
+| 3 | p95 capture-to-apply | ≤ 180ms | `(none)` | NOT VERIFIED |
+| 4 | Queue depth | ≤ 1 | Slot overwrites 0 | PASS |
+| 5 | No memory/latency increase | stable | latency stable sampled; RSS not measured | PARTIAL |
+| 6 | No process crash | 0 crashes | 0 observed | PASS |
 | 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** BLOCKED — MediaPipe worker startup and GUI setup are evidenced, but face motion/recovery, latency measurements, and the 30-minute soak have not been completed.
+**Overall Gate:** BLOCKED — live tracking, loss/reacquire, lifecycle recovery, latency stage timing, and the 30-minute soak are evidenced, but direct avatar motion and capture-to-apply latency remain unverified.
 
 ---
 
@@ -375,8 +415,8 @@ _Metrics CSV/JSON artifact path: not generated — protocol not run._
 
 | # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
 |---|---------|----------|----------|-------------|---------------|
-| 1 | The M1-08-013 camera protocol is complete, but the broader Windows GUI/VRM acceptance has not been run | test-environment | High | Execute the Windows functional, recovery, latency, and soak protocol | Yes |
-| 2 | Physical Windows GUI, VRM motion, and 30-minute soak were not run in this session | test-environment | High | Execute the Windows acceptance protocol on target hardware | Yes |
+| 1 | Direct avatar head/expression/gaze visual result was not recorded | test-environment | High | Repeat the live protocol with viewport evidence or an avatar-apply metric | Yes |
+| 2 | capture-to-apply diagnostics are `(none)` and RSS/thread-count artifacts were not exported | performance | High | Expose/export capture-to-apply and resource metrics, then rerun the gate | Yes |
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment
 
@@ -391,11 +431,11 @@ Categories: correctness, compatibility, performance, hardware-specific, test-env
 | vtuber-desktop.exe | `69B71344032ABDB18C5DE1EAD785AB9ECFE98BBE75B4240B4470B94B70831C3E` | target/release/vtuber-desktop.exe |
 | face_landmarker.task | `64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF` | assets/models/face_landmarker.task |
 | inore-vrm1.vrm | `B5A3D4126C4A30EF3BFBCFC764A24DC48511B558799D98D4C2FF1DB0BDC7AB01` | tests/fixtures/vrm/inore-vrm1.vrm |
-| Metrics CSV | — | not generated — protocol not run |
-| Soak metrics | — | not generated — protocol not run |
+| Metrics CSV | — | not generated; live diagnostics recorded in this report |
+| Soak metrics | — | no exported artifact; 30-minute live observation recorded |
 
 ---
 
-_Report generated from the automated and partial GUI Windows evidence above.
-GUI/VRM motion, latency export, and the 30-minute soak remain intentionally
-unfilled._
+_Report generated from the automated, live GUI, latency-observation, and
+30-minute soak evidence above. Direct GUI avatar motion and capture-to-apply
+latency remain intentionally unverified._

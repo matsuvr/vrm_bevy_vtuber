@@ -7359,9 +7359,9 @@ Commit: `refactor(mocap): remove legacy custom face pipeline`
 
 section 16 protocolをC922とapproved VRMで実施し、10/10 Recenter、physical signs、real VRM head/blink/mouth/gaze、15 Hz以上、capture-to-apply p95 180 ms以下、Stop/Start 3回を測定する。thresholdを下げて合格扱いにしない。
 
-2026-08-12のrelease GUI runではC922選択、VRM 1.0 import/Ready、Start/Stop、MediaPipe worker Running（capture/inference 30 Hz）まで確認したが、入力がno-face（447件、landmark/tracking 0 Hz）だったため、表情protocolと性能閾値は未実施。PASSへ繰り上げない。
+2026-08-12のlive release GUI runではC922選択、VRM 1.0 import/Ready、auto-neutral、face loss/reacquire、3回のStop/Start、avatar replace/unload/reload、MediaPipe worker Running（capture/inference約30 Hz）を確認した。30分soakも完了したが、viewport上のhead／blink／mouth／gaze結果を記録できず、capture-to-applyは`(none)`だったため、functional／performance gateはBLOCKEDのままとする。
 
-Commit: `test(mocap): complete Windows MediaPipe tracking acceptance`
+Commit: `test(mocap): record live Windows acceptance evidence`
 
 #### M1-08-015-012: Final documentation and task state
 
@@ -7507,7 +7507,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 #### M1-08-018: Windows functional／recovery acceptanceを実pipelineで実施する
 
 状態: `BLOCKED`
-備考: release build、C922でのMediaPipe worker起動（capture／inference 30 Hz）、managed VRM Ready、Start／Stopは確認済み。no-face状態で実顔動作／校正／avatar motion／replace／unload／recoveryの受入証跡がないためBLOCKED。
+備考: release build、C922でのMediaPipe worker起動、auto-neutral、face loss/reacquire、Start／Stop、avatar replace／unload／reload、30分soakは確認済み。viewport上のavatar motionを記録できず、camera unplug/replugと2秒reacquisition計測も未実施のためBLOCKED。
 依存: `M1-08-017`
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
@@ -7552,7 +7552,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 #### M1-08-019: latency、30分soak、Windows final gateを閉じる
 
 状態: `BLOCKED`
-備考: stage timing／p50／p95のコードとテストはあるが、release appの60秒latency exportと30分soakを未実施。`M1-08-018`のmanual gate待ち。
+備考: release appで約60秒のdiagnostics観測と30分soakを実施し、tracking 30-31 Hz、inference wait p95約41.9 ms、inference total p95約6.8 ms、soak終端は41.46／7.45 ms、slot overwrite 0を記録した。ただしcapture-to-applyが`(none)`、RSS／render FPS／thread-count artifactがなく、`M1-08-018`のviewport functional gateも未完了のためBLOCKED。
 依存: `M1-08-018`
 親参照: DESIGN.md §6、§20.2〜§20.3、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
