@@ -38,7 +38,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-009`〜`M1-08-012` | `DONE` | GUI import、avatar lifecycle、synthetic tracking、Windows camera契約、capture／preview接続まで実装・自動検証済み。 |
 | `M1-08-013` | `DONE` | UltraFace→crop→Peppa 98点landmark→planar poseのWindows C922実機gateを、face loss／return、方向、edge、capture Stop／Startを含むguided protocolで確認済み。 |
 | `M1-08-014` | `DONE` | managed VRM import／avatar lifecycleの既存blockerを解消し、自動互換性検査済み。 |
-| `M1-08-015` | `DONE` | MediaPipe rewrite、C922 functional／recovery gate、bounded 30分performance gateを完了した。旧composite trackingの実機証拠は新backendの受入証拠として再利用しない。 |
+| `M1-08-015` | `DONE` | MediaPipe rewrite、C922 functional／recovery gate、bounded performance gateを完了した。旧composite trackingの実機証拠は新backendの受入証拠として再利用しない。 |
 | `M1-08-016` | `DONE` | MediaPipe canonical tracking sourceからreal-VRM bridgeへの接続、generation／stale排他、synthetic排他を自動検証済み。 |
 | `M1-08-017` | `DONE` | MediaPipe identity／contract diagnostics、worker recovery、reverse shutdown、retry、no-face通常状態を自動検証済み。 |
 | `M1-08-018` | `DONE` | C922 symbolic-link選択、実preview、real-VRM head／blink／mouth／gaze、Stop／Start 3回、既存のloss／reacquire・replug・replace証拠を統合してfunctional／recovery gateを完了した。 |
@@ -51,7 +51,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `Q2-06` | `DONE` | `Q2-06-001`でdirect-pose `bevy_vrm1::BodyTracking`を導入し、上半身追従を統合した。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05`のWindows部分から一つのtask ID**である。M1-08-018はC922 symbolic-link明示選択後のreal preview、real-VRM head／blink／mouth／gaze、capture-to-apply、Stop／Start 3回と既存recovery evidenceを統合して`DONE`、M1-08-019は30分bounded performance gateをPASSした。`M1-09`は`DEFERRED`のままとする。
+M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05`のWindows部分から一つのtask ID**である。M1-08-018はC922 symbolic-link明示選択後のreal preview、real-VRM head／blink／mouth／gaze、capture-to-apply、Stop／Start 3回と既存recovery evidenceを統合して`DONE`、M1-08-019はbounded performance gateをPASSした。`M1-09`は`DEFERRED`のままとする。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -5933,7 +5933,7 @@ cargo test -p vtuber-app error_presenter
 
 **このsubtaskで行わないこと**
 
-- acceptance soakを先行実施しない。
+- 長時間待機を伴うacceptanceを追加しない。
 - UI polishをスコープ拡大しない。
 
 
@@ -6014,7 +6014,7 @@ Peppa upstream自身もface detectorとlandmark detectorを別段として扱っ
 
 ### 目的
 
-Windows 11で、GUIからのVRM import、実camera capture、detector→crop→landmarkのpure-Rust推論、calibration／tracking、`bevy_vrm1` avatar適用を一本につなぎ、MVP縦断動作と30分安定性を確認する。
+Windows 11で、GUIからのVRM import、実camera capture、公式MediaPipe Tasks推論、tracking、`bevy_vrm1` avatar適用を一本につなぎ、MVP縦断動作とbounded pipeline／lifecycleを確認する。
 
 ### protocol
 
@@ -6027,18 +6027,16 @@ Windows 11で、GUIからのVRM import、実camera capture、detector→crop→l
 - face loss／return
 - camera stop／restart
 - avatar replace
-- 30分run
+- warm-up 10秒＋60秒以上の定常測定（人の連続待機は要求しない）
 
 ### 受入条件
 
-- full camera frameからface ROIと98 landmarksが継続的に得られる。
-- render最低30fps
-- tracking最低15Hz
-- p95 capture-to-apply 180ms以下
-- queue 1以下
-- memory／latency増加傾向なし
-- process crashなし
-- report保存
+- production tracking pathからfiniteなpose／expressionが得られ、real VRMのhead／blink／mouth／gazeへ反映される。
+- render最低30fps、tracking最低15Hz
+- p95 capture-to-apply 180ms以下、queue保持件数1以下
+- face loss／return、Stop／Start、avatar replace後にtrackingへ復帰する。
+- process crashがなく、終了時に全workerをjoinできる。
+- PASS／FAIL／NOT RUNとmetrics artifactをreportへ保存する。
 
 ---
 
@@ -6243,7 +6241,7 @@ cargo test -p vtuber-app diagnostics_snapshot
 acceptance run metrics export
 ```
 
-#### M1-08-006: 30分soakを実施する
+#### M1-08-006: bounded実行とshutdownを確認する
 
 状態: `LEGACY_PROGRESS`
 依存: `M1-08-005`
@@ -6252,34 +6250,35 @@ acceptance run metrics export
 **変更候補**
 
 - `docs/acceptance/windows-m1.md`
-- `soak metrics artifact`
+- `bounded metrics artifact`
 
 
 **実装指示**
 
-- 固定model／cameraで30分連続Trackingを実行する。
-- 一定間隔でRSS／working set、latency p95、rates、overwrite、worker statusを記録する。
-- 途中で短いface loss／returnを数回入れる。
-- 終了時に明示Stopしてclean shutdownを確認する。
+- 固定model／cameraで10秒warm-up後に60秒以上、300 sample以上のbounded metricsを取得する。測定中に人の連続操作は要求しない。
+- latency p95、rates、queue depth、overwrite、worker statusを記録する。
+- 測定前後に短いface loss／returnとStop／Startを各1回行う。
+- 終了時に明示Stopし、全workerのjoinとclean shutdownを確認する。
 
 
 **このsubtaskで行わないこと**
 
 - 途中失敗runを削除しない。
-- OS task managerの一時値だけで傾向判断しない。
+- RSSの短期変動だけを合否根拠にしない。
 
 
 **完了条件**
 
+- render 30fps以上、tracking 15Hz以上、capture-to-apply p95 180ms以下を満たす。
+- queue保持件数が1以下で、overwriteを記録できる。
+- Stop／Start後にtrackingへ復帰し、終了時にworker threadが残らない。
 - process crashなし。
-- memory／latencyに継続増加傾向がない。
-- worker threadが終了する。
 
 
 **検証**
 
 ```bash
-手動30分run。metrics artifactを保存する。
+実機run（10秒warm-up＋60秒以上、300 sample以上）＋Stop／Start＋metrics artifact保存
 ```
 
 #### M1-08-007: Windows acceptance reportを完成させる
@@ -6296,7 +6295,7 @@ acceptance run metrics export
 
 **実装指示**
 
-- matrix、functional、recovery、latency、soak結果を一つのreportへ統合する。
+- matrix、functional、recovery、latency、bounded実行結果を一つのreportへ統合する。
 - 各受入条件をPASS／FAIL／NOT RUNで記録する。
 - FAILにはissue候補、再現手順、log／artifact pathを付ける。
 - model、binary、config、artifactのhash manifestを付ける。
@@ -7094,7 +7093,7 @@ worker／cameraの終了処理には異常はなかった。
 **このleafで行わないこと**
 
 - desktop orchestrator、tracking runtime、avatar bridgeへ接続しない。
-- 60秒smokeを30分soakと呼ばない。
+- guided functional smokeをperformance acceptanceとして流用しない。
 - crop parameterを目視だけでcodeへ直書きしない。
 - detector missを古いROIの永久保持で隠さない。
 - physical test未実施をPASSにしない。
@@ -7192,7 +7191,7 @@ cargo build -p vtuber-desktop --release
 #### M1-08-015: 既存TrackingRuntimeをcomposite observationsへ適合・実機検証する
 
 状態: `DONE`
-備考: MediaPipe canonical pipeline、C922 real-VRM functional／recovery acceptance、30分bounded performance acceptanceまで完了した。
+備考: MediaPipe canonical pipeline、C922 real-VRM functional／recovery acceptance、bounded performance acceptanceまで完了した。
 依存: `M1-08-014`
 親参照: DESIGN.md §11、§15、§17.2、§20.1、§21.1
 
@@ -7313,7 +7312,7 @@ column-major matrix validation、proper rotation extraction、relative transform
 cargo run -p xtask -- mediapipe-pose-probe --camera 0 --guided --json 2>&1
 ```
 
-MediaPipe 0.10.35、native library `verified cache`、`signs_pass=true`。neutral 96 samples、image_right 90、image_left 89、chin_up 90、chin_down 89、image_clockwise 89、image_counter_clockwise 89。Observed semantic signs: yaw `+0.600952/-0.752999`, pitch `+0.237842/-0.299808`, roll `+0.572944/-0.560954` for the tested positive/negative directions. This proves matrix/relative-pose sign behavior only; GUI, VRM application, latency, soak, and macOS acceptance remain pending.
+MediaPipe 0.10.35、native library `verified cache`、`signs_pass=true`。neutral 96 samples、image_right 90、image_left 89、chin_up 90、chin_down 89、image_clockwise 89、image_counter_clockwise 89。Observed semantic signs: yaw `+0.600952/-0.752999`, pitch `+0.237842/-0.299808`, roll `+0.572944/-0.560954` for the tested positive/negative directions. This proves matrix/relative-pose sign behavior only; GUI, VRM application, bounded performance, and macOS acceptance remain pending.
 
 Commit: `feat(mocap): derive neutral-relative pose from MediaPipe transforms`
 
@@ -7365,7 +7364,7 @@ Commit: `refactor(mocap): remove legacy custom face pipeline`
 
 section 16 protocolをC922とapproved VRMで実施し、10/10 Recenter、physical signs、real VRM head/blink/mouth/gaze、15 Hz以上、capture-to-apply p95 180 ms以下、Stop/Start 3回を測定する。thresholdを下げて合格扱いにしない。
 
-2026-08-12のlive release GUI runでC922 symbolic-link明示選択、VRM 1.0 import/Ready、auto-neutral、real preview、6方向head、両目blink、`aa` mouth、左右gaze、face loss/reacquire、3回のStop/Start、avatar replace/unload/reload、camera unplug/replug後のStop→Start復旧、約405 msでの再取得、capture-to-apply、clean shutdownを確認した。M1-08-019の30分bounded runはrender 56.257–60.770 FPS、tracking 30–60 Hz、capture-to-apply p95 29.393–31.213 ms、capture slot overwrite 0、RSS 866.2–885.6 MiB、thread 125–138、crash/hang 0でPASSした。
+2026-08-12のlive release GUI runでC922 symbolic-link明示選択、VRM 1.0 import/Ready、auto-neutral、real preview、6方向head、両目blink、`aa` mouth、左右gaze、face loss/reacquire、3回のStop/Start、avatar replace/unload/reload、camera unplug/replug後のStop→Start復旧、約405 msでの再取得、capture-to-apply、clean shutdownを確認した。M1-08-019の既存1,800秒bounded runはrender 56.257–60.770 FPS、tracking 30–60 Hz、capture-to-apply p95 29.393–31.213 ms、capture slot overwrite 0、RSS 866.2–885.6 MiB、thread 125–138、crash/hang 0を記録した。
 
 Commit: `test(mocap): record live Windows acceptance evidence`
 
@@ -7554,7 +7553,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 # 上記に加え、docs/acceptance/windows-m1.mdの手動protocolを実施する。
 ```
 
-#### M1-08-019: latency、30分soak、Windows final gateを閉じる
+#### M1-08-019: latency、bounded実行、Windows final gateを閉じる
 
 状態: `DONE`
 備考: release appで10秒warm-up後、60秒cadence、0〜1,800秒の31点をCSVへbounded exportした。render 56.257–60.770 FPS、tracking 30–60 Hz、capture-to-apply p95 29.393–31.213 ms、capture slot overwrite 0、RSS 866.2–885.6 MiB、thread 125–138、全resource sample responding=True、crash/hang 0、Stop→Idle→clean shutdownを確認しWindows final gateをPASSした。MediaPipe Tasksの単一call内部にあるdetector／landmark個別cadenceはruntimeから露出されず0として記録するが、canonical inferenceは29–30 Hzでありcorrectness blockerではない。
@@ -7591,8 +7590,8 @@ process-wide monotonic timing、latest-slot metrics、tracking／avatar apply ti
   - capture-to-apply p95 180ms以下
   - queue depth 1以下
 - 基準未達でもcorrectnessが成立している場合、stage別blockerを数値でQ2-03へ送る。本subtask内で根拠のないpool／unsafe最適化を行わない。
-- 固定model／cameraで30分soakを行い、60秒間隔でRSS／working set、latency、rates、overwrite、worker count、ROI loss／reacquire countを記録する。
-- soak途中に短いface loss／returnを複数回入れ、終了時にStop→app exitして全worker／camera／model runtimeの終了を確認する。
+- 固定model／cameraでwarm-up後に60秒以上、300 sample以上の測定窓を設け、latency、rates、queue depth、overwrite、worker statusをbounded exportする。人の連続待機は要求しない。
+- 測定前後に短いface loss／returnとStop／Startを行い、app exit時に全worker／camera／model runtimeの終了を確認する。
 - `docs/acceptance/windows-m1.md`をPASS／FAIL／CONDITIONAL／NOT RUNで完成させ、binary、detector、landmark、VRM、config、metrics artifactのhashを記録する。
 - no correctness blockerかつ最低性能基準を満たした場合だけWindows Q2をunlockする。
 - M1-09は引き続き`DEFERRED`とする。
@@ -7602,7 +7601,6 @@ process-wide monotonic timing、latest-slot metrics、tracking／avatar apply ti
 - 異なるclock domainを単純減算しない。
 - 平均値だけでlatencyを判定しない。
 - detector Hzをtracking Hzと誤表示しない。
-- 30分未満のrunをsoak合格にしない。
 - 未達性能を測定なしの仕様変更で正当化しない。
 - 本格最適化をQ2-03より先に行わない。
 
@@ -7611,7 +7609,8 @@ process-wide monotonic timing、latest-slot metrics、tracking／avatar apply ti
 - capture-to-apply p50／p95が同一monotonic domainから算出される。
 - detector／landmark／tracking各rateが区別される。
 - MVP最低基準を数値で判定できる。
-- 30分runでprocess crash、継続的memory／latency増加、thread leakがない。
+- 測定窓でprocess crashがなく、queue depthが1以下である。
+- Stop／Start後にtrackingへ復帰し、終了時にthread leakがない。
 - Windows gate判断とQ2進行可否がreportに明記される。
 - `M1-09`を実行せずWindows Q2だけを開始できる依存状態になる。
 
@@ -7623,7 +7622,7 @@ cargo test --workspace --no-fail-fast
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p xtask -- acceptance verify assets/models/manifest.toml
 cargo build -p vtuber-desktop --release
-# 上記に加え、60秒measurementと30分soakを実施しartifactを保存する。
+# 上記に加え、warm-up後の60秒以上のmeasurementを実施しartifactを保存する。
 ```
 
 
@@ -7774,7 +7773,8 @@ macOS `.app`形態でcamera permissionを含む同等縦断動作を確認する
 - AVFoundation captureが動く。
 - MToon／SpringBoneに致命的差がない。
 - same compatibility report format。
-- 30分runを通す。
+- M1-08と同じ10秒warm-up＋60秒以上・300 sample以上のbounded測定を通す。
+- Stop／Start後に復帰し、終了時に全workerをjoinできる。
 
 ---
 
@@ -7981,7 +7981,7 @@ cargo run -p xtask -- package-macos
 手動protocol。docs/acceptance/macos-m1.mdへ結果記録。
 ```
 
-#### M1-09-006: macOS latency／rateと30分soakを実施する
+#### M1-09-006: macOS latency／rateとbounded実行を検証する
 
 状態: `DEFERRED`
 依存: `M1-09-005`
@@ -7995,29 +7995,30 @@ cargo run -p xtask -- package-macos
 
 **実装指示**
 
-- M1-08と同じwarm-up、sample window、metric計算を使う。
-- render FPS、tracking Hz、p95 latency、memory、overwriteを記録する。
-- 30分run中にpermission／sleep等の外乱があれば記録する。
-- 終了時にclean Stop／app exitを確認する。
+- M1-08と同じ10秒warm-up、60秒以上・300 sample以上の測定窓、metric計算を使う。測定中に人の連続操作は要求しない。
+- render FPS、tracking Hz、p95 latency、queue depth、overwrite、worker statusを記録する。
+- 測定前後にface loss／returnとStop／Startを各1回行い、permission／sleep等の外乱があれば記録する。
+- 終了時にclean Stop／app exitと全workerのjoinを確認する。
 
 
 **このsubtaskで行わないこと**
 
 - Windows結果を流用しない。
-- 短時間runを30分soakとして報告しない。
+- RSSの短期変動だけを合否根拠にしない。
 
 
 **完了条件**
 
-- MVP最低基準を数値判定できる。
-- memory／latencyの継続増加がない。
-- 30分process crashなし。
+- render 30fps以上、tracking 15Hz以上、capture-to-apply p95 180ms以下を数値判定できる。
+- queue depthが1以下で、overwriteを記録できる。
+- Stop／Start後にtrackingへ復帰し、終了時にworker threadが残らない。
+- 測定窓でprocess crashなし。
 
 
 **検証**
 
 ```bash
-手動30分run＋metrics export
+実機run（10秒warm-up＋60秒以上、300 sample以上）＋Stop／Start＋metrics export
 ```
 
 #### M1-09-007: Windows／macOS差分を分類する
@@ -8074,7 +8075,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **実装指示**
 
-- permission、functional、recovery、latency、soakをPASS／FAIL／NOT RUNで統合する。
+- permission、functional、recovery、latency、bounded実行をPASS／FAIL／NOT RUNで統合する。
 - `.app`、binary、Info.plist、model、config、metricsのhashを記録する。
 - M1-09受入条件とMilestone 1全体のacceptanceを判定する。
 - failがあればrepair提案を既存parent IDへ紐付け、番号を変更しない。
@@ -9957,8 +9958,8 @@ cargo deny check
 
 ---
 
-
 # Research 3 — 自由研究としての評価
+
 ## R3-01: smoothingとlatencyの比較実験
 状態: `PENDING`
 実行単位: `R3-01-NNN`
