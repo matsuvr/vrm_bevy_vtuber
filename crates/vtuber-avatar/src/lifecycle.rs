@@ -531,7 +531,9 @@ mod tests {
     use super::*;
     use crate::LookDirectionSet;
     use crate::PendingAvatarLoad;
-    use crate::capabilities::{BlinkMode, BonePresence, GazeMode, MouthMode};
+    use crate::capabilities::{
+        BlinkMode, BonePresence, DeclaredLookAtType, MouthMode, SelectedGazeBackend,
+    };
     use crate::load::{
         AvatarAssetId, AvatarLoadRequestId, ImportedAvatar, LoadImportedAvatarRequest,
         LoadImportedAvatarResult, UserAssetPath, handle_load_imported_avatar_requests,
@@ -687,7 +689,9 @@ mod tests {
             },
             blink: BlinkMode::PerEye,
             mouth: MouthMode::Full,
-            gaze: GazeMode::ExpressionAndEyeBones,
+            declared_look_at: DeclaredLookAtType::Expression,
+            gaze_backend: SelectedGazeBackend::Expression,
+            gaze_fallback: None,
             look_directions: LookDirectionSet::default(),
             spring_bone: true,
             unknown_expressions: vec![],

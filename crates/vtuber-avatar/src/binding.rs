@@ -12,7 +12,11 @@ use bevy_vrm1::prelude::*;
 use std::time::{Duration, Instant};
 
 use crate::bind::BindTriggered;
-use crate::capabilities::{AvatarCapabilities, BonePresence, ExpressionCapabilities};
+use crate::capabilities::{
+    AvatarCapabilities, BonePresence, DeclaredLookAtType, ExpressionCapabilities,
+    SelectedGazeBackend,
+};
+use crate::gaze::fallback_look_at_properties;
 use crate::lifecycle::{
     ActiveAvatar, AvatarGeneration, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
 };
@@ -192,6 +196,7 @@ pub fn bind_humanoid_bones(
             Option<&SpineBoneEntity>,
             Option<&LeftEyeBoneEntity>,
             Option<&RightEyeBoneEntity>,
+            Option<&LookAtProperties>,
         ),
         (With<ActiveAvatar>, With<BindTriggered>),
     >,
@@ -228,7 +233,17 @@ pub fn bind_humanoid_bones(
         }
     };
 
-    let (root_entity, head, neck, upper_chest, chest, spine, left_eye, right_eye) = root_data;
+    let (
+        root_entity,
+        head,
+        neck,
+        upper_chest,
+        chest,
+        spine,
+        left_eye,
+        right_eye,
+        look_at_properties,
+    ) = root_data;
 
     let deadline = match deadlines.get(root_entity) {
         Ok(BindingDeadline(deadline)) => *deadline,
@@ -274,10 +289,18 @@ pub fn bind_humanoid_bones(
                 chest: binding.chest.is_some(),
                 spine: binding.spine.is_some(),
             };
-            let capabilities = AvatarCapabilities::from_bones_and_expression_capabilities(
+            let declared_look_at =
+                look_at_properties.map_or(DeclaredLookAtType::Missing, |value| {
+                    match value.r#type {
+                        LookAtType::Bone => DeclaredLookAtType::Bone,
+                        LookAtType::Expression => DeclaredLookAtType::Expression,
+                    }
+                });
+            let capabilities = AvatarCapabilities::from_model_capabilities(
                 bones,
                 &expression_caps,
                 has_spring_bone,
+                declared_look_at,
             );
 
             commands.entity(root_entity).insert((
@@ -287,6 +310,19 @@ pub fn bind_humanoid_bones(
                 BodyTrackingProfile::default(),
                 Visibility::Inherited,
             ));
+            if capabilities.gaze_backend != SelectedGazeBackend::None {
+                let mut effective_properties = look_at_properties
+                    .cloned()
+                    .unwrap_or_else(|| fallback_look_at_properties(capabilities.gaze_backend));
+                effective_properties.r#type = match capabilities.gaze_backend {
+                    SelectedGazeBackend::Bone => LookAtType::Bone,
+                    SelectedGazeBackend::Expression => LookAtType::Expression,
+                    SelectedGazeBackend::None => effective_properties.r#type,
+                };
+                commands
+                    .entity(root_entity)
+                    .insert((effective_properties, DirectLookAtInput::default()));
+            }
             commands.entity(root_entity).remove::<BindingDeadline>();
             lifecycle.set_capabilities(Some(capabilities));
             lifecycle.finish_ready();

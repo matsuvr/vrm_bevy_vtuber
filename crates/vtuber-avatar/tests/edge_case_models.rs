@@ -17,7 +17,7 @@ use bevy_vrm1::prelude::*;
 
 use vtuber_avatar::bind::BindTriggered;
 use vtuber_avatar::binding::{AvatarBinding, bind_humanoid_bones};
-use vtuber_avatar::capabilities::{BlinkMode, GazeMode, MouthMode};
+use vtuber_avatar::capabilities::{BlinkMode, MouthMode, SelectedGazeBackend};
 use vtuber_avatar::lifecycle::{
     ActiveAvatar, AvatarLifecycle, AvatarLifecycleState, LoadAvatarRequest, LoadAvatarResult,
     ReplaceAvatarRequest, ReplaceAvatarResult, UnloadAvatarRequest, UnloadAvatarResult,
@@ -293,7 +293,7 @@ fn no_eye_bones_model_binds_with_degraded_gaze() {
     assert!(!caps.bones.right_eye);
 
     // Without eye bones and without look-direction expressions, gaze is None.
-    assert_eq!(caps.gaze, GazeMode::None);
+    assert_eq!(caps.gaze_backend, SelectedGazeBackend::None);
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +337,7 @@ fn minimal_capable_model_head_and_blink() {
     assert!(!caps.bones.right_eye);
     assert_eq!(caps.blink, BlinkMode::None);
     assert_eq!(caps.mouth, MouthMode::None);
-    assert_eq!(caps.gaze, GazeMode::None);
+    assert_eq!(caps.gaze_backend, SelectedGazeBackend::None);
     assert!(!caps.spring_bone);
     assert!(!caps.is_fully_supported());
     assert!(caps.summary().contains("Bones: head"));
@@ -412,5 +412,5 @@ fn full_featured_model_all_bones_and_expressions() {
     assert!(caps.bones.upper_chest);
     assert!(caps.bones.chest);
     assert!(caps.bones.spine);
-    assert_eq!(caps.gaze, GazeMode::EyeBones);
+    assert_eq!(caps.gaze_backend, SelectedGazeBackend::Bone);
 }

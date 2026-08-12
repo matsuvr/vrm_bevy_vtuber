@@ -13,7 +13,7 @@ use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
 use crate::expression::apply_tracked_expressions;
 use crate::framing::{AvatarViewportCamera, frame_avatar_camera};
-use crate::gaze::apply_tracked_eye_gaze;
+use crate::gaze::update_direct_look_at_input;
 use crate::lifecycle::{
     AvatarLifecycle, LoadAvatarRequest, LoadAvatarResult, ReplaceAvatarRequest,
     ReplaceAvatarResult, UnloadAvatarRequest, UnloadAvatarResult, apply_avatar_request_events,
@@ -75,9 +75,9 @@ impl Plugin for VtuberAvatarPlugin {
             )
             .add_systems(
                 PostUpdate,
-                apply_tracked_eye_gaze
-                    .after(VrmSystemSets::PropagateAfterConstraints)
-                    .before(VrmSystemSets::Expressions),
+                update_direct_look_at_input
+                    .after(apply_direct_body_tracking)
+                    .before(VrmSystemSets::GazeControl),
             )
             .add_systems(
                 PostUpdate,

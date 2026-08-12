@@ -7,13 +7,15 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy_vrm1::prelude::{ExpressionEntityMap, ModifyExpressions, VrmExpression};
+use bevy_vrm1::prelude::{
+    ExpressionEntityMap, LookAtExpressionWeights, ModifyExpressions, VrmExpression,
+};
 
+use crate::capabilities::SelectedGazeBackend;
 use crate::expression::blink::{RawBlinkInput, map_blink_with_fallback};
 use crate::expression::command::ExpressionCommand;
 use crate::expression::command::build_frame_commands;
 use crate::expression::mouth::{RawMouthInput, map_mouth_with_fallback};
-use crate::gaze::expression::{RawGazeInput, map_gaze_to_expressions};
 use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
 use crate::unload::ActiveControlFrame;
 
@@ -166,7 +168,7 @@ pub fn apply_tracked_expressions(
     mut commands: Commands,
     lifecycle: Res<AvatarLifecycle>,
     control_frame: Res<ActiveControlFrame>,
-    expression_maps: Query<&ExpressionEntityMap>,
+    expression_maps: Query<(&ExpressionEntityMap, Option<&LookAtExpressionWeights>)>,
     mut tracker: Local<ExpressionStateTracker>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Ready {
@@ -180,7 +182,7 @@ pub fn apply_tracked_expressions(
     let Some(frame) = control_frame.frame.as_ref() else {
         return;
     };
-    let Ok(expression_map) = expression_maps.get(root) else {
+    let Ok((expression_map, look_at_weights)) = expression_maps.get(root) else {
         tracker.force_reset();
         return;
     };
@@ -210,20 +212,7 @@ pub fn apply_tracked_expressions(
         },
         capabilities.mouth,
     );
-    let gaze = frame
-        .gaze
-        .is_available()
-        .then(|| {
-            map_gaze_to_expressions(
-                &RawGazeInput {
-                    yaw_rad: frame.gaze.horizontal,
-                    pitch_rad: frame.gaze.vertical,
-                },
-                &capabilities.look_directions,
-                &Default::default(),
-            )
-        })
-        .unwrap_or_default();
+    let gaze = look_at_expression_commands(capabilities.gaze_backend, look_at_weights.copied());
     let built = build_frame_commands(frame, capabilities, &blink, &mouth, &gaze);
     let available = built.into_iter().filter(|command| {
         expression_map
@@ -241,6 +230,22 @@ pub fn apply_tracked_expressions(
             .into_iter()
             .map(|command| (VrmExpression::from(command.name.as_str()), command.weight)),
     ));
+}
+
+fn look_at_expression_commands(
+    backend: SelectedGazeBackend,
+    weights: Option<LookAtExpressionWeights>,
+) -> Vec<(String, f32)> {
+    if backend != SelectedGazeBackend::Expression {
+        return Vec::new();
+    }
+    let weights = weights.unwrap_or_default();
+    vec![
+        ("lookLeft".to_owned(), weights.look_left),
+        ("lookRight".to_owned(), weights.look_right),
+        ("lookUp".to_owned(), weights.look_up),
+        ("lookDown".to_owned(), weights.look_down),
+    ]
 }
 
 #[cfg(test)]
@@ -368,5 +373,41 @@ mod tests {
         // The result is a single Vec, not multiple.
         let output = result.unwrap();
         assert_eq!(output.len(), 2);
+    }
+
+    #[test]
+    fn expression_backend_forwards_only_vrm_look_at_weights() {
+        let commands = look_at_expression_commands(
+            SelectedGazeBackend::Expression,
+            Some(LookAtExpressionWeights {
+                look_left: 0.7,
+                look_right: 0.0,
+                look_up: 0.2,
+                look_down: 0.0,
+            }),
+        );
+        assert_eq!(commands.len(), 4);
+        assert!(
+            commands
+                .iter()
+                .any(|(name, weight)| name == "lookLeft" && *weight == 0.7)
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|(name, weight)| name == "lookUp" && *weight == 0.2)
+        );
+    }
+
+    #[test]
+    fn bone_backend_never_emits_gaze_expressions() {
+        let commands = look_at_expression_commands(
+            SelectedGazeBackend::Bone,
+            Some(LookAtExpressionWeights {
+                look_left: 1.0,
+                ..LookAtExpressionWeights::default()
+            }),
+        );
+        assert!(commands.is_empty());
     }
 }

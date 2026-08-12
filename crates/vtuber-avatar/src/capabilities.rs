@@ -63,6 +63,12 @@ impl LookDirectionSet {
     pub const fn any(&self) -> bool {
         self.left || self.right || self.up || self.down
     }
+
+    /// Returns `true` when all four standard LookAt expressions are present.
+    #[must_use]
+    pub const fn complete(&self) -> bool {
+        self.left && self.right && self.up && self.down
+    }
 }
 
 /// Which emotion expressions the model exposes.
@@ -107,18 +113,39 @@ pub struct BonePresence {
     pub spine: bool,
 }
 
-/// Engine-neutral gaze control strategy for a model.
+/// Model-authored VRM LookAt backend declaration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum GazeMode {
+pub enum DeclaredLookAtType {
+    /// Bone LookAt was declared.
+    Bone,
+    /// Expression LookAt was declared.
+    Expression,
+    /// The model has no LookAt metadata.
+    #[default]
+    Missing,
+}
+
+/// Single gaze backend selected for runtime application.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SelectedGazeBackend {
     /// No gaze control is available.
     #[default]
     None,
-    /// Look-direction expressions are available.
+    /// Apply VRM range maps to eye bones.
+    Bone,
+    /// Apply VRM range maps to look-direction expressions.
     Expression,
-    /// Left and right eye bones are available for direct rotation.
-    EyeBones,
-    /// Both look-direction expressions and eye bones are available.
-    ExpressionAndEyeBones,
+}
+
+/// Why the selected backend differs from complete model metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GazeFallbackReason {
+    /// The model did not declare LookAt metadata.
+    MetadataMissing,
+    /// The declared backend was unavailable and an alternate was selected.
+    DeclaredBackendUnavailable,
+    /// Only a partial set of look-direction expressions exists.
+    PartialExpressions,
 }
 
 /// Discovered expression capabilities for a single VRM model.
@@ -210,8 +237,12 @@ pub struct AvatarCapabilities {
     pub blink: BlinkMode,
     /// Available mouth mode.
     pub mouth: MouthMode,
-    /// Resolved gaze control strategy.
-    pub gaze: GazeMode,
+    /// Model-authored LookAt declaration, if any.
+    pub declared_look_at: DeclaredLookAtType,
+    /// Exclusively selected gaze backend.
+    pub gaze_backend: SelectedGazeBackend,
+    /// Diagnostic fallback reason, if fallback was required.
+    pub gaze_fallback: Option<GazeFallbackReason>,
     /// Available look-direction expression candidates.
     pub look_directions: LookDirectionSet,
     /// Whether the model has SpringBone chains.
@@ -227,16 +258,37 @@ impl AvatarCapabilities {
     /// `has_spring_bone` is supplied by the caller because detecting it
     /// requires a scene traversal that is specific to the binding system.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn from_bones_and_expression_capabilities(
         bones: BonePresence,
         expressions: &ExpressionCapabilities,
         has_spring_bone: bool,
     ) -> Self {
+        Self::from_model_capabilities(
+            bones,
+            expressions,
+            has_spring_bone,
+            DeclaredLookAtType::Missing,
+        )
+    }
+
+    /// Builds capabilities while respecting the model-authored LookAt type.
+    #[must_use]
+    pub(crate) fn from_model_capabilities(
+        bones: BonePresence,
+        expressions: &ExpressionCapabilities,
+        has_spring_bone: bool,
+        declared_look_at: DeclaredLookAtType,
+    ) -> Self {
+        let (gaze_backend, gaze_fallback) =
+            select_gaze_backend(declared_look_at, &expressions.look, &bones);
         Self {
             bones,
             blink: expressions.blink,
             mouth: expressions.mouth,
-            gaze: determine_gaze_mode(&expressions.look, &bones),
+            declared_look_at,
+            gaze_backend,
+            gaze_fallback,
             look_directions: expressions.look,
             spring_bone: has_spring_bone,
             unknown_expressions: expressions.unknown.clone(),
@@ -256,7 +308,7 @@ impl AvatarCapabilities {
         self.bones.head
             && self.has_blink()
             && self.mouth != MouthMode::None
-            && self.gaze != GazeMode::None
+            && self.gaze_backend != SelectedGazeBackend::None
     }
 
     /// Human-readable summary for UI display.
@@ -289,11 +341,10 @@ impl AvatarCapabilities {
 
         parts.push(format!(
             "Gaze: {}",
-            match self.gaze {
-                GazeMode::None => "none",
-                GazeMode::Expression => "expression",
-                GazeMode::EyeBones => "eye bones",
-                GazeMode::ExpressionAndEyeBones => "expression + eye bones",
+            match self.gaze_backend {
+                SelectedGazeBackend::None => "none",
+                SelectedGazeBackend::Expression => "expression",
+                SelectedGazeBackend::Bone => "eye bones",
             }
         ));
 
@@ -354,14 +405,53 @@ impl AvatarCapabilities {
     }
 }
 
-fn determine_gaze_mode(look: &LookDirectionSet, bones: &BonePresence) -> GazeMode {
+/// Selects one runtime backend from model metadata and available capabilities.
+#[must_use]
+pub fn select_gaze_backend(
+    declared: DeclaredLookAtType,
+    look: &LookDirectionSet,
+    bones: &BonePresence,
+) -> (SelectedGazeBackend, Option<GazeFallbackReason>) {
     let has_expression = look.any();
+    let complete_expression = look.complete();
     let has_eyes = bones.left_eye && bones.right_eye;
-    match (has_expression, has_eyes) {
-        (true, true) => GazeMode::ExpressionAndEyeBones,
-        (true, false) => GazeMode::Expression,
-        (false, true) => GazeMode::EyeBones,
-        (false, false) => GazeMode::None,
+    match declared {
+        DeclaredLookAtType::Bone if has_eyes => (SelectedGazeBackend::Bone, None),
+        DeclaredLookAtType::Expression if has_expression => {
+            let fallback = (!complete_expression).then_some(GazeFallbackReason::PartialExpressions);
+            (SelectedGazeBackend::Expression, fallback)
+        }
+        DeclaredLookAtType::Bone | DeclaredLookAtType::Expression => {
+            let alternate = if complete_expression {
+                SelectedGazeBackend::Expression
+            } else if has_eyes {
+                SelectedGazeBackend::Bone
+            } else if has_expression {
+                SelectedGazeBackend::Expression
+            } else {
+                SelectedGazeBackend::None
+            };
+            (
+                alternate,
+                Some(GazeFallbackReason::DeclaredBackendUnavailable),
+            )
+        }
+        DeclaredLookAtType::Missing if complete_expression => (
+            SelectedGazeBackend::Expression,
+            Some(GazeFallbackReason::MetadataMissing),
+        ),
+        DeclaredLookAtType::Missing if has_eyes => (
+            SelectedGazeBackend::Bone,
+            Some(GazeFallbackReason::MetadataMissing),
+        ),
+        DeclaredLookAtType::Missing if has_expression => (
+            SelectedGazeBackend::Expression,
+            Some(GazeFallbackReason::PartialExpressions),
+        ),
+        DeclaredLookAtType::Missing => (
+            SelectedGazeBackend::None,
+            Some(GazeFallbackReason::MetadataMissing),
+        ),
     }
 }
 
@@ -514,7 +604,7 @@ mod tests {
         assert!(!caps.bones.right_eye);
         assert_eq!(caps.blink, BlinkMode::None);
         assert_eq!(caps.mouth, MouthMode::None);
-        assert_eq!(caps.gaze, GazeMode::None);
+        assert_eq!(caps.gaze_backend, SelectedGazeBackend::None);
         assert!(!caps.spring_bone);
         assert!(caps.unknown_expressions.is_empty());
         assert!(!caps.is_fully_supported());
@@ -555,7 +645,7 @@ mod tests {
         assert!(!caps.bones.chest);
         assert_eq!(caps.blink, BlinkMode::PerEye);
         assert_eq!(caps.mouth, MouthMode::Full);
-        assert_eq!(caps.gaze, GazeMode::ExpressionAndEyeBones);
+        assert_eq!(caps.gaze_backend, SelectedGazeBackend::Expression);
         assert!(caps.look_directions.left);
         assert!(caps.spring_bone);
         assert!(caps.is_fully_supported());
@@ -597,7 +687,7 @@ mod tests {
         assert!(summary.contains("Bones: head, neck, eyes"));
         assert!(summary.contains("Blink: per-eye"));
         assert!(summary.contains("Mouth: aa only"));
-        assert!(summary.contains("Gaze: expression"));
+        assert!(summary.contains("Gaze: eye bones"));
         assert!(summary.contains("SpringBone: yes"));
     }
 
@@ -613,8 +703,8 @@ mod tests {
                 &no_look,
                 false
             )
-            .gaze,
-            GazeMode::None
+            .gaze_backend,
+            SelectedGazeBackend::None
         );
 
         let look = LookDirectionSet {
@@ -634,8 +724,8 @@ mod tests {
                 &expr_caps,
                 false
             )
-            .gaze,
-            GazeMode::Expression
+            .gaze_backend,
+            SelectedGazeBackend::Expression
         );
 
         let bones = BonePresence {
@@ -646,14 +736,114 @@ mod tests {
         };
         assert_eq!(
             AvatarCapabilities::from_bones_and_expression_capabilities(bones, &expr_caps, false)
-                .gaze,
-            GazeMode::ExpressionAndEyeBones
+                .gaze_backend,
+            SelectedGazeBackend::Bone
         );
 
         let no_look = ExpressionCapabilities::default();
         assert_eq!(
-            AvatarCapabilities::from_bones_and_expression_capabilities(bones, &no_look, false).gaze,
-            GazeMode::EyeBones
+            AvatarCapabilities::from_bones_and_expression_capabilities(bones, &no_look, false)
+                .gaze_backend,
+            SelectedGazeBackend::Bone
+        );
+    }
+
+    #[test]
+    fn declared_backend_is_exclusive_when_available() {
+        let look = LookDirectionSet {
+            left: true,
+            right: true,
+            up: true,
+            down: true,
+        };
+        let bones = BonePresence {
+            left_eye: true,
+            right_eye: true,
+            ..BonePresence::default()
+        };
+        assert_eq!(
+            select_gaze_backend(DeclaredLookAtType::Bone, &look, &bones),
+            (SelectedGazeBackend::Bone, None)
+        );
+        assert_eq!(
+            select_gaze_backend(DeclaredLookAtType::Expression, &look, &bones),
+            (SelectedGazeBackend::Expression, None)
+        );
+    }
+
+    #[test]
+    fn broken_declared_backend_uses_one_diagnosed_alternate() {
+        let complete_look = LookDirectionSet {
+            left: true,
+            right: true,
+            up: true,
+            down: true,
+        };
+        let no_eyes = BonePresence::default();
+        assert_eq!(
+            select_gaze_backend(DeclaredLookAtType::Bone, &complete_look, &no_eyes),
+            (
+                SelectedGazeBackend::Expression,
+                Some(GazeFallbackReason::DeclaredBackendUnavailable)
+            )
+        );
+
+        let eyes = BonePresence {
+            left_eye: true,
+            right_eye: true,
+            ..BonePresence::default()
+        };
+        assert_eq!(
+            select_gaze_backend(
+                DeclaredLookAtType::Expression,
+                &LookDirectionSet::default(),
+                &eyes
+            ),
+            (
+                SelectedGazeBackend::Bone,
+                Some(GazeFallbackReason::DeclaredBackendUnavailable)
+            )
+        );
+    }
+
+    #[test]
+    fn one_eye_is_not_a_bone_backend() {
+        let one_eye = BonePresence {
+            left_eye: true,
+            right_eye: false,
+            ..BonePresence::default()
+        };
+        let selected = select_gaze_backend(
+            DeclaredLookAtType::Bone,
+            &LookDirectionSet::default(),
+            &one_eye,
+        );
+        assert_eq!(selected.0, SelectedGazeBackend::None);
+        assert_eq!(
+            selected.1,
+            Some(GazeFallbackReason::DeclaredBackendUnavailable)
+        );
+    }
+
+    #[test]
+    fn missing_metadata_uses_documented_preference_and_diagnostic() {
+        let look = LookDirectionSet {
+            left: true,
+            right: true,
+            up: true,
+            down: true,
+        };
+        let eyes = BonePresence {
+            left_eye: true,
+            right_eye: true,
+            ..BonePresence::default()
+        };
+        assert_eq!(
+            select_gaze_backend(DeclaredLookAtType::Missing, &look, &eyes),
+            (
+                SelectedGazeBackend::Expression,
+                Some(GazeFallbackReason::MetadataMissing)
+            )
         );
     }
 }

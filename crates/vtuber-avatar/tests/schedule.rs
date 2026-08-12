@@ -37,7 +37,9 @@ fn avatar_schedule_has_no_synthetic_look_at_api() {
 /// 7. VrmSystemSets::SpringBone (PostUpdate, bevy_vrm1 internal)
 #[test]
 fn avatar_schedule_ordering_matches_design() {
+    use bevy::app::AnimationSystems;
     use bevy::ecs::schedule::IntoScheduleConfigs;
+    use bevy::prelude::*;
     use bevy_vrm1::prelude::VrmSystemSets;
     use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
 
@@ -45,6 +47,74 @@ fn avatar_schedule_ordering_matches_design() {
     // constraints boundary remain valid Bevy system configuration points.
     let _ = vtuber_avatar::bind_humanoid_bones;
     let _direct_before_constraints = apply_direct_body_tracking.before(VrmSystemSets::Constraints);
+
+    #[derive(Resource, Default)]
+    struct Order(Vec<&'static str>);
+    fn body(mut order: ResMut<Order>) {
+        order.0.push("body");
+    }
+    fn gaze(mut order: ResMut<Order>) {
+        order.0.push("gaze");
+    }
+    fn adapter_expression(mut order: ResMut<Order>) {
+        order.0.push("adapter-expression");
+    }
+    fn expressions(mut order: ResMut<Order>) {
+        order.0.push("expressions");
+    }
+    fn propagation(mut order: ResMut<Order>) {
+        order.0.push("propagation");
+    }
+    fn constraints(mut order: ResMut<Order>) {
+        order.0.push("constraints");
+    }
+    fn spring(mut order: ResMut<Order>) {
+        order.0.push("spring");
+    }
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins).init_resource::<Order>();
+    app.configure_sets(
+        PostUpdate,
+        (
+            VrmSystemSets::GazeControl,
+            VrmSystemSets::Expressions,
+            VrmSystemSets::PropagateAfterExpressions,
+            VrmSystemSets::Constraints,
+            VrmSystemSets::PropagateAfterConstraints,
+            VrmSystemSets::SpringBone,
+        )
+            .chain()
+            .after(AnimationSystems),
+    );
+    app.add_systems(
+        PostUpdate,
+        (
+            body.after(AnimationSystems)
+                .before(VrmSystemSets::GazeControl),
+            gaze.in_set(VrmSystemSets::GazeControl),
+            adapter_expression
+                .after(VrmSystemSets::GazeControl)
+                .before(VrmSystemSets::Expressions),
+            expressions.in_set(VrmSystemSets::Expressions),
+            propagation.in_set(VrmSystemSets::PropagateAfterExpressions),
+            constraints.in_set(VrmSystemSets::Constraints),
+            spring.in_set(VrmSystemSets::SpringBone),
+        ),
+    );
+    app.update();
+    assert_eq!(
+        app.world().resource::<Order>().0,
+        [
+            "body",
+            "gaze",
+            "adapter-expression",
+            "expressions",
+            "propagation",
+            "constraints",
+            "spring"
+        ]
+    );
 }
 
 /// Verify that the lifecycle types are properly exported for schedule integration.

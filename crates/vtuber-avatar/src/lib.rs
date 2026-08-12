@@ -23,8 +23,9 @@ pub mod unload;
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};
 pub use capabilities::{
-    AvatarCapabilities, BlinkMode, BonePresence, EmotionSet, ExpressionCapabilities, GazeMode,
-    LookDirectionSet, MouthMode,
+    AvatarCapabilities, BlinkMode, BonePresence, DeclaredLookAtType, EmotionSet,
+    ExpressionCapabilities, GazeFallbackReason, LookDirectionSet, MouthMode, SelectedGazeBackend,
+    select_gaze_backend,
 };
 pub use lifecycle::*;
 pub use load::{

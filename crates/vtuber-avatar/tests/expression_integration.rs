@@ -1,21 +1,19 @@
-//! Comprehensive blink/mouth/gaze integration tests.
+//! Comprehensive blink/mouth/gaze capability integration tests.
 //!
 //! Exercises the full expression pipeline:
 //! - Per-eye blink, blink-only, no-blink
 //! - Full mouth, aa-only, no-mouth
-//! - Expression gaze, eye-bone gaze, no-gaze
+//! - Exclusive expression gaze, eye-bone gaze, no-gaze selection
 //! - Coalescing, epsilon, zero-reset, generation-reset
 //! - Missing capabilities don't panic
 
 use vtuber_avatar::capabilities::{
-    AvatarCapabilities, BlinkMode, BonePresence, GazeMode, LookDirectionSet, MouthMode,
+    AvatarCapabilities, BlinkMode, BonePresence, DeclaredLookAtType, GazeFallbackReason,
+    LookDirectionSet, MouthMode, SelectedGazeBackend, select_gaze_backend,
 };
 use vtuber_avatar::expression::{
     ExpressionCommand, ExpressionCommandBuilder, ExpressionStateTracker, RawBlinkInput,
     RawMouthInput, map_blink_to_expressions, map_blink_with_fallback, map_mouth_with_fallback,
-};
-use vtuber_avatar::gaze::{
-    GazeExpressionSettings, RawGazeInput, map_gaze_to_expressions, select_gaze_mode,
 };
 
 // ---------------------------------------------------------------------------
@@ -35,7 +33,9 @@ fn full_caps() -> AvatarCapabilities {
         },
         blink: BlinkMode::PerEye,
         mouth: MouthMode::Full,
-        gaze: GazeMode::ExpressionAndEyeBones,
+        declared_look_at: DeclaredLookAtType::Expression,
+        gaze_backend: SelectedGazeBackend::Expression,
+        gaze_fallback: None,
         look_directions: LookDirectionSet {
             left: true,
             right: true,
@@ -51,7 +51,9 @@ fn blink_only_caps() -> AvatarCapabilities {
     AvatarCapabilities {
         blink: BlinkMode::Combined,
         mouth: MouthMode::None,
-        gaze: GazeMode::None,
+        declared_look_at: DeclaredLookAtType::Missing,
+        gaze_backend: SelectedGazeBackend::None,
+        gaze_fallback: Some(GazeFallbackReason::MetadataMissing),
         look_directions: LookDirectionSet::default(),
         ..full_caps()
     }
@@ -61,7 +63,9 @@ fn aa_only_caps() -> AvatarCapabilities {
     AvatarCapabilities {
         blink: BlinkMode::None,
         mouth: MouthMode::AaOnly,
-        gaze: GazeMode::None,
+        declared_look_at: DeclaredLookAtType::Missing,
+        gaze_backend: SelectedGazeBackend::None,
+        gaze_fallback: Some(GazeFallbackReason::MetadataMissing),
         look_directions: LookDirectionSet::default(),
         ..full_caps()
     }
@@ -76,7 +80,9 @@ fn no_mouth_caps() -> AvatarCapabilities {
 
 fn no_gaze_caps() -> AvatarCapabilities {
     AvatarCapabilities {
-        gaze: GazeMode::None,
+        declared_look_at: DeclaredLookAtType::Missing,
+        gaze_backend: SelectedGazeBackend::None,
+        gaze_fallback: Some(GazeFallbackReason::MetadataMissing),
         look_directions: LookDirectionSet::default(),
         bones: BonePresence {
             left_eye: false,
@@ -208,22 +214,8 @@ fn expression_integration_no_mouth_no_panic() {
 #[test]
 fn expression_integration_expression_gaze() {
     let caps = full_caps();
-    let selection = select_gaze_mode(&caps, false);
-    assert_eq!(selection.mode, GazeMode::ExpressionAndEyeBones);
-
-    let gaze_input = RawGazeInput {
-        yaw_rad: 0.3,
-        pitch_rad: 0.1,
-    };
-    let gaze_cmds = map_gaze_to_expressions(
-        &gaze_input,
-        &caps.look_directions,
-        &GazeExpressionSettings::default(),
-    );
-
-    assert!(!gaze_cmds.is_empty());
-    assert!(gaze_cmds.iter().any(|(n, _)| n == "lookRight"));
-    assert!(gaze_cmds.iter().any(|(n, _)| n == "lookUp"));
+    let selection = select_gaze_backend(caps.declared_look_at, &caps.look_directions, &caps.bones);
+    assert_eq!(selection, (SelectedGazeBackend::Expression, None));
 }
 
 // ---------------------------------------------------------------------------
@@ -233,27 +225,14 @@ fn expression_integration_expression_gaze() {
 #[test]
 fn expression_integration_eye_bone_gaze() {
     let caps = AvatarCapabilities {
-        gaze: GazeMode::EyeBones,
+        declared_look_at: DeclaredLookAtType::Bone,
+        gaze_backend: SelectedGazeBackend::Bone,
+        gaze_fallback: None,
         look_directions: LookDirectionSet::default(),
         ..full_caps()
     };
-    let selection = select_gaze_mode(&caps, false);
-    assert_eq!(selection.mode, GazeMode::EyeBones);
-
-    // Eye-bone gaze doesn't produce expression commands.
-    let gaze_input = RawGazeInput {
-        yaw_rad: 0.3,
-        pitch_rad: 0.1,
-    };
-    let gaze_cmds = map_gaze_to_expressions(
-        &gaze_input,
-        &caps.look_directions,
-        &GazeExpressionSettings::default(),
-    );
-    assert!(
-        gaze_cmds.is_empty(),
-        "eye-bone gaze should not produce expression commands"
-    );
+    let selection = select_gaze_backend(caps.declared_look_at, &caps.look_directions, &caps.bones);
+    assert_eq!(selection, (SelectedGazeBackend::Bone, None));
 }
 
 // ---------------------------------------------------------------------------
@@ -263,19 +242,9 @@ fn expression_integration_eye_bone_gaze() {
 #[test]
 fn expression_integration_no_gaze_model() {
     let caps = no_gaze_caps();
-    let selection = select_gaze_mode(&caps, false);
-    assert_eq!(selection.mode, GazeMode::None);
-
-    let gaze_input = RawGazeInput {
-        yaw_rad: 0.3,
-        pitch_rad: 0.1,
-    };
-    let gaze_cmds = map_gaze_to_expressions(
-        &gaze_input,
-        &caps.look_directions,
-        &GazeExpressionSettings::default(),
-    );
-    assert!(gaze_cmds.is_empty());
+    let selection = select_gaze_backend(caps.declared_look_at, &caps.look_directions, &caps.bones);
+    assert_eq!(selection.0, SelectedGazeBackend::None);
+    assert_eq!(selection.1, Some(GazeFallbackReason::MetadataMissing));
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +340,9 @@ fn expression_integration_missing_capability_no_panic() {
     let caps = AvatarCapabilities {
         blink: BlinkMode::None,
         mouth: MouthMode::None,
-        gaze: GazeMode::None,
+        declared_look_at: DeclaredLookAtType::Missing,
+        gaze_backend: SelectedGazeBackend::None,
+        gaze_fallback: Some(GazeFallbackReason::MetadataMissing),
         look_directions: LookDirectionSet::default(),
         bones: BonePresence {
             left_eye: false,
@@ -390,13 +361,7 @@ fn expression_integration_missing_capability_no_panic() {
     let mouth_cmds = map_mouth_with_fallback(&mouth_input, caps.mouth);
     assert!(mouth_cmds.is_empty());
 
-    let gaze_input = RawGazeInput::default();
-    let gaze_cmds = map_gaze_to_expressions(
-        &gaze_input,
-        &caps.look_directions,
-        &GazeExpressionSettings::default(),
-    );
-    assert!(gaze_cmds.is_empty());
+    let gaze_cmds: Vec<(String, f32)> = Vec::new();
 
     // Building commands from all empty lists should produce empty.
     let commands = build_all_commands(&blink_cmds, &mouth_cmds, &gaze_cmds);
@@ -433,6 +398,6 @@ fn expression_integration_m106_acceptance_criteria() {
 
     // 4. Gaze mode is visible in capabilities.
     let caps = full_caps();
-    let selection = select_gaze_mode(&caps, false);
-    assert_ne!(selection.mode, GazeMode::None);
+    let selection = select_gaze_backend(caps.declared_look_at, &caps.look_directions, &caps.bones);
+    assert_eq!(selection.0, SelectedGazeBackend::Expression);
 }
