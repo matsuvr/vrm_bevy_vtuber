@@ -302,6 +302,12 @@ pub fn bind_humanoid_bones(
                 has_spring_bone,
                 declared_look_at,
             );
+            if let Some(reason) = capabilities.gaze_fallback {
+                warn!(
+                    "VRM gaze backend fallback selected: declared={:?}, selected={:?}, reason={reason:?}",
+                    capabilities.declared_look_at, capabilities.gaze_backend
+                );
+            }
 
             commands.entity(root_entity).insert((
                 binding,

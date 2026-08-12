@@ -192,5 +192,19 @@ mod tests {
         let global_after = *app.world().get::<GlobalTransform>(eye).unwrap();
         assert_eq!(local_after, eye_local);
         assert!(!global_after.affine().abs_diff_eq(before.affine(), 1.0e-5));
+
+        let head_before_counter = *app.world().get::<Transform>(head).unwrap();
+        app.world_mut().get_mut::<Transform>(eye).unwrap().rotation = Quat::from_rotation_y(-0.2);
+        app.update();
+        let counter_local = *app.world().get::<Transform>(eye).unwrap();
+        let counter_global = app.world().get::<GlobalTransform>(eye).unwrap().rotation();
+        let expected_global = (head_before_counter.rotation * counter_local.rotation).normalize();
+        assert!(counter_global.abs_diff_eq(expected_global, 1.0e-5));
+        assert_eq!(counter_local.translation, eye_local.translation);
+        assert_eq!(counter_local.scale, eye_local.scale);
+        assert_eq!(
+            *app.world().get::<Transform>(head).unwrap(),
+            head_before_counter
+        );
     }
 }

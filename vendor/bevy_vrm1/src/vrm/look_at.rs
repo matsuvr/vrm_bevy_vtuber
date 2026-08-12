@@ -572,6 +572,9 @@ mod tests {
         assert_eq!(weights.look_right, 0.0);
         assert_eq!(weights.look_up, 1.0);
         assert_eq!(weights.look_down, 0.0);
+
+        let centered = expression_weights(&properties(LookAtType::Expression), 0.0, 0.0, 1.0);
+        assert_eq!(centered, LookAtExpressionWeights::default());
     }
 
     #[test]
@@ -589,7 +592,9 @@ mod tests {
 
     #[test]
     fn left_and_right_eyes_use_outer_and_inner_maps_separately() {
-        let properties = properties(LookAtType::Bone);
+        let mut properties = properties(LookAtType::Bone);
+        properties.range_map_horizontal_inner.output_scale = 2.0;
+        properties.range_map_horizontal_outer.output_scale = 12.0;
         let rest = RestTransform(Transform::IDENTITY);
         let rest_global = RestGlobalTransform(GlobalTransform::IDENTITY);
         let current = Transform::IDENTITY;
@@ -597,8 +602,26 @@ mod tests {
         let right = apply_right_eye_bone(&current, &rest, &rest_global, &properties, 20.0, 0.0);
         let (_, left_yaw, _) = left.rotation.to_euler(EulerRot::XYZ);
         let (_, right_yaw, _) = right.rotation.to_euler(EulerRot::XYZ);
-        assert!((left_yaw.to_degrees() - 5.0).abs() < 1.0e-3);
-        assert!((right_yaw.to_degrees() - 5.0).abs() < 1.0e-3);
+        assert!((left_yaw.to_degrees() - 6.0).abs() < 1.0e-3);
+        assert!((right_yaw.to_degrees() - 2.0).abs() < 1.0e-3);
+    }
+
+    #[test]
+    fn eye_bones_use_distinct_up_and_down_maps_without_touching_translation_or_scale() {
+        let properties = properties(LookAtType::Bone);
+        let rest = RestTransform(Transform::IDENTITY);
+        let rest_global = RestGlobalTransform(GlobalTransform::IDENTITY);
+        let current = Transform::from_xyz(1.0, 2.0, 3.0).with_scale(Vec3::splat(1.5));
+        let up = apply_left_eye_bone(&current, &rest, &rest_global, &properties, 0.0, -15.0);
+        let down = apply_left_eye_bone(&current, &rest, &rest_global, &properties, 0.0, 15.0);
+        let (up_pitch, _, _) = up.rotation.to_euler(EulerRot::XYZ);
+        let (down_pitch, _, _) = down.rotation.to_euler(EulerRot::XYZ);
+        assert!((up_pitch.to_degrees() + 8.0).abs() < 1.0e-3);
+        assert!((down_pitch.to_degrees() - 6.0).abs() < 1.0e-3);
+        assert_eq!(up.translation, current.translation);
+        assert_eq!(up.scale, current.scale);
+        assert_eq!(down.translation, current.translation);
+        assert_eq!(down.scale, current.scale);
     }
 
     #[test]

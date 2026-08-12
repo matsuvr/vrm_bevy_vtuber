@@ -50,23 +50,35 @@ fn avatar_schedule_ordering_matches_design() {
 
     #[derive(Resource, Default)]
     struct Order(Vec<&'static str>);
-    fn body(mut order: ResMut<Order>) {
-        order.0.push("body");
+    fn animation(mut order: ResMut<Order>) {
+        order.0.push("animation");
+    }
+    fn body_input(mut order: ResMut<Order>) {
+        order.0.push("body-input");
+    }
+    fn direct_body(mut order: ResMut<Order>) {
+        order.0.push("direct-body");
+    }
+    fn gaze_input(mut order: ResMut<Order>) {
+        order.0.push("gaze-input");
     }
     fn gaze(mut order: ResMut<Order>) {
         order.0.push("gaze");
     }
-    fn adapter_expression(mut order: ResMut<Order>) {
-        order.0.push("adapter-expression");
+    fn expression_update(mut order: ResMut<Order>) {
+        order.0.push("expression-update");
     }
     fn expressions(mut order: ResMut<Order>) {
         order.0.push("expressions");
     }
-    fn propagation(mut order: ResMut<Order>) {
-        order.0.push("propagation");
+    fn propagation_after_expressions(mut order: ResMut<Order>) {
+        order.0.push("propagation-after-expressions");
     }
     fn constraints(mut order: ResMut<Order>) {
         order.0.push("constraints");
+    }
+    fn propagation_after_constraints(mut order: ResMut<Order>) {
+        order.0.push("propagation-after-constraints");
     }
     fn spring(mut order: ResMut<Order>) {
         order.0.push("spring");
@@ -90,15 +102,20 @@ fn avatar_schedule_ordering_matches_design() {
     app.add_systems(
         PostUpdate,
         (
-            body.after(AnimationSystems)
+            animation.in_set(AnimationSystems),
+            body_input.after(AnimationSystems).before(direct_body),
+            direct_body.after(body_input).before(gaze_input),
+            gaze_input
+                .after(direct_body)
                 .before(VrmSystemSets::GazeControl),
             gaze.in_set(VrmSystemSets::GazeControl),
-            adapter_expression
+            expression_update
                 .after(VrmSystemSets::GazeControl)
                 .before(VrmSystemSets::Expressions),
             expressions.in_set(VrmSystemSets::Expressions),
-            propagation.in_set(VrmSystemSets::PropagateAfterExpressions),
+            propagation_after_expressions.in_set(VrmSystemSets::PropagateAfterExpressions),
             constraints.in_set(VrmSystemSets::Constraints),
+            propagation_after_constraints.in_set(VrmSystemSets::PropagateAfterConstraints),
             spring.in_set(VrmSystemSets::SpringBone),
         ),
     );
@@ -106,12 +123,16 @@ fn avatar_schedule_ordering_matches_design() {
     assert_eq!(
         app.world().resource::<Order>().0,
         [
-            "body",
+            "animation",
+            "body-input",
+            "direct-body",
+            "gaze-input",
             "gaze",
-            "adapter-expression",
+            "expression-update",
             "expressions",
-            "propagation",
+            "propagation-after-expressions",
             "constraints",
+            "propagation-after-constraints",
             "spring"
         ]
     );
