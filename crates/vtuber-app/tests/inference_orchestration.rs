@@ -35,3 +35,34 @@ fn production_start_queues_mediapipe_pipeline_and_classifies_load_failure() {
 
     runtime.stop_model();
 }
+
+#[test]
+fn production_status_exposes_mediapipe_identity_before_task_load() {
+    let project = tempfile::tempdir().expect("temporary project root");
+    let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+    let mut runtime = InferenceRuntime::new(frame_slot, project.path().to_path_buf());
+    runtime
+        .start_model()
+        .expect("pipeline load command should be queued");
+
+    for _ in 0..100 {
+        if runtime.status().state == InferenceWorkerState::Failed {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let status = runtime.status();
+    assert_eq!(
+        status.pipeline_id.as_deref(),
+        Some("mediapipe-face-landmarker")
+    );
+    assert_eq!(
+        status.detector_model_hash.as_deref(),
+        Some(vtuber_inference::backend::mediapipe::TASK_BUNDLE_SHA256)
+    );
+    assert_eq!(status.landmark_model_hash, None);
+
+    runtime.stop_model();
+    assert_eq!(runtime.status().state, InferenceWorkerState::Idle);
+}

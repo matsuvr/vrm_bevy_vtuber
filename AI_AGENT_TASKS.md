@@ -7429,8 +7429,10 @@ cargo build -p vtuber-desktop --release
 
 #### M1-08-017: 既存Diagnostics／error recovery／shutdownを実pipelineで監査する
 
-状態: `PENDING`
+状態: `DONE`
 備考: MediaPipe backend identity、478/52/matrix contract diagnostics、worker exit／panic recovery、逆順shutdown、retry、GUI Diagnostics表示を再検証する。旧composite evidenceは新backendの完了証拠として扱わない。
+
+MediaPipe task identity/hash、worker failure stage、no-face通常状態、reverse-order stop/join、retry、diagnostics contract displayをautomated gateで再確認した。GUIはC922起動時に30 Hz capture/inferenceとRunning stateを観測できたが、face motionが無かったため、functional avatar acceptanceは015-011/018に残す。
 依存: `M1-08-016`
 親参照: DESIGN.md §17、§20.2〜§20.4、§21、§24
 
