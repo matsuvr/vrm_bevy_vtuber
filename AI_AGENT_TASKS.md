@@ -38,11 +38,11 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-009`〜`M1-08-012` | `DONE` | GUI import、avatar lifecycle、synthetic tracking、Windows camera契約、capture／preview接続まで実装・自動検証済み。 |
 | `M1-08-013` | `DONE` | UltraFace→crop→Peppa 98点landmark→planar poseのWindows C922実機gateを、face loss／return、方向、edge、capture Stop／Startを含むguided protocolで確認済み。 |
 | `M1-08-014` | `DONE` | managed VRM import／avatar lifecycleの既存blockerを解消し、自動互換性検査済み。 |
-| `M1-08-015` | `IN_PROGRESS` | M1-08-015-001〜012のMediaPipe rewrite sequenceを実施中。旧composite trackingの実機証拠は新backendの受入証拠として再利用しない。 |
+| `M1-08-015` | `DONE` | MediaPipe rewrite、C922 functional／recovery gate、bounded 30分performance gateを完了した。旧composite trackingの実機証拠は新backendの受入証拠として再利用しない。 |
 | `M1-08-016` | `DONE` | MediaPipe canonical tracking sourceからreal-VRM bridgeへの接続、generation／stale排他、synthetic排他を自動検証済み。 |
 | `M1-08-017` | `DONE` | MediaPipe identity／contract diagnostics、worker recovery、reverse shutdown、retry、no-face通常状態を自動検証済み。 |
 | `M1-08-018` | `DONE` | C922 symbolic-link選択、実preview、real-VRM head／blink／mouth／gaze、Stop／Start 3回、既存のloss／reacquire・replug・replace証拠を統合してfunctional／recovery gateを完了した。 |
-| `M1-08-019` | `BLOCKED` | render FPSと60秒window／30分soakのbounded metrics／resource exportが未完了のためfinal performance gateを閉じられない。 |
+| `M1-08-019` | `DONE` | release appで31点のbounded metrics／resource exportを完了し、render、tracking、capture-to-apply、capacity-one、resource stability、clean shutdownのWindows final gateをPASSした。 |
 | `M1-08-020` | `DONE` | Live preview texture登録とavatar骨基準viewport framingを修正し、自動検証とapproved VRMのrelease GUI framing確認を完了した。 |
 | `M1-08-021` | `DONE` | production bindingでgeneration一致のrest-orientation cacheを構築し、実cameraでhead／blink／mouth／gazeとavatar apply latencyを確認した。 |
 | `M1-08-022` | `DONE` | C922とELECOMの起動時列挙、symbolic-link identity選択、C922実previewを確認した。 |
@@ -50,7 +50,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-次の実行単位は、**`M1-08-019`のWindows performance final gate**である。M1-08-018はC922 symbolic-link明示選択後のreal preview、real-VRM head／blink／mouth／gaze、capture-to-apply、Stop／Start 3回と既存recovery evidenceを統合して`DONE`とした。親015／015-011はperformance export待ちで`IN_PROGRESS`／`BLOCKED`、`M1-09`は`DEFERRED`とする。
+M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05`のWindows部分から一つのtask ID**である。M1-08-018はC922 symbolic-link明示選択後のreal preview、real-VRM head／blink／mouth／gaze、capture-to-apply、Stop／Start 3回と既存recovery evidenceを統合して`DONE`、M1-08-019は30分bounded performance gateをPASSした。`M1-09`は`DEFERRED`のままとする。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -87,7 +87,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-05` | `M1-05-001`〜`M1-05-008` | 8 | `LEGACY_PROGRESS` |
 | `M1-06` | `M1-06-001`〜`M1-06-009` | 9 | `LEGACY_PROGRESS` |
 | `M1-07` | `M1-07-001`〜`M1-07-009` | 9 | `LEGACY_PROGRESS`＋GUI補完済み |
-| `M1-08` | top-level `M1-08-001`〜`021`、repair `M1-08-013-001`〜`009` | 21 + repair 9 | `BLOCKED`（021 done、015-011／018／019再受入待ち） |
+| `M1-08` | top-level `M1-08-001`〜`022`、repair `M1-08-013-001`〜`009` | 22 + repair 9 | `DONE`（Windows gate PASS、M1-09は別途DEFERRED） |
 | `M1-09` | `M1-09-001`〜`M1-09-008` | 8 | `DEFERRED` |
 | `Q2-01` | `Q2-01-001`〜`Q2-01-008` | 8 | `PENDING` |
 | `Q2-02` | `Q2-02-001`〜`Q2-02-008` | 8 | `PENDING` |
@@ -7189,8 +7189,8 @@ cargo build -p vtuber-desktop --release
 
 #### M1-08-015: 既存TrackingRuntimeをcomposite observationsへ適合・実機検証する
 
-状態: `IN_PROGRESS`
-備考: composite observationのfreshness/reset、no-face、source-sequence境界、tracking bridgeの自動検証は完了。実camera smokeは完了したが、GUI neutral calibrationと実VRMのloss／reacquire確認は未完了。
+状態: `DONE`
+備考: MediaPipe canonical pipeline、C922 real-VRM functional／recovery acceptance、30分bounded performance acceptanceまで完了した。
 依存: `M1-08-014`
 親参照: DESIGN.md §11、§15、§17.2、§20.1、§21.1
 
@@ -7359,11 +7359,11 @@ Commit: `refactor(mocap): remove legacy custom face pipeline`
 
 #### M1-08-015-011: Windows functional and performance acceptance
 
-状態: `BLOCKED`
+状態: `DONE`
 
 section 16 protocolをC922とapproved VRMで実施し、10/10 Recenter、physical signs、real VRM head/blink/mouth/gaze、15 Hz以上、capture-to-apply p95 180 ms以下、Stop/Start 3回を測定する。thresholdを下げて合格扱いにしない。
 
-2026-08-12のlive release GUI runではC922選択、VRM 1.0 import/Ready、auto-neutral、face loss/reacquire、3回のStop/Start、avatar replace/unload/reload、camera unplug/replug後のStop→Start復旧、約405 msでの再取得観測、MediaPipe worker Running（capture/inference約30 Hz）、59秒のRSS/thread sample、clean shutdownを確認した。30分soakも完了したが、Live previewが`Waiting for camera frames…`のままで、固定viewport cameraによりavatar headが画面外だったためhead／blink／mouth／gazeは検証不能であり、capture-to-applyも`(none)`だった。functional／performance gateはBLOCKEDのままとする。
+2026-08-12のlive release GUI runでC922 symbolic-link明示選択、VRM 1.0 import/Ready、auto-neutral、real preview、6方向head、両目blink、`aa` mouth、左右gaze、face loss/reacquire、3回のStop/Start、avatar replace/unload/reload、camera unplug/replug後のStop→Start復旧、約405 msでの再取得、capture-to-apply、clean shutdownを確認した。M1-08-019の30分bounded runはrender 56.257–60.770 FPS、tracking 30–60 Hz、capture-to-apply p95 29.393–31.213 ms、capture slot overwrite 0、RSS 866.2–885.6 MiB、thread 125–138、crash/hang 0でPASSした。
 
 Commit: `test(mocap): record live Windows acceptance evidence`
 
@@ -7373,7 +7373,7 @@ Commit: `test(mocap): record live Windows acceptance evidence`
 
 acceptance report、manifest、native/runtime provenance、license notices、task statesを更新する。全acceptanceが通った場合のみM1-08-015を`DONE`とし、016／017はnew backendのrevalidation state、018／019はblocked、M1-09はdeferredを維持する。
 
-Acceptance report、MediaPipe task manifest、ADR-009、015-011/016/017/018/019の状態を更新した。functional/performance gate未完了のため親M1-08-015は`IN_PROGRESS`を維持する。
+Acceptance report、MediaPipe task manifest、ADR-009、015-011/016/017/018/019の状態を更新した。その後のrepairと再受入でfunctional/performance gateが通過したため、親M1-08-015は`DONE`へ移行した。
 
 Commit: `docs(mocap): record MediaPipe rewrite acceptance`
 
@@ -7554,8 +7554,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### M1-08-019: latency、30分soak、Windows final gateを閉じる
 
-状態: `BLOCKED`
-備考: release appで約60秒のdiagnostics観測と30分soakを実施し、tracking 30-31 Hz、inference wait p95約41.9 ms、inference total p95約6.8 ms、soak終端は41.46／7.45 ms、slot overwrite 0を記録した。別途59秒のRSS/thread sample（RSS 888.14–897.01 MiB、thread 129–131）とsummary artifactを作成したが、capture-to-applyは`(none)`で、30分soakのbounded resource export、render FPS、`M1-08-018`のviewport functional gateも未完了のためBLOCKED。
+状態: `DONE`
+備考: release appで10秒warm-up後、60秒cadence、0〜1,800秒の31点をCSVへbounded exportした。render 56.257–60.770 FPS、tracking 30–60 Hz、capture-to-apply p95 29.393–31.213 ms、capture slot overwrite 0、RSS 866.2–885.6 MiB、thread 125–138、全resource sample responding=True、crash/hang 0、Stop→Idle→clean shutdownを確認しWindows final gateをPASSした。MediaPipe Tasksの単一call内部にあるdetector／landmark個別cadenceはruntimeから露出されず0として記録するが、canonical inferenceは29–30 Hzでありcorrectness blockerではない。
 依存: `M1-08-018`
 親参照: DESIGN.md §6、§20.2〜§20.3、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 

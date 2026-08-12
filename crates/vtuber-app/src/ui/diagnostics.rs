@@ -21,6 +21,24 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
             ui.label(format!("{:.1}", diagnostics.render_fps));
             ui.end_row();
 
+            ui.label("Process CPU");
+            ui.label(
+                diagnostics
+                    .process_cpu_usage
+                    .map(|value| format!("{value:.1}%"))
+                    .unwrap_or_else(|| "(none)".to_string()),
+            );
+            ui.end_row();
+
+            ui.label("Process memory");
+            ui.label(
+                diagnostics
+                    .process_memory_gib
+                    .map(|value| format!("{value:.3} GiB"))
+                    .unwrap_or_else(|| "(none)".to_string()),
+            );
+            ui.end_row();
+
             ui.label("Capture rate");
             ui.label(format!("{:.1} Hz", diagnostics.capture_rate));
             ui.end_row();
@@ -81,6 +99,14 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
                     .map(|value| format!("{value:.2} ms"))
                     .unwrap_or_else(|| "(none)".to_string()),
             );
+            ui.end_row();
+
+            ui.label("Metrics export");
+            ui.label(&diagnostics.metrics_export_status);
+            ui.end_row();
+
+            ui.label("Export samples");
+            ui.label(format!("{} / 31", diagnostics.metrics_export_samples));
             ui.end_row();
         });
     ui.separator();

@@ -28,11 +28,11 @@ pub struct PoseApplyMetrics {
     pub skipped_no_frame: u64,
     /// Number of frames skipped because the binding entity was stale.
     pub skipped_stale_entity: u64,
-    /// Source sequence of the most recently applied frame.
+    /// Source sequence of the most recently observed control frame.
     pub last_applied_source_seq: Option<vtuber_core::FrameSeq>,
     /// Monotonic time when the most recent frame was applied.
     pub last_applied_at: Option<vtuber_core::MonoTimeNs>,
-    /// Capture-to-apply latency of the most recently applied frame.
+    /// First-apply latency of the most recently observed control frame.
     pub last_capture_to_apply_ms: Option<f64>,
     /// Fixed-size capture-to-apply latency samples.
     latency_samples: FixedStats,
@@ -55,6 +55,33 @@ impl Default for PoseApplyMetrics {
 }
 
 impl PoseApplyMetrics {
+    fn record_apply(
+        &mut self,
+        source_seq: vtuber_core::FrameSeq,
+        captured_at: vtuber_core::MonoTimeNs,
+        applied_at: vtuber_core::MonoTimeNs,
+    ) {
+        self.frames_applied += 1;
+        self.last_applied_at = Some(applied_at);
+
+        // The current control frame is intentionally re-applied after animation
+        // on every render frame. Capture-to-apply measures the first application
+        // of each source observation, not the age of those later re-applications.
+        if self.last_applied_source_seq == Some(source_seq) {
+            return;
+        }
+
+        self.last_applied_source_seq = Some(source_seq);
+        let latency_ms = applied_at
+            .0
+            .checked_sub(captured_at.0)
+            .map(|ns| ns as f64 / 1_000_000.0);
+        self.last_capture_to_apply_ms = latency_ms;
+        if let Some(latency_ms) = latency_ms {
+            self.latency_samples.record(latency_ms);
+        }
+    }
+
     /// Number of capture-to-apply latency samples retained.
     #[must_use]
     pub fn latency_sample_count(&self) -> usize {
@@ -180,17 +207,7 @@ pub fn apply_tracked_head_pose(
     }
 
     let applied_at = monotonic_now();
-    let latency_ms = applied_at
-        .0
-        .checked_sub(frame.captured_at.0)
-        .map(|ns| ns as f64 / 1_000_000.0);
-    metrics.frames_applied += 1;
-    metrics.last_applied_source_seq = Some(frame.source_seq);
-    metrics.last_applied_at = Some(applied_at);
-    metrics.last_capture_to_apply_ms = latency_ms;
-    if let Some(latency_ms) = latency_ms {
-        metrics.latency_samples.record(latency_ms);
-    }
+    metrics.record_apply(frame.source_seq, frame.captured_at, applied_at);
 }
 
 /// System that resets pose metrics when the avatar lifecycle changes.
@@ -228,5 +245,33 @@ mod tests {
         assert_eq!(metrics.skipped_generation_mismatch, 0);
         assert_eq!(metrics.skipped_no_frame, 0);
         assert_eq!(metrics.skipped_stale_entity, 0);
+    }
+
+    #[test]
+    fn capture_to_apply_records_each_source_sequence_once() {
+        let mut metrics = PoseApplyMetrics::default();
+        metrics.record_apply(
+            vtuber_core::FrameSeq(7),
+            vtuber_core::MonoTimeNs(1_000_000),
+            vtuber_core::MonoTimeNs(31_000_000),
+        );
+        metrics.record_apply(
+            vtuber_core::FrameSeq(7),
+            vtuber_core::MonoTimeNs(1_000_000),
+            vtuber_core::MonoTimeNs(5_001_000_000),
+        );
+
+        assert_eq!(metrics.frames_applied, 2);
+        assert_eq!(metrics.latency_sample_count(), 1);
+        assert_eq!(metrics.capture_to_apply_p50_ms(), 30.0);
+        assert_eq!(metrics.last_capture_to_apply_ms, Some(30.0));
+
+        metrics.record_apply(
+            vtuber_core::FrameSeq(8),
+            vtuber_core::MonoTimeNs(6_000_000_000),
+            vtuber_core::MonoTimeNs(6_040_000_000),
+        );
+        assert_eq!(metrics.latency_sample_count(), 2);
+        assert_eq!(metrics.capture_to_apply_p95_ms(), 40.0);
     }
 }

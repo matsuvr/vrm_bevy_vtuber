@@ -3,6 +3,9 @@
 //! Collects performance metrics, worker state, and model info for display
 //! in the Diagnostics screen.
 
+use bevy::diagnostic::{
+    DiagnosticsStore, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
+};
 use bevy::prelude::*;
 
 /// Diagnostics snapshot resource.
@@ -10,6 +13,10 @@ use bevy::prelude::*;
 pub struct DiagnosticsSnapshot {
     /// Render FPS.
     pub render_fps: f32,
+    /// Current process CPU usage in percent.
+    pub process_cpu_usage: Option<f32>,
+    /// Current process resident memory in GiB.
+    pub process_memory_gib: Option<f32>,
     /// Capture frame rate.
     pub capture_rate: f32,
     /// Inference rate.
@@ -80,6 +87,10 @@ pub struct DiagnosticsSnapshot {
     pub last_error_code: Option<String>,
     /// Last error message, if any.
     pub last_error: Option<String>,
+    /// Bounded metrics exporter state.
+    pub metrics_export_status: String,
+    /// Number of bounded metrics rows written by the current process.
+    pub metrics_export_samples: usize,
 }
 
 impl DiagnosticsSnapshot {
@@ -95,6 +106,36 @@ impl DiagnosticsSnapshot {
                 && self.inference_state != "Idle"
                 && self.inference_state != "Stopping")
     }
+}
+
+/// Synchronises Bevy's engine and process diagnostics into the UI snapshot.
+pub fn sync_engine_diagnostics(
+    store: Option<Res<DiagnosticsStore>>,
+    mut snapshot: ResMut<DiagnosticsSnapshot>,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    snapshot.render_fps =
+        diagnostic_value(&store, &FrameTimeDiagnosticsPlugin::FPS).unwrap_or(0.0) as f32;
+    snapshot.process_cpu_usage = diagnostic_value(
+        &store,
+        &SystemInformationDiagnosticsPlugin::PROCESS_CPU_USAGE,
+    )
+    .map(|value| value as f32);
+    snapshot.process_memory_gib = diagnostic_value(
+        &store,
+        &SystemInformationDiagnosticsPlugin::PROCESS_MEM_USAGE,
+    )
+    .map(|value| value as f32);
+}
+
+fn diagnostic_value(
+    store: &DiagnosticsStore,
+    path: &bevy::diagnostic::DiagnosticPath,
+) -> Option<f64> {
+    let diagnostic = store.get(path)?;
+    diagnostic.smoothed().or_else(|| diagnostic.value())
 }
 
 #[cfg(test)]

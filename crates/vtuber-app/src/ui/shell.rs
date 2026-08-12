@@ -14,11 +14,12 @@ use crate::capture_runtime::{
     CaptureRuntime, LatestVideoFrame, capture_bridge_system, read_latest_frame,
     register_preview_texture_system, sync_capture_diagnostics, update_preview_texture_system,
 };
-use crate::diagnostics::DiagnosticsSnapshot;
+use crate::diagnostics::{DiagnosticsSnapshot, sync_engine_diagnostics};
 use crate::error_presenter::ErrorPresenter;
 use crate::inference_runtime::{
     InferenceProjectRoot, InferenceRuntime, inference_bridge_system, read_inference_output_system,
 };
+use crate::metrics_export::{MetricsExportState, export_diagnostics_system};
 use crate::orchestrator::{Orchestrator, process_ui_actions_system, sync_avatar_lifecycle_system};
 use crate::preview::PreviewState;
 use crate::tracking_runtime::{TrackingRuntime, tracking_bridge_system};
@@ -46,6 +47,7 @@ impl Plugin for UiShellPlugin {
             .init_resource::<Orchestrator>()
             .init_resource::<PreviewState>()
             .init_resource::<DiagnosticsSnapshot>()
+            .init_resource::<MetricsExportState>()
             .init_resource::<ErrorPresenter>()
             .init_resource::<super::file_dialog::FileDialogState>()
             .init_resource::<CaptureRuntime>()
@@ -88,6 +90,12 @@ impl Plugin for UiShellPlugin {
                     .before(capture_bridge_system),
             )
             .add_systems(Update, tracking_bridge_system.after(read_inference_output_system))
+            .add_systems(
+                Last,
+                (sync_engine_diagnostics, export_diagnostics_system)
+                    .chain()
+                    .before(shutdown_workers_on_exit),
+            )
             .add_systems(Last, shutdown_workers_on_exit)
             // egui rendering in EguiPrimaryContextPass.
             .add_systems(EguiPrimaryContextPass, ui_render_system);

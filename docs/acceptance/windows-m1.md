@@ -1,8 +1,8 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — C922 functional／recovery acceptanceはPASS。render FPSとbounded 30-minute resource exportが未完了
+**Status:** PASS — C922 functional／recovery／30-minute performance acceptance完了
 **Date:** 2026-08-12
-**Commit SHA:** `8fcdd6e`
+**Commit:** M1-08-018 `a83967d` + this M1-08-019 acceptance commit
 **Binary:** `vtuber-desktop` (release profile)
 
 ---
@@ -20,7 +20,7 @@
 | Camera 2 | ELECOM 2MP Webcam — MSMF symbolic link VID_056E/PID_701E |
 | Build profile | release |
 | Rust toolchain | rustc 1.97.1 / cargo 1.97.1 |
-| Binary SHA-256 | `13EF24BE2A937DB0CC1F11AFB0C6B1F87A3992ECAB93F07171293FCA46843298` |
+| Binary SHA-256 | `C939C12411EA88B7363B8463F117CFD53CA516CE6522C36FDE6C5D3A4802B1E2` |
 
 ### Model Manifest
 
@@ -481,17 +481,25 @@ in `docs/acceptance/artifacts/windows-m1-2026-08-12-resource-sample.txt`.
 
 | Metric | Target | Actual | Result |
 |--------|--------|--------|--------|
-| Render FPS | ≥ 30 | Not exposed in diagnostics | NOT RUN |
-| Tracking Hz | ≥ 15 | 30-31 Hz | PASS |
-| p50 capture-to-apply | — | 29.90 ms | PASS |
-| p95 capture-to-apply | ≤ 180ms | 48.02 ms | PASS |
-| Queue depth | ≤ 1 | Slot overwrites 0 | PASS |
-| Slot overwrite count | — | 0 | PASS |
+| Render FPS | ≥ 30 | 56.257–60.770 FPS | PASS |
+| Tracking Hz | ≥ 15 | 30–60 Hz; 30 Hz at end | PASS |
+| p50 capture-to-apply | — | 21.052–22.625 ms | PASS |
+| p95 capture-to-apply | ≤ 180ms | 29.393–31.213 ms | PASS |
+| Queue depth | ≤ 1 | `LatestSlot` capacity one | PASS |
+| Capture slot overwrite count | — | 0 | PASS |
 
 ### 5.3 Raw Data
 
-_Metrics CSV/JSON artifact path: not generated; diagnostics values were read
-from the live release UI._
+- `docs/acceptance/artifacts/windows-m1-2026-08-12-soak-metrics.csv`
+- 31 samples from measurement elapsed 0.000 through 1,800.016 seconds
+- 10-second warm-up excluded; fixed 60-second cadence; create-new/no-overwrite
+  output and flush after every row
+
+`inference_input_overwrites` rose from 381 to 54,382. This counter is the
+number of replacements of the retained value in the shared capacity-one
+`LatestSlot`; reads intentionally do not remove that retained value. It does
+not represent queue growth. The producer-side capture drop/overwrite metric
+remained 0 and the data structure cannot exceed one retained frame.
 
 ---
 
@@ -508,19 +516,23 @@ from the live release UI._
 
 | Metric | Start | Mid | End | Trend |
 |--------|-------|-----|-----|-------|
-| RSS (MB) | 888.14 MiB (separate sample) | 897.01 MiB max (separate sample) | 893.52 MiB (separate sample) | PARTIAL; not sampled once per minute during soak |
-| p95 latency (ms) | wait ~41.9 / total ~6.8 | wait ~41.8 / total ~7.8 | wait 41.46 / total 7.45 | stable sampled |
-| Render FPS | Not exposed | Not exposed | Not exposed | NOT RUN |
-| Tracking Hz | 30-31 | 30-31 | 30.0 | stable |
-| Worker threads | Running | Running | Running | no exit observed |
+| Working set | 866.25 MiB | 873.83 MiB | 884.75 MiB | bounded 866.25–885.62 MiB; non-monotonic |
+| Private memory | 1.659 GiB | 1.670 GiB | 1.682 GiB | bounded 1.659–1.683 GiB; non-monotonic |
+| p95 capture-to-apply | 30.611 ms | 30.822 ms | 30.679 ms | bounded 29.393–31.213 ms |
+| Render FPS | 59.733 | 59.253 | 60.770 | bounded 56.257–60.770 FPS |
+| Tracking Hz | 30 | 31 | 30 | minimum 30 Hz |
+| Threads | 137 | 125 | 126 | bounded 125–138; no growth |
+| Handles | 1,696 | 1,703 | 1,712 | bounded 1,696–1,800; no growth |
+| Worker states | Running / Running | Running / Running | Running / Running | no exit observed |
 
 ### 6.3 Soak Summary
 
 - [x] No process crash
-- [ ] No memory continuous increase trend (59-second resource sample only; not a soak trend)
+- [x] No memory, thread, or handle unbounded increase trend in 31 samples
 - [x] No latency continuous increase trend in sampled diagnostics
-- [x] Worker threads terminated on Stop (user confirmed Stop after soak)
-- [x] Clean shutdown confirmed (`vtuber-desktop` process not running after user closed the window)
+- [x] All 31 external samples reported `Responding=True`
+- [x] Stop changed app lifecycle from `Running` to `Idle`
+- [x] Clean shutdown confirmed (`vtuber-desktop` window/process absent after close)
 
 ---
 
@@ -528,27 +540,34 @@ from the live release UI._
 
 | # | Criterion | Target | Actual | Verdict |
 |---|-----------|--------|--------|---------|
-| 1 | Render FPS | ≥ 30 | Not exposed | NOT RUN |
-| 2 | Tracking Hz | ≥ 15 | 30-31 Hz | PASS |
-| 3 | p95 capture-to-apply | ≤ 180ms | 48.02 ms | PASS |
-| 4 | Queue depth | ≤ 1 | Slot overwrites 0 | PASS |
-| 5 | No memory/latency increase | stable | latency stable sampled; separate 59-second RSS/thread sample; no soak resource trend | PARTIAL |
+| 1 | Render FPS | ≥ 30 | minimum 56.257 FPS | PASS |
+| 2 | Tracking Hz | ≥ 15 | minimum 30 Hz | PASS |
+| 3 | p95 capture-to-apply | ≤ 180ms | maximum 31.213 ms | PASS |
+| 4 | Queue depth | ≤ 1 | capacity one; capture overwrite 0 | PASS |
+| 5 | No memory/latency increase | stable | 31-point bounded series; no unbounded trend | PASS |
 | 6 | No process crash | 0 crashes | 0 observed | PASS |
-| 7 | Report saved | yes | recorded | PASS |
+| 7 | Report saved | yes | metrics/resource CSV and summary saved | PASS |
 
-**Overall Gate:** BLOCKED — C922 preview, direct avatar motion, loss/reacquire, lifecycle recovery, camera reconnect, timed reacquisition, capture-to-apply latency, and clean shutdown are evidenced. The remaining blocker is limited to render FPS and the bounded once-per-minute resource/metrics export for the 30-minute soak.
+**Overall Gate:** PASS — C922 preview, direct avatar motion, loss/reacquire,
+lifecycle recovery, camera reconnect, timed reacquisition, capture-to-apply
+latency, bounded 30-minute performance/resource export, Stop to Idle, and clean
+shutdown are evidenced.
 
 ---
 
 ## 8. Blocker Classification (M1-08-008)
 
-| # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
-|---|---------|----------|----------|-------------|---------------|
-| 1 | Render FPS is not exposed; the existing resource summary is not a bounded once-per-minute 30-minute soak export | performance | High | Export render/rate/latency/resource samples at bounded cadence and rerun the performance gate | Yes |
+No open Windows M1 correctness, compatibility, or performance blocker remains.
+
+The official MediaPipe Tasks call does not expose separate detector and
+landmark inner-stage cadence. Their distinct CSV columns therefore remain
+`0.000`; the observable canonical inference cadence is 29–30 Hz. This is a
+diagnostic capability limitation, not evidence of a stopped stage.
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment
 
-**M1-09 Go/No-Go Decision:** HOLD — M1-08-019 and the broader Windows gate are not accepted; macOS work remains explicitly deferred.
+**M1-09 Go/No-Go Decision:** Windows M1 is GO. M1-09 remains explicitly
+`DEFERRED` until macOS development resumes; no macOS acceptance is claimed.
 
 ---
 
@@ -556,16 +575,15 @@ Categories: correctness, compatibility, performance, hardware-specific, test-env
 
 | Artifact | SHA-256 | Path |
 |----------|---------|------|
-| vtuber-desktop.exe | `13EF24BE2A937DB0CC1F11AFB0C6B1F87A3992ECAB93F07171293FCA46843298` | target/release/vtuber-desktop.exe |
+| vtuber-desktop.exe | `C939C12411EA88B7363B8463F117CFD53CA516CE6522C36FDE6C5D3A4802B1E2` | target/release/vtuber-desktop.exe |
 | face_landmarker.task | `64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF` | assets/models/face_landmarker.task |
 | inore-vrm1.vrm | `B5A3D4126C4A30EF3BFBCFC764A24DC48511B558799D98D4C2FF1DB0BDC7AB01` | tests/fixtures/vrm/inore-vrm1.vrm |
-| Metrics CSV | — | not generated; live diagnostics recorded in this report |
-| Resource sample summary | — | `docs/acceptance/artifacts/windows-m1-2026-08-12-resource-sample.txt` |
-| Soak metrics | — | no exported once-per-minute artifact; 30-minute live observation recorded |
+| 30-minute metrics CSV | `90A21346DFD813A796D704E8FD88FE3A776732C1B43B6F1634DCE0EEB7B195E0` | docs/acceptance/artifacts/windows-m1-2026-08-12-soak-metrics.csv |
+| 30-minute resources CSV | `D23A39F32393743FD45848D34499AE8E186EAD130321E6810C25E00D9A001FE0` | docs/acceptance/artifacts/windows-m1-2026-08-12-soak-resources.csv |
+| 30-minute summary | recorded below | docs/acceptance/artifacts/windows-m1-2026-08-12-soak-summary.md |
 
 ---
 
-_Report generated from the automated, live GUI, latency-observation, resource,
-and 30-minute soak evidence above. C922 functional/recovery acceptance is
-complete; render FPS and the bounded soak export remain intentionally
-unverified until M1-08-019._
+_Report generated from the automated, live GUI, latency, resource, and bounded
+30-minute soak evidence above. Windows M1 acceptance is complete. macOS was
+not run and remains deferred._

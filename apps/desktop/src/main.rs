@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use bevy::asset::io::{AssetSourceBuilder, AssetSourceBuilders};
+use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use vtuber_app::import;
@@ -57,6 +58,10 @@ fn main() {
     let mut app = App::new();
     app.insert_resource(sources)
         .add_plugins(DefaultPlugins)
+        .add_plugins((
+            FrameTimeDiagnosticsPlugin::default(),
+            SystemInformationDiagnosticsPlugin,
+        ))
         .add_plugins(EguiPlugin::default())
         .add_plugins(VtuberAvatarPlugin)
         .insert_resource(InferenceProjectRoot(resource_root()))

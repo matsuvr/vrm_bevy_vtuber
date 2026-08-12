@@ -17,6 +17,9 @@ pub mod capture_runtime;
 /// Diagnostics snapshot for the UI.
 pub mod diagnostics;
 
+/// Bounded release-run metrics export for performance acceptance.
+pub mod metrics_export;
+
 /// Error presenter — maps domain errors to user-facing messages.
 pub mod error_presenter;
 
