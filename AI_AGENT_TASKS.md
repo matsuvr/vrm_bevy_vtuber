@@ -10031,7 +10031,7 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 
 #### Q2-06-002-003: VRM zero-rangeとQuaternion signを修正する
 
-状態: `PENDING`
+状態: `DONE`
 依存: `Q2-06-002-002`
 
 - `inputMaxValue == 0`のVRM 1.0推奨挙動をBone／Expressionの両mappingで実装する。
