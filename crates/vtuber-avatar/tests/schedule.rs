@@ -25,8 +25,7 @@ fn avatar_schedule_has_no_synthetic_look_at_api() {
     // importing those types, and our lib.rs doesn't re-export them.
 }
 
-/// Verify that the schedule integration points required by the design remain
-/// public and type-check together:
+/// Verify the schedule graph registered by the real avatar and VRM plugins:
 ///
 /// 1. apply_avatar_request_events (Update, chained)
 /// 2. despawn_unloading_avatar (Update, chained)
@@ -38,104 +37,92 @@ fn avatar_schedule_has_no_synthetic_look_at_api() {
 #[test]
 fn avatar_schedule_ordering_matches_design() {
     use bevy::app::AnimationSystems;
-    use bevy::ecs::schedule::IntoScheduleConfigs;
+    use bevy::ecs::schedule::{IntoScheduleConfigs, Schedule};
     use bevy::prelude::*;
+    use bevy::winit::WinitPlugin;
     use bevy_vrm1::prelude::VrmSystemSets;
-    use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
 
-    // These expressions compile only while the direct writer and its declared
-    // constraints boundary remain valid Bevy system configuration points.
-    let _ = vtuber_avatar::bind_humanoid_bones;
-    let _direct_before_constraints = apply_direct_body_tracking.before(VrmSystemSets::Constraints);
+    fn system_index(schedule: &Schedule, suffix: &str) -> usize {
+        let matches: Vec<_> = schedule
+            .systems()
+            .expect("schedule should already be initialized")
+            .enumerate()
+            .filter(|(_, (_, system))| system.name().contains(suffix))
+            .map(|(index, _)| index)
+            .collect();
+        if matches.len() != 1 {
+            let names: Vec<_> = schedule
+                .systems()
+                .expect("schedule should already be initialized")
+                .map(|(_, system)| system.name().to_string())
+                .collect();
+            panic!("expected one system containing {suffix}; registered systems: {names:#?}");
+        }
+        matches[0]
+    }
 
-    #[derive(Resource, Default)]
-    struct Order(Vec<&'static str>);
-    fn animation(mut order: ResMut<Order>) {
-        order.0.push("animation");
+    fn assert_before(schedule: &Schedule, before: &str, after: &str) {
+        assert!(
+            system_index(schedule, before) < system_index(schedule, after),
+            "registered schedule should order {before} before {after}"
+        );
     }
-    fn body_input(mut order: ResMut<Order>) {
-        order.0.push("body-input");
-    }
-    fn direct_body(mut order: ResMut<Order>) {
-        order.0.push("direct-body");
-    }
-    fn gaze_input(mut order: ResMut<Order>) {
-        order.0.push("gaze-input");
-    }
-    fn gaze(mut order: ResMut<Order>) {
-        order.0.push("gaze");
-    }
-    fn expression_update(mut order: ResMut<Order>) {
-        order.0.push("expression-update");
-    }
-    fn expressions(mut order: ResMut<Order>) {
-        order.0.push("expressions");
-    }
-    fn propagation_after_expressions(mut order: ResMut<Order>) {
-        order.0.push("propagation-after-expressions");
-    }
-    fn constraints(mut order: ResMut<Order>) {
-        order.0.push("constraints");
-    }
-    fn propagation_after_constraints(mut order: ResMut<Order>) {
-        order.0.push("propagation-after-constraints");
-    }
-    fn spring(mut order: ResMut<Order>) {
-        order.0.push("spring");
-    }
+
+    fn trace_animation() {}
+    fn trace_gaze() {}
+    fn trace_expressions() {}
+    fn trace_propagate_expressions() {}
+    fn trace_constraints() {}
+    fn trace_propagate_constraints() {}
+    fn trace_spring_bone() {}
 
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins).init_resource::<Order>();
-    app.configure_sets(
-        PostUpdate,
-        (
-            VrmSystemSets::GazeControl,
-            VrmSystemSets::Expressions,
-            VrmSystemSets::PropagateAfterExpressions,
-            VrmSystemSets::Constraints,
-            VrmSystemSets::PropagateAfterConstraints,
-            VrmSystemSets::SpringBone,
-        )
-            .chain()
-            .after(AnimationSystems),
+    app.add_plugins(
+        DefaultPlugins
+            .build()
+            .disable::<WinitPlugin>()
+            .set(WindowPlugin {
+                primary_window: None,
+                ..default()
+            }),
     );
+    app.add_plugins(vtuber_avatar::VtuberAvatarPlugin);
     app.add_systems(
         PostUpdate,
         (
-            animation.in_set(AnimationSystems),
-            body_input.after(AnimationSystems).before(direct_body),
-            direct_body.after(body_input).before(gaze_input),
-            gaze_input
-                .after(direct_body)
-                .before(VrmSystemSets::GazeControl),
-            gaze.in_set(VrmSystemSets::GazeControl),
-            expression_update
-                .after(VrmSystemSets::GazeControl)
-                .before(VrmSystemSets::Expressions),
-            expressions.in_set(VrmSystemSets::Expressions),
-            propagation_after_expressions.in_set(VrmSystemSets::PropagateAfterExpressions),
-            constraints.in_set(VrmSystemSets::Constraints),
-            propagation_after_constraints.in_set(VrmSystemSets::PropagateAfterConstraints),
-            spring.in_set(VrmSystemSets::SpringBone),
+            trace_animation.in_set(AnimationSystems),
+            trace_gaze.in_set(VrmSystemSets::GazeControl),
+            trace_expressions.in_set(VrmSystemSets::Expressions),
+            trace_propagate_expressions.in_set(VrmSystemSets::PropagateAfterExpressions),
+            trace_constraints.in_set(VrmSystemSets::Constraints),
+            trace_propagate_constraints.in_set(VrmSystemSets::PropagateAfterConstraints),
+            trace_spring_bone.in_set(VrmSystemSets::SpringBone),
         ),
     );
-    app.update();
-    assert_eq!(
-        app.world().resource::<Order>().0,
-        [
-            "animation",
-            "body-input",
-            "direct-body",
-            "gaze-input",
-            "gaze",
-            "expression-update",
-            "expressions",
-            "propagation-after-expressions",
-            "constraints",
-            "propagation-after-constraints",
-            "spring"
-        ]
-    );
+
+    app.world_mut()
+        .schedule_scope(PostUpdate, |world, schedule| {
+            schedule
+                .initialize(world)
+                .expect("registered PostUpdate schedule should initialize");
+            for (before, after) in [
+                ("trace_animation", "update_body_tracking_pose_input"),
+                (
+                    "update_body_tracking_pose_input",
+                    "apply_direct_body_tracking",
+                ),
+                ("apply_direct_body_tracking", "update_direct_look_at_input"),
+                ("update_direct_look_at_input", "trace_gaze"),
+                ("trace_gaze", "apply_tracked_expressions"),
+                ("apply_tracked_expressions", "trace_expressions"),
+                ("trace_expressions", "trace_propagate_expressions"),
+                ("trace_propagate_expressions", "trace_constraints"),
+                ("trace_constraints", "trace_propagate_constraints"),
+                ("trace_propagate_constraints", "trace_spring_bone"),
+            ] {
+                assert_before(schedule, before, after);
+            }
+        });
 }
 
 /// Verify that the lifecycle types are properly exported for schedule integration.

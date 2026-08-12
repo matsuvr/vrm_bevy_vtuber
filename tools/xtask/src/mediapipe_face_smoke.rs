@@ -666,7 +666,6 @@ fn print_summary(stats: &SmokeStats, capture: &vtuber_camera::CaptureMetrics, js
     }
 }
 
-#[cfg(target_os = "windows")]
 fn percentile_ms(values: &[Duration], percentile: f64) -> f64 {
     if values.is_empty() {
         return 0.0;

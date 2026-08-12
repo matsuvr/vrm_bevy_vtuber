@@ -9946,7 +9946,7 @@ cargo deny check
 - 毎frameのbone名検索、固定lerp、rest orientationの重複cache、tracking deltaの累積を導入しない。
 - VRMA playbackまたは未実施hardware acceptanceを対応済みと表現しない。
 
-**完了記録（2026-08-12）**
+**完了記録（2026-08-13）**
 
 - upstream revision `f9593fd78136fb9e0507bcae111e09291ec9b82a`をbaseとして、licenseとprovenanceを保持したvendored patchへdirect yaw／pitch／roll入力、axis別weight、yaw engagement、optional bone再正規化、bone別half-life／limitを追加した。
 - `vtuber-avatar`はbone Transformを直接書かず、generation一致の`BodyTrackingPoseInput`だけを更新する。旧`HeadNeckWeights`とrest orientation cacheは永続化対象ではなかったため、設定migrationは不要だった。
@@ -10039,12 +10039,18 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 
 #### Q2-06-002-004: CI・実schedule test・visual gate状態を修正する
 
-状態: `PENDING`
+状態: `DONE`
 依存: `Q2-06-002-003`
 
 - `percentile_ms`を全platformでtest compile可能にする。
 - 実際の`VtuberAvatarPlugin`／`VrmPlugin`登録を使うschedule回帰testを追加する。
 - Windows実カメラ＋実VRM visual acceptanceとmacOS実機確認は、証拠がなければ`PENDING`／`NOT RUN`のままにする。
+
+**完了記録（2026-08-12）**
+
+- `percentile_ms`のWindows限定compile guardを外し、macOS test moduleでも同じpure functionをcompileできるようにした。
+- 手組みのset順テストを、実際の`VtuberAvatarPlugin`が追加する`VrmPlugin`とavatar bridge systemへtrace systemを加えた解決済み実行順検査へ置き換えた。
+- Windows C922＋実VRM visual acceptance 6項目は`PENDING`、macOS実機確認は`NOT RUN`。過去のM1眼球確認をhead-relative gaze修正後の証拠として再利用しない。
 
 ---
 
