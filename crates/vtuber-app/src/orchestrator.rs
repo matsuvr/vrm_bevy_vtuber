@@ -62,7 +62,7 @@ pub struct Orchestrator {
     capture_desired: bool,
     /// Whether the capture system has acknowledged the current intent.
     capture_ack: bool,
-    /// Whether a camera enumeration was explicitly requested.
+    /// Whether a camera enumeration is pending.
     camera_refresh_requested: bool,
     /// Calibration command waiting for the tracking bridge.
     calibration_request: Option<CalibrationRequest>,
@@ -166,7 +166,7 @@ impl Default for Orchestrator {
             lifecycle_state: AvatarLifecycleState::None,
             capture_desired: false,
             capture_ack: true,
-            camera_refresh_requested: false,
+            camera_refresh_requested: true,
             calibration_request: None,
             inference_retry_requested: false,
         }
@@ -251,13 +251,14 @@ impl Orchestrator {
 
     /// Refresh the list of available cameras from an external source.
     pub fn set_camera_list(&mut self, cameras: Vec<CameraDescriptor>) {
+        let selected_id = self
+            .selected_camera
+            .and_then(|index| self.cameras.get(index))
+            .map(|camera| camera.id.clone());
         self.cameras = cameras;
-        // If the previously selected index is now out of range, clear it.
-        if let Some(idx) = self.selected_camera
-            && idx >= self.cameras.len()
-        {
-            self.selected_camera = None;
-        }
+        self.selected_camera = selected_id
+            .as_ref()
+            .and_then(|id| self.cameras.iter().position(|camera| camera.id == *id));
     }
 
     /// Select a camera by index.
@@ -688,6 +689,7 @@ mod tests {
         let orch = Orchestrator::default();
         assert_eq!(orch.import_state(), &ImportState::Idle);
         assert!(orch.last_error().is_none());
+        assert!(orch.camera_refresh_requested());
     }
 
     #[test]
@@ -731,6 +733,26 @@ mod tests {
         }]);
         orch.process_action(&UiAction::SelectCamera { index: 99 });
         assert_eq!(orch.selected_camera, None);
+    }
+
+    #[test]
+    fn camera_refresh_preserves_selected_identity_across_reordering() {
+        let mut orch = Orchestrator::default();
+        let c922 = CameraDescriptor {
+            id: "msmf:c922-symbolic-link".into(),
+            label: "C922".into(),
+        };
+        let elecom = CameraDescriptor {
+            id: "msmf:elecom-symbolic-link".into(),
+            label: "ELECOM".into(),
+        };
+        orch.set_camera_list(vec![c922.clone(), elecom.clone()]);
+        orch.process_action(&UiAction::SelectCamera { index: 0 });
+
+        orch.set_camera_list(vec![elecom, c922.clone()]);
+
+        assert_eq!(orch.selected_camera, Some(1));
+        assert_eq!(orch.selected_camera_descriptor(), Some(c922));
     }
 
     #[test]

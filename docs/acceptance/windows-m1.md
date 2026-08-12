@@ -1,6 +1,6 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — live MediaPipe tracking, face loss/reacquire, Start/Stop, avatar replace/unload/reload, camera unplug/reconnect, timed reacquisition, resource sampling, and 30-minute soak were exercised; the Live preview and viewport framing are not valid for direct avatar verification, and capture-to-apply latency remains unavailable
+**Status:** BLOCKED — preview/framing、real pose apply、複数camera選択は修復済み。C922での最終functional/recovery再受入、render FPS、bounded 30-minute resource exportが未完了
 **Date:** 2026-08-12
 **Commit SHA:** `ee88dfa`
 **Binary:** `vtuber-desktop` (release profile)
@@ -17,10 +17,10 @@
 | RAM | NOT RECORDED — no hardware claim |
 | Screen | NOT RECORDED — no hardware claim |
 | Camera 1 | c922 Pro Stream Webcam — MSMF index 0 |
-| Camera 2 (if available) | NOT RUN |
+| Camera 2 | ELECOM 2MP Webcam — MSMF symbolic link VID_056E/PID_701E |
 | Build profile | release |
 | Rust toolchain | rustc 1.97.1 / cargo 1.97.1 |
-| Binary SHA-256 | `69B71344032ABDB18C5DE1EAD785AB9ECFE98BBE75B4240B4470B94B70831C3E` |
+| Binary SHA-256 | `13EF24BE2A937DB0CC1F11AFB0C6B1F87A3992ECAB93F07171293FCA46843298` |
 
 ### Model Manifest
 
@@ -138,6 +138,33 @@ latency clock path is populated. `M1-08-018` remains blocked only until the
 same final functional matrix is repeated on the required C922, and
 `M1-08-019` still requires render FPS plus the bounded 30-minute resource
 export.
+
+### Multiple-camera identity and selection validation
+
+`M1-08-022` reproduced the selector problem with C922 and ELECOM connected at
+the same time. A direct MSMF backend probe enumerated both physical devices:
+
+```text
+0: c922 Pro Stream Webcam [VID_046D/PID_085C]
+1: ELECOM 2MP Webcam [VID_056E/PID_701E]
+```
+
+The app previously started with no enumeration request and later opened the
+selected list position as a fresh numeric MSMF index. A device-order change
+could therefore open a different physical camera. The repaired path requests
+enumeration on startup, uses the MSMF symbolic device link as the descriptor
+identity and open key, preserves selection by identity across Refresh
+reordering, and reports enumeration errors instead of converting them to an
+empty list.
+
+With both cameras still connected, the rebuilt release GUI displayed both
+choices without a manual Refresh. `c922 Pro Stream Webcam` was explicitly
+selected and Live displayed real preview frames. A separate five-second
+MediaPipe smoke opened the C922 symbolic link and reported 87 captured frames,
+79 face results, 0 contract failures, and 0 latest-slot overwrites. The GUI run
+was stopped and closed normally. This validates enumeration, selection, and
+physical-device open; the full C922 functional/recovery matrix remains in
+`M1-08-018`.
 
 The 60-second diagnostics observation showed approximately:
 
@@ -488,7 +515,7 @@ Categories: correctness, compatibility, performance, hardware-specific, test-env
 
 | Artifact | SHA-256 | Path |
 |----------|---------|------|
-| vtuber-desktop.exe | `69B71344032ABDB18C5DE1EAD785AB9ECFE98BBE75B4240B4470B94B70831C3E` | target/release/vtuber-desktop.exe |
+| vtuber-desktop.exe | `13EF24BE2A937DB0CC1F11AFB0C6B1F87A3992ECAB93F07171293FCA46843298` | target/release/vtuber-desktop.exe |
 | face_landmarker.task | `64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF` | assets/models/face_landmarker.task |
 | inore-vrm1.vrm | `B5A3D4126C4A30EF3BFBCFC764A24DC48511B558799D98D4C2FF1DB0BDC7AB01` | tests/fixtures/vrm/inore-vrm1.vrm |
 | Metrics CSV | — | not generated; live diagnostics recorded in this report |

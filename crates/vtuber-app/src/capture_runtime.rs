@@ -82,18 +82,17 @@ impl CaptureRuntime {
     }
 
     /// Enumerates available cameras.
-    #[must_use]
-    pub fn enumerate_cameras(&self) -> Vec<CameraDescriptor> {
+    pub fn enumerate_cameras(&self) -> Result<Vec<CameraDescriptor>, String> {
         #[cfg(target_os = "windows")]
         {
             let backend = vtuber_camera::backend::msmf::MsmfBackend::new();
-            backend.enumerate().unwrap_or_default()
+            backend.enumerate().map_err(|error| error.to_string())
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let backend = vtuber_camera::mock::MockBackend::default();
-            backend.enumerate().unwrap_or_default()
+            backend.enumerate().map_err(|error| error.to_string())
         }
     }
 
@@ -343,8 +342,12 @@ pub fn capture_bridge_system(
     // acknowledgements. Refreshing while the pipeline is running must not
     // accidentally stop or restart the worker.
     if orchestrator.camera_refresh_requested() {
-        let cameras = capture.enumerate_cameras();
-        orchestrator.set_camera_list(cameras);
+        match capture.enumerate_cameras() {
+            Ok(cameras) => orchestrator.set_camera_list(cameras),
+            Err(error) => orchestrator.set_last_error(Some(
+                crate::orchestrator::OrchestratorError::CameraFailed(error),
+            )),
+        }
         orchestrator.clear_camera_refresh_request();
     }
 

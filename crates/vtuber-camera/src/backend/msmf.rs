@@ -8,7 +8,7 @@
 use nokhwa::Camera;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{
-    ApiBackend, CameraFormat as NokhwaFormat, CameraIndex, FrameFormat, Resolution,
+    ApiBackend, CameraFormat as NokhwaFormat, CameraIndex, CameraInfo, FrameFormat, Resolution,
 };
 use vtuber_core::{FrameSeq, MonoTimeNs, PixelFormat, StopToken, VideoFrame};
 
@@ -39,23 +39,7 @@ impl CameraBackend for MsmfBackend {
         let devices = nokhwa::query(ApiBackend::MediaFoundation)
             .map_err(|e| CameraError::EnumFailed(format!("{e}")))?;
 
-        Ok(devices
-            .into_iter()
-            .map(|info| {
-                let index = match info.index() {
-                    CameraIndex::Index(index) => *index,
-                    CameraIndex::String(index) => index.parse::<u32>().unwrap_or(0),
-                };
-                // The numeric index is needed to open the current device, but
-                // the descriptor also carries backend identity fields so a
-                // persisted preference is never just an index.
-                let id = format!("msmf:{index}:{}:{}", info.description(), info.misc());
-                CameraDescriptor {
-                    id,
-                    label: info.human_name(),
-                }
-            })
-            .collect())
+        devices.into_iter().map(descriptor_from_info).collect()
     }
 
     fn open(
@@ -63,17 +47,17 @@ impl CameraBackend for MsmfBackend {
         descriptor: &CameraDescriptor,
         request: &CameraRequest,
     ) -> Result<Box<dyn CameraStream>, CameraError> {
-        let index = parse_msmf_index(&descriptor.id)?;
-        let cam_index = CameraIndex::Index(index as u32);
+        let cam_index = parse_msmf_device_id(&descriptor.id)?;
 
         // Create camera with a default format to query capabilities.
         let default_fmt = NokhwaFormat::new(Resolution::new(640, 480), FrameFormat::MJPEG, 30);
-        let mut camera = Camera::new(
+        let mut camera = Camera::with_backend(
             cam_index,
             nokhwa::utils::RequestedFormat::with_formats(
                 nokhwa::utils::RequestedFormatType::Closest(default_fmt),
                 &[FrameFormat::MJPEG, FrameFormat::YUYV],
             ),
+            ApiBackend::MediaFoundation,
         )
         .map_err(map_nokhwa_error)?;
 
@@ -101,15 +85,28 @@ impl CameraBackend for MsmfBackend {
     }
 }
 
-/// Parse the MSMF index from a descriptor id like `"msmf:0:<identity>"`.
-fn parse_msmf_index(id: &str) -> Result<usize, CameraError> {
-    let idx_str = id
+/// Builds a descriptor whose identity is the MSMF symbolic device link.
+fn descriptor_from_info(info: CameraInfo) -> Result<CameraDescriptor, CameraError> {
+    let symbolic_link = info.misc();
+    if symbolic_link.is_empty() {
+        return Err(CameraError::EnumFailed(format!(
+            "MSMF device `{}` has no symbolic link",
+            info.human_name()
+        )));
+    }
+    Ok(CameraDescriptor {
+        id: format!("msmf:{symbolic_link}"),
+        label: info.human_name(),
+    })
+}
+
+/// Parse the stable MSMF symbolic link from a descriptor id.
+fn parse_msmf_device_id(id: &str) -> Result<CameraIndex, CameraError> {
+    let symbolic_link = id
         .strip_prefix("msmf:")
-        .and_then(|value| value.split(':').next())
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| CameraError::OpenFailed(format!("not an MSMF descriptor id: {id}")))?;
-    idx_str
-        .parse::<usize>()
-        .map_err(|_| CameraError::OpenFailed(format!("invalid MSMF index: {idx_str}")))
+    Ok(CameraIndex::String(symbolic_link.to_owned()))
 }
 
 /// Enumerate format candidates from an open camera.
@@ -306,14 +303,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_msmf_index_valid() {
-        assert_eq!(parse_msmf_index("msmf:0").unwrap(), 0);
-        assert_eq!(parse_msmf_index("msmf:3").unwrap(), 3);
+    fn descriptor_identity_uses_symbolic_link_not_enumeration_index() {
+        let info = CameraInfo::new(
+            "C922",
+            "MediaFoundation Camera",
+            r"\\?\usb#vid_046d&pid_085c",
+            CameraIndex::Index(7),
+        );
+        let descriptor = descriptor_from_info(info).unwrap();
+        assert_eq!(descriptor.id, r"msmf:\\?\usb#vid_046d&pid_085c");
+        assert!(!descriptor.id.contains(":7:"));
     }
 
     #[test]
-    fn parse_msmf_index_invalid_prefix() {
-        assert!(parse_msmf_index("avf:0").is_err());
+    fn parse_msmf_device_id_returns_symbolic_identity() {
+        assert_eq!(
+            parse_msmf_device_id(r"msmf:\\?\usb#vid_046d&pid_085c").unwrap(),
+            CameraIndex::String(r"\\?\usb#vid_046d&pid_085c".to_owned())
+        );
+        assert!(parse_msmf_device_id("msmf:").is_err());
+        assert!(parse_msmf_device_id("avf:0").is_err());
     }
 
     #[test]
