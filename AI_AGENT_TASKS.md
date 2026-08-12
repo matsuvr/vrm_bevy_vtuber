@@ -48,7 +48,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-022` | `DONE` | C922とELECOMの起動時列挙、symbolic-link identity選択、C922実previewを確認した。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
-| `Q2-06` | `IN_PROGRESS` | `Q2-06-001`でdirect-pose `bevy_vrm1::BodyTracking`を導入し、上半身追従を統合する。 |
+| `Q2-06` | `DONE` | `Q2-06-001`でdirect-pose `bevy_vrm1::BodyTracking`を導入し、上半身追従を統合した。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
 M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05`のWindows部分から一つのtask ID**である。M1-08-018はC922 symbolic-link明示選択後のreal preview、real-VRM head／blink／mouth／gaze、capture-to-apply、Stop／Start 3回と既存recovery evidenceを統合して`DONE`、M1-08-019は30分bounded performance gateをPASSした。`M1-09`は`DEFERRED`のままとする。
@@ -95,7 +95,7 @@ M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05
 | `Q2-03` | `Q2-03-001`〜`Q2-03-008` | 8 | `PENDING`（008はmacOS再開までdeferred） |
 | `Q2-04` | `Q2-04-001`〜`Q2-04-008` | 8 | `PENDING`（004〜008はmacOS再開までdeferred） |
 | `Q2-05` | `Q2-05-001`〜`Q2-05-008` | 8 | `PENDING` |
-| `Q2-06` | `Q2-06-001` | 1 | `IN_PROGRESS` |
+| `Q2-06` | `Q2-06-001` | 1 | `DONE` |
 | `R3-01` | `R3-01-001`〜`R3-01-010` | 10 | `PENDING` |
 
 ### 0.4 status更新
@@ -9875,10 +9875,9 @@ cargo test --workspace --release
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-# Research 3 — 自由研究としての評価
 ## Q2-06: BodyTracking上半身追従
 
-状態: `IN_PROGRESS`
+状態: `DONE`
 実行単位: `Q2-06-001`
 重点参照: DESIGN.md §7.3、§16.5〜§16.7、ADR-002、ADR-004
 
@@ -9890,7 +9889,7 @@ calibrationとsemantic座標変換済みのface yaw／pitch／rollを、direct-p
 
 #### Q2-06-001: direct-pose BodyTrackingと上半身追従を統合する
 
-状態: `IN_PROGRESS`
+状態: `DONE`
 依存: `M1-08-019`
 親参照: DESIGN.md §7.3、§16.5〜§16.7、ADR-002、ADR-004
 
@@ -9946,9 +9945,20 @@ cargo deny check
 - 毎frameのbone名検索、固定lerp、rest orientationの重複cache、tracking deltaの累積を導入しない。
 - VRMA playbackまたは未実施hardware acceptanceを対応済みと表現しない。
 
+**完了記録（2026-08-12）**
+
+- upstream revision `f9593fd78136fb9e0507bcae111e09291ec9b82a`をbaseとして、licenseとprovenanceを保持したvendored patchへdirect yaw／pitch／roll入力、axis別weight、yaw engagement、optional bone再正規化、bone別half-life／limitを追加した。
+- `vtuber-avatar`はbone Transformを直接書かず、generation一致の`BodyTrackingPoseInput`だけを更新する。旧`HeadNeckWeights`とrest orientation cacheは永続化対象ではなかったため、設定migrationは不要だった。
+- direct rootはlegacy `LookAt + BodyTracking` queryから除外し、両writerを同じscheduleで実行する排他testを追加した。eye expression／eye-bone gazeは独立経路のまま維持した。
+- root workspaceで`cargo fmt --all -- --check`、`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`、`cargo deny check`、`git diff --check`を実行し、すべて成功した。
+- `vendor/bevy_vrm1`で`cargo fmt --all -- --check`、`cargo check --all-targets`、`cargo clippy --all-targets -- -D warnings`、`cargo test`を実行し、67 unit testsと10 doctestsを含めて成功した。
+- Windows実機での新しい上半身追従確認、macOS実機確認、VRMA playback確認は`NOT RUN`。既存M1のhead tracking実機証拠を本変更の上半身受入証拠として再利用しない。
+- commits: `docs(avatar): approve direct body tracking path`、`feat(vrm): extend body tracking for direct pose`、`refactor(avatar): route pose through body tracking`、`test(avatar): close body tracking compatibility gaps`。
+
 ---
 
 
+# Research 3 — 自由研究としての評価
 ## R3-01: smoothingとlatencyの比較実験
 状態: `PENDING`
 実行単位: `R3-01-NNN`
