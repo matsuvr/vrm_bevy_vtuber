@@ -51,19 +51,20 @@ Do not add abstraction, feature flags, crates, CI jobs, manifests, or documentat
 - Isolate all `bevy_vrm1` dependencies in `vtuber-avatar`.
 - Do not expose `bevy_vrm1` types through `vtuber-core` or `vtuber-tracking` APIs.
 - Pin `bevy_vrm1` to the exact approved revision. Upgrade only in a dependency-only task or ADR.
-- Do not fork `bevy_vrm1` without a target-model reproducer, regression test, spec citation, and ADR.
+- Do not fork `bevy_vrm1` without a target-model reproducer, regression test, spec citation, and ADR. `Q2-06-001` is the approved exception for a source-derived vendored patch limited to direct-pose `BodyTracking`; preserve the upstream license and base revision and keep the dependency immutable.
 
 ## bevy_vrm1 known-path restrictions
 
 Until a task explicitly changes these rules:
 
 - Do not insert `bevy_vrm1::LookAt` on the avatar root. The pinned revision can panic for `lookAt.type = expression`.
-- Do not insert `bevy_vrm1::BodyTracking`. Webcam head pose is applied by this application’s adapter.
+- Use the `Q2-06-001` direct-pose extension of `bevy_vrm1::BodyTracking` as the sole writer for tracked head, neck, upper-chest, chest, and spine rotation.
+- Feed calibrated yaw, pitch, and roll directly to `BodyTracking`; do not create a synthetic `LookAt` target for face pose.
 - Inspect a model before loading it. Reject missing `VRMC_vrm`, non-1.0 VRM, missing hips, missing head, invalid node indices, and external URIs.
 - Use `ExpressionEntityMap` to build expression capabilities.
 - Use `ModifyExpressions` for procedural expression updates.
 - Let `bevy_vrm1` resolve binary and override behavior.
-- Apply tracked humanoid pose after Bevy `AnimationSystems` and before `VrmSystemSets::Constraints`.
+- Apply direct-pose `BodyTracking` after Bevy `AnimationSystems` and before `VrmSystemSets::Constraints`.
 - Apply direct eye-bone gaze in `VrmSystemSets::GazeControl` after `PropagateAfterConstraints`.
 - Do not disable constraints or SpringBone merely to simplify scheduling.
 

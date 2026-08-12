@@ -39,20 +39,17 @@ f9593fd78136fb9e0507bcae111e09291ec9b82a
 - `VrmSystemSets`
 - model replacement時のdetach API
 
-product pathでは使用しない:
+product pathでは顔姿勢用の`LookAt`を使用しない。固定revisionではExpression方式LookAtにreachableな未実装経路があり、顔の向きと眼球視線も別入力だからである。
 
-- `LookAt`
-- `BodyTracking`
-
-顔trackerがhead poseとgazeを直接生成するためであり、二重制御を避ける。また固定revisionではExpression方式LookAtにreachableな未実装経路がある。
+`Q2-06-001`では、固定revision由来の最小vendored patchに直接yaw／pitch／roll入力を追加した`BodyTracking`を使用する。app側adapterは入力componentだけを更新し、head、neck、upperChest、chest、spineへ直接書き込まない。直接入力がない場合のupstream `LookAt + BodyTracking`挙動は維持する。
 
 ## Compatibility and patch policy
 
 - 公式sample、VRoid Studio export、実利用modelをG0-08で検査する。
-- target modelで再現しない問題のためにforkしない。
+- target modelで再現しない問題のためにforkしない。ただし`Q2-06-001`の直接姿勢入力は、stock公開APIだけでは表現できない承認済み機能拡張として扱う。
 - valid target modelでbugを再現した場合、minimal fixture、spec根拠、regression test、upstream issueを先に作る。
 - forkが必要ならGit commit SHAへ固定し、app repositoryへsource断片をcopyしない。
-- dependency更新は機能実装と別PRにする。
+- `Q2-06-001`ではbase revision、license、差分を記録したvendored patchを許可する。変更範囲はbody trackingと必要な公開export／system登録に限定する。
 
 ## G0-08 findings
 
@@ -64,4 +61,4 @@ G0-08 compatibility gate（`cargo xtask vrm-compat`）を実施した結果、�
 - VRM 0.x モデル（`tsukuyomi-chan.vrm`）は `VRMC_vrm` を持たないため、`MODEL_NOT_VRM1` で正しく拒否される。
 - fixture に含まれる `alicia-solid.vrm` と `seed-san.vrm` は HTML ファイルであり `MODEL_FILE_INVALID` で正しく拒否される。
 
-これらの所見を受け、fork は現時点では不要と判断する。
+これらの所見に加え、stock `BodyTracking`は`LookAt`必須で、roll、upperChest、軸別weight、bone別half-life、direct pose pathを持たないことを確認した。`Q2-06-001`ではこの不足に限ったvendored patchを採用する。

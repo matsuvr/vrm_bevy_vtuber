@@ -48,7 +48,7 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 8. WindowsとmacOSのカメラ取得には`nokhwa 0.10.11`を第一候補とし、WindowsではMedia Foundation、macOSではAVFoundation backendを明示的に有効化する。
 9. 顔推論のproduction backendは、公式MediaPipe Face Landmarker Tasks 0.10.35を、監査済みの`mediapipe-rs` revision `527037fa0fe1339750140283930bbb9560460e9e`経由で使用する。CPU delegate、VIDEO mode、`assets/models/face_landmarker.task`を固定し、実行runtimeはinference worker内で所有する。
 10. 頭部姿勢はMediaPipeのface transformation matrixから、初期自動neutralまたは即時`Recenter`で保存した中立transformに対する相対剛体変換として求める。Euler角の差分や30フレーム静止ゲートは使用しない。
-11. 頭・首の姿勢は`bevy_vrm1`の`BodyTracking`へ渡さない。追跡で得た実姿勢を、`HeadBoneEntity`、`NeckBoneEntity`等へ独自adapterが加算適用する。
+11. 頭部姿勢は、`Q2-06-001`で追加する`bevy_vrm1::BodyTracking`の直接yaw／pitch／roll入力へ渡す。`BodyTracking`をhead、neck、upperChest、chest、spineへの唯一の追跡姿勢writerとし、アプリ側adapterは入力更新だけを担当する。
 12. 表情は`bevy_vrm1::ModifyExpressions`を利用する。`isBinary`、`overrideBlink`、`overrideMouth`、`overrideLookAt`の解決は`bevy_vrm1`へ委譲する。
 13. `bevy_vrm1::LookAt`はMVPでは使用しない。現行revisionでは`lookAt.type = expression`が`todo!()`へ到達するためである。視線はlook-direction Expressionまたは眼球boneの独自適用で行う。
 14. MToon、SpringBone、Node Constraintをアプリ側で再実装しない。互換性問題が発生した場合は対象モデルの回帰テストを追加し、必要最小限のupstream patchまたは一時forkで対処する。
@@ -278,7 +278,7 @@ bevy_vrm1 = {
 
 #### BodyTracking
 
-`BodyTracking`はcursorまたはtargetへの視線角からhead、neck、chest、spineを回す補助機能である。Webカメラから得た実頭部姿勢と責務が重複するため利用しない。
+stock `BodyTracking`の`LookAt`入力は、顔の向きと眼球視線を混同し、roll、upperChest、軸別配分、骨別応答速度を表現できないため、Webカメラ姿勢には使用しない。`Q2-06-001`では固定revision由来の最小patchへ直接yaw／pitch／roll入力を追加し、head、neck、upperChest、chest、spineへの追跡姿勢適用を`BodyTracking`へ統合する。直接入力がないrootでは従来の`LookAt + BodyTracking`挙動を維持する。顔姿勢用のsynthetic `LookAt` targetは作らず、eye gazeは既存のExpression／eye-bone経路に残す。
 
 #### strict deserialization
 
@@ -1240,7 +1240,7 @@ VRM更新順に合わせ、tracking applyを次へ配置する。
 ```text
 PostUpdate:
   Bevy AnimationSystems
-  -> ApplyTrackedHumanoidPose
+  -> direct-pose bevy_vrm1 BodyTracking
   -> bevy_vrm1 VrmSystemSets::Constraints
   -> PropagateAfterConstraints
   -> ApplyTrackedGaze in VrmSystemSets::GazeControl
@@ -1254,7 +1254,7 @@ PostUpdate:
 ```rust
 app.add_systems(
     PostUpdate,
-    apply_tracked_humanoid_pose
+    apply_direct_body_tracking_pose
         .after(bevy::app::AnimationSystems)
         .before(VrmSystemSets::Constraints),
 );
@@ -1269,37 +1269,36 @@ app.add_systems(
 
 Expression override発行はUpdateで行い、PostUpdateのExpression systemより前にcommandsを反映させる。
 
-### 16.6 head / neck apply
+### 16.6 BodyTracking upper-body apply
 
-headとneckはVRM 1.0の任意rest rotationを壊さないよう、model-spaceの追跡deltaを各boneのrest-local spaceへ共役変換して適用する。VRM 1.0はbone local rotationがidentityであることを保証しないため、Euler値をそのまま`Transform.rotation`へ代入してはならない。
+head、neck、upperChest、chest、spineはVRM 1.0の任意rest rotationを壊さないよう、model-spaceの追跡deltaを各boneのrest-local spaceへ共役変換して適用する。VRM 1.0はbone local rotationがidentityであることを保証しないため、Euler値をそのまま`Transform.rotation`へ代入してはならない。処理順は`spine -> chest -> upperChest -> neck -> head`とし、任意bone欠落時は存在するboneだけで軸別weightを再正規化する。
 
 ```text
-head_model_delta = rotation(yaw   * head_yaw_weight,
-                            pitch * head_pitch_weight,
-                            roll  * head_roll_weight)
-
-neck_model_delta = rotation(yaw   * neck_yaw_weight,
-                            pitch * neck_pitch_weight,
-                            roll  * neck_roll_weight)
+bone_model_delta = rotation(yaw   * bone_yaw_weight,
+                            pitch * bone_pitch_weight,
+                            roll  * bone_roll_weight)
 ```
 
-default:
+defaultのbone順は`head / neck / upperChest / chest / spine`とする。
 
-- head yaw/pitch 0.75
-- neck yaw/pitch 0.25
-- head roll 0.85
-- neck roll 0.15
-- chest 0.0
+- small yaw: `0.65 / 0.35 / 0.00 / 0.00 / 0.00`
+- large yaw: `0.42 / 0.23 / 0.17 / 0.11 / 0.07`
+- pitch: `0.68 / 0.25 / 0.06 / 0.01 / 0.00`
+- roll: `0.72 / 0.23 / 0.05 / 0.00 / 0.00`
+- yaw body engagement: 12°から45°をclamp済みsmoothstepで補間する。
+- half-life: head 0.055秒、neck 0.105秒、upperChest 0.180秒、chest 0.285秒、spine 0.450秒。
 
-binding時に、avatar rootと各boneのrest global rotationからmodel-space rest orientationを保存する。
+`bevy_vrm1`が各boneへ付与する`RestTransform`と`RestGlobalTransform`をrest orientationの正本とする。
 
 ```text
 R_bone_rest_model = inverse(R_root_rest_global) * R_bone_rest_global
 R_delta_local     = inverse(R_bone_rest_model) * R_delta_model * R_bone_rest_model
-R_output_local    = R_bone_rest_local * R_delta_local
+R_tracking_target = R_bone_rest_local * R_delta_local
+R_tracking_delta  = inverse(R_bone_rest_local) * R_tracking_target
+R_output_local    = R_animated_base_local * R_tracking_delta
 ```
 
-毎frame、neckからheadの順にrest poseを基準として再計算し、前frame値へ乗算して蓄積しない。MVPではVRMAを再生しないため、このrest-based方式を正式仕様とする。将来animationとtrackingを合成する場合は、animation base抽出とadditive合成を別ADR・別taskで設計し、現在の式へ場当たり的なstate detectionを追加しない。
+各frameでanimation systemが書いたbase姿勢を検出し、そのbaseへrest-relative tracking deltaを加算する。前frameのtracking deltaを再度乗算してはならない。tracking喪失時はtarget角を0へ戻し、同じbone別half-lifeでanimated baseへ復帰する。汎用Bevy Animationとの加算合成を自動検証するが、VRMA playback自体は固定scopeどおり未サポートであり、実機互換性を合格扱いしない。
 
 ### 16.7 range limit
 

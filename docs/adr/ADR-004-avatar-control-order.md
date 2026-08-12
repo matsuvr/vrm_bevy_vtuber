@@ -29,13 +29,13 @@ roll  -> -Z rotation
 
 実装候補は`Quat::from_euler(EulerRot::YXZ, yaw, -pitch, -roll)`。人工点群と公式VRM 1.0 sampleで符号を固定し、目視だけで反転しない。
 
-### Head／neck
+### Direct-pose BodyTracking
 
 `PostUpdate`で次の順序に置く。
 
 ```text
 AnimationSystems
- -> ApplyTrackedHumanoidPose
+ -> DirectPoseBodyTracking
  -> VrmSystemSets::Constraints
  -> PropagateAfterConstraints
 ```
@@ -48,7 +48,9 @@ R_delta_local     = inverse(R_bone_rest_model) * R_delta_model * R_bone_rest_mod
 R_output_local    = R_bone_rest_local * R_delta_local
 ```
 
-MVPではVRMAを再生せず、毎frame rest poseから再計算して蓄積を防ぐ。animationとの合成は別ADRなしに追加しない。
+直接入力は`spine -> chest -> upperChest -> neck -> head`の順に適用する。各boneのtracking targetからrest-relative deltaを求め、animation systemが書いたbaseへ`base * delta`で加算する。前frameの出力とlast deltaを保持してanimationによるbase更新を識別し、deltaを累積させない。bone間の非Humanoid中間nodeを含む実際の`ChildOf`経路へ最新`GlobalTransform`を伝播する。
+
+tracking喪失時はtarget yaw／pitch／rollを0へ戻し、bone別half-lifeでanimated baseへ復帰する。汎用Bevy Animationへの加算合成はこのADRの対象だが、VRMA playbackの製品サポートを追加するものではない。
 
 ### Gaze
 
@@ -66,4 +68,4 @@ procedural expressionは`ModifyExpressions`へ統合し、1アバター・1フ�
 
 ## Consequences
 
-tracking coreはBevy／VRM座標を知らず、符号変換とrest-pose変換は`vtuber-avatar`へ限定される。MVPでVRMAを使わないことにより、animation base検出という不確実性を持ち込まない。
+tracking coreはBevy／VRM座標を知らない。`vtuber-avatar`は既にcalibrationとsemantic座標変換が済んだyaw／pitch／rollを`BodyTrackingPoseInput`へ渡し、bone Transformへの適用、rest-pose変換、animation base検出は`bevy_vrm1`の`BodyTracking`へ限定される。eye gazeは独立したGazeControl経路を維持する。

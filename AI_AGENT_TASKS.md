@@ -48,6 +48,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-022` | `DONE` | C922とELECOMの起動時列挙、symbolic-link identity選択、C922実previewを確認した。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
+| `Q2-06` | `IN_PROGRESS` | `Q2-06-001`でdirect-pose `bevy_vrm1::BodyTracking`を導入し、上半身追従を統合する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
 M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05`のWindows部分から一つのtask ID**である。M1-08-018はC922 symbolic-link明示選択後のreal preview、real-VRM head／blink／mouth／gaze、capture-to-apply、Stop／Start 3回と既存recovery evidenceを統合して`DONE`、M1-08-019は30分bounded performance gateをPASSした。`M1-09`は`DEFERRED`のままとする。
@@ -94,6 +95,7 @@ M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05
 | `Q2-03` | `Q2-03-001`〜`Q2-03-008` | 8 | `PENDING`（008はmacOS再開までdeferred） |
 | `Q2-04` | `Q2-04-001`〜`Q2-04-008` | 8 | `PENDING`（004〜008はmacOS再開までdeferred） |
 | `Q2-05` | `Q2-05-001`〜`Q2-05-008` | 8 | `PENDING` |
+| `Q2-06` | `Q2-06-001` | 1 | `IN_PROGRESS` |
 | `R3-01` | `R3-01-001`〜`R3-01-010` | 10 | `PENDING` |
 
 ### 0.4 status更新
@@ -9874,6 +9876,78 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 # Research 3 — 自由研究としての評価
+## Q2-06: BodyTracking上半身追従
+
+状態: `IN_PROGRESS`
+実行単位: `Q2-06-001`
+重点参照: DESIGN.md §7.3、§16.5〜§16.7、ADR-002、ADR-004
+
+### 目的
+
+calibrationとsemantic座標変換済みのface yaw／pitch／rollを、direct-pose入力を追加した`bevy_vrm1::BodyTracking`へ渡し、head、neck、upperChest、chest、spineへ自然な遅延を伴って加算適用する。顔姿勢writerを`BodyTracking`へ一本化し、eye gazeは独立経路として維持する。
+
+### 実行subtask
+
+#### Q2-06-001: direct-pose BodyTrackingと上半身追従を統合する
+
+状態: `IN_PROGRESS`
+依存: `M1-08-019`
+親参照: DESIGN.md §7.3、§16.5〜§16.7、ADR-002、ADR-004
+
+**変更候補**
+
+- `AGENTS.md`
+- `DESIGN.md`
+- `docs/adr/ADR-002-bevy-vrm1-runtime.md`
+- `docs/adr/ADR-004-avatar-control-order.md`
+- `Cargo.toml`／`Cargo.lock`
+- sourceとlicense／base revisionを記録した最小vendored `bevy_vrm1` patch
+- `crates/vtuber-avatar/src/pose/`
+- `crates/vtuber-avatar/src/plugin.rs`
+- `crates/vtuber-avatar/tests/`
+
+**実装指示**
+
+- 固定revision `f9593fd78136fb9e0507bcae111e09291ec9b82a`の`body_tracking.rs`、`look_at.rs`、`system_set.rs`、plugin登録、rest transformとhumanoid bone holderを基準にする。
+- `BodyTrackingPoseInput`相当のradian yaw／pitch／roll、confidence weight、active flagを追加し、直接入力では`LookAt`を要求しない。
+- small／large yaw、pitch、rollのnamed weights、12°〜45°smoothstep engagement、optional bone再正規化、bone別half-lifeとrotation limitを設定可能にする。
+- bone順は`spine -> chest -> upperChest -> neck -> head`とし、実際の`ChildOf`経路を使って中間nodeを含む`GlobalTransform`を更新する。
+- `RestTransform`／`RestGlobalTransform`を正本とし、animation baseへ`base * (rest.inverse() * tracking_target)`で加算する。tracking deltaを累積させず、loss時はbone別half-lifeでneutralへ戻す。
+- direct入力rootをlegacy `LookAt + BodyTracking` pathから除外し、direct pathを`AnimationSystems`後かつ`Constraints`前へ置く。legacy pathの順序と挙動は維持する。
+- `vtuber-avatar`の旧`apply_tracked_head_pose`をTransform writerから入力bridgeへ置き換え、同じboneへのwriterを一つにする。
+- 顔姿勢用synthetic `LookAt`を作らず、既存eye expression／eye-bone gazeを維持する。
+- Bevy、`bevy_vrm1`のbase revision、その他依存を無関係に更新しない。unsafe、warning suppression、新規IK dependencyを追加しない。
+
+**完了条件**
+
+- 指定された軸別weight、engagement、optional bone再正規化、bone別half-life、shortest-angle smoothingがpure unit testで固定される。
+- upperChest／chest／spine／neckの欠落でpanicせず、元weightが0のboneを勝手に参加させない。
+- animation baseへの加算、非累積、base更新検出、tracking loss／復帰、finite guardが自動検証される。
+- direct入力があるrootはdirect pathだけ、ないrootはlegacy pathだけで処理される。
+- eye gazeが独立し、headの最新`GlobalTransform`を参照できる。
+- workspaceとvendored dependencyのfmt、check、clippy、testが成功し、`cargo deny check`が成功する。
+- Windows実機の上半身追従はPASS／FAIL／NOT RUNを正直に記録し、macOSとVRMA playbackは未実施ならPASSにしない。
+
+**検証**
+
+```powershell
+cargo fmt --all -- --check
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
+cargo deny check
+# vendored bevy_vrm1でもfmt/check/clippy/testを実行する。
+```
+
+**このsubtaskで行わないこと**
+
+- synthetic `LookAt` target、独自FBIK、FABRIK、CCD、物理spine solverを追加しない。
+- head poseとeye gazeを同じ入力へ統合しない。
+- 毎frameのbone名検索、固定lerp、rest orientationの重複cache、tracking deltaの累積を導入しない。
+- VRMA playbackまたは未実施hardware acceptanceを対応済みと表現しない。
+
+---
+
 
 ## R3-01: smoothingとlatencyの比較実験
 状態: `PENDING`
