@@ -1,0 +1,358 @@
+//! MediaPipe auto-neutral reference collection.
+//!
+//! The production MediaPipe path does not require a blocking, user-visible
+//! calibration session.  The first valid face is usable immediately.  While
+//! the stream continues, a short recent window replaces that fallback with a
+//! robust reference.  This module only owns neutral-reference selection; the
+//! caller resets pose/expression filters when the returned reference changes.
+
+use std::collections::VecDeque;
+use std::time::Duration;
+
+use nalgebra::{Quaternion, UnitQuaternion};
+use thiserror::Error;
+use vtuber_core::{CameraFaceTransform, FaceTrackingSample, MonoTimeNs};
+
+/// Duration of the robust recent auto-neutral window.
+pub const AUTO_NEUTRAL_WINDOW: Duration = Duration::from_millis(300);
+/// Minimum number of valid samples required for robust window aggregation.
+pub const AUTO_NEUTRAL_MIN_SAMPLES: usize = 15;
+
+/// Lifecycle of the automatic neutral reference.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutoNeutralState {
+    /// No valid face sample has been observed yet.
+    #[default]
+    WaitingForFace,
+    /// A neutral reference is available and can be used for tracking.
+    Ready,
+}
+
+/// Why an auto-neutral candidate could not be accepted.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AutoNeutralError {
+    /// The sample's camera transform was not finite and unit-quaternion based.
+    #[error("MediaPipe camera transform is invalid")]
+    InvalidTransform,
+}
+
+/// Result of offering one canonical MediaPipe face sample.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AutoNeutralUpdate {
+    /// Current auto-neutral lifecycle.
+    pub state: AutoNeutralState,
+    /// Neutral transform to use for the current tracking generation.
+    pub reference: CameraFaceTransform,
+    /// Number of samples retained in the recent window.
+    pub recent_sample_count: usize,
+    /// Whether the robust window replaced the first-valid fallback.
+    pub used_robust_window: bool,
+    /// Whether the caller should reset pose/expression filters.
+    pub reference_changed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Candidate {
+    captured_at: MonoTimeNs,
+    transform: CameraFaceTransform,
+}
+
+/// Selects an immediately usable and then robustly aggregated neutral pose.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AutoNeutralCollector {
+    state: AutoNeutralState,
+    first_valid: Option<Candidate>,
+    reference: Option<CameraFaceTransform>,
+    recent: VecDeque<Candidate>,
+    robust_window_active: bool,
+}
+
+impl AutoNeutralCollector {
+    /// Creates an empty collector in [`AutoNeutralState::WaitingForFace`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the current lifecycle state.
+    #[must_use]
+    pub fn state(&self) -> AutoNeutralState {
+        self.state
+    }
+
+    /// Returns the currently selected neutral transform, if a face was seen.
+    #[must_use]
+    pub fn reference(&self) -> Option<CameraFaceTransform> {
+        self.reference
+    }
+
+    /// Returns the number of retained recent candidates.
+    #[must_use]
+    pub fn recent_sample_count(&self) -> usize {
+        self.recent.len()
+    }
+
+    /// Offers a validated canonical MediaPipe sample.
+    ///
+    /// The first valid transform becomes the fallback immediately.  Samples
+    /// are never rejected because of head movement or expression movement:
+    /// those values are exactly what the old blocking calibration incorrectly
+    /// treated as a reason to keep waiting.  Once the recent window contains
+    /// at least [`AUTO_NEUTRAL_MIN_SAMPLES`] samples spanning the configured
+    /// interval, a robust aggregate becomes the reference.
+    pub fn observe(
+        &mut self,
+        sample: &FaceTrackingSample,
+    ) -> Result<AutoNeutralUpdate, AutoNeutralError> {
+        if !sample.camera_to_face.is_valid() {
+            return Err(AutoNeutralError::InvalidTransform);
+        }
+
+        let candidate = Candidate {
+            captured_at: sample.inference_finished_at,
+            transform: sample.camera_to_face,
+        };
+        let reference_was = self.reference;
+
+        if self.first_valid.is_none() {
+            self.first_valid = Some(candidate);
+            self.reference = Some(candidate.transform);
+            self.state = AutoNeutralState::Ready;
+        }
+
+        self.recent.push_back(candidate);
+        self.trim_window(candidate.captured_at);
+
+        if !self.robust_window_active
+            && self.recent.len() >= AUTO_NEUTRAL_MIN_SAMPLES
+            && spans_window(&self.recent, AUTO_NEUTRAL_WINDOW)
+        {
+            let aggregate =
+                aggregate_candidates(&self.recent).ok_or(AutoNeutralError::InvalidTransform)?;
+            self.reference = Some(aggregate);
+            self.robust_window_active = true;
+        }
+
+        let reference = self
+            .reference
+            .or_else(|| self.first_valid.map(|candidate| candidate.transform))
+            .ok_or(AutoNeutralError::InvalidTransform)?;
+        Ok(AutoNeutralUpdate {
+            state: self.state,
+            reference,
+            recent_sample_count: self.recent.len(),
+            used_robust_window: self.robust_window_active,
+            reference_changed: reference_was != Some(reference),
+        })
+    }
+
+    /// Replaces the neutral reference immediately with the supplied sample.
+    ///
+    /// Recenter intentionally clears the recent window: post-recenter frames
+    /// must establish a fresh local reference instead of blending old and new
+    /// camera geometry.  The returned update tells the caller to reset all
+    /// smoothing state before applying the next tracked frame.
+    pub fn recenter(
+        &mut self,
+        sample: &FaceTrackingSample,
+    ) -> Result<AutoNeutralUpdate, AutoNeutralError> {
+        if !sample.camera_to_face.is_valid() {
+            return Err(AutoNeutralError::InvalidTransform);
+        }
+        let candidate = Candidate {
+            captured_at: sample.inference_finished_at,
+            transform: sample.camera_to_face,
+        };
+        self.state = AutoNeutralState::Ready;
+        self.first_valid = Some(candidate);
+        self.reference = Some(candidate.transform);
+        self.recent.clear();
+        self.recent.push_back(candidate);
+        self.robust_window_active = false;
+        Ok(AutoNeutralUpdate {
+            state: self.state,
+            reference: candidate.transform,
+            recent_sample_count: 1,
+            used_robust_window: false,
+            reference_changed: true,
+        })
+    }
+
+    /// Clears the neutral reference and waits for the next valid face.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn trim_window(&mut self, newest: MonoTimeNs) {
+        while self.recent.front().is_some_and(|candidate| {
+            newest.0.saturating_sub(candidate.captured_at.0) > AUTO_NEUTRAL_WINDOW.as_nanos() as u64
+        }) {
+            let _ = self.recent.pop_front();
+        }
+    }
+}
+
+fn spans_window(candidates: &VecDeque<Candidate>, window: Duration) -> bool {
+    match (candidates.front(), candidates.back()) {
+        (Some(first), Some(last)) => {
+            last.captured_at.0.saturating_sub(first.captured_at.0) >= window.as_nanos() as u64
+        }
+        _ => false,
+    }
+}
+
+fn aggregate_candidates(candidates: &VecDeque<Candidate>) -> Option<CameraFaceTransform> {
+    let first = candidates.front()?.transform;
+    let mut quaternions = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let quaternion = to_quaternion(candidate.transform)?;
+        let quaternion = if dot(first, candidate.transform) < 0.0 {
+            negate(quaternion)
+        } else {
+            quaternion
+        };
+        quaternions.push(quaternion);
+    }
+
+    let mut sum = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+    for quaternion in &quaternions {
+        let value = quaternion.quaternion();
+        sum.w += value.w;
+        sum.i += value.i;
+        sum.j += value.j;
+        sum.k += value.k;
+    }
+    let rotation = UnitQuaternion::try_new(sum, 1.0e-6)?;
+    Some(CameraFaceTransform {
+        rotation_xyzw: [
+            rotation.quaternion().i,
+            rotation.quaternion().j,
+            rotation.quaternion().k,
+            rotation.quaternion().w,
+        ],
+        translation_xyz: [
+            median(
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.transform.translation_xyz[0]),
+            ),
+            median(
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.transform.translation_xyz[1]),
+            ),
+            median(
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.transform.translation_xyz[2]),
+            ),
+        ],
+    })
+}
+
+fn to_quaternion(transform: CameraFaceTransform) -> Option<UnitQuaternion<f32>> {
+    if !transform.is_valid() {
+        return None;
+    }
+    Some(UnitQuaternion::from_quaternion(Quaternion::new(
+        transform.rotation_xyzw[3],
+        transform.rotation_xyzw[0],
+        transform.rotation_xyzw[1],
+        transform.rotation_xyzw[2],
+    )))
+}
+
+fn dot(left: CameraFaceTransform, right: CameraFaceTransform) -> f32 {
+    left.rotation_xyzw
+        .iter()
+        .zip(right.rotation_xyzw)
+        .map(|(a, b)| a * b)
+        .sum()
+}
+
+fn negate(value: UnitQuaternion<f32>) -> UnitQuaternion<f32> {
+    let q = value.quaternion();
+    UnitQuaternion::from_quaternion(Quaternion::new(-q.w, -q.i, -q.j, -q.k))
+}
+
+fn median(values: impl Iterator<Item = f32>) -> f32 {
+    let mut values: Vec<f32> = values.collect();
+    values.sort_by(f32::total_cmp);
+    values[values.len() / 2]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use vtuber_core::{FaceBlendshapeSet, FaceLandmark, FaceTrackingQuality, FrameSeq};
+
+    fn sample(seq: u64, time_ns: u64, translation_x: f32) -> FaceTrackingSample {
+        FaceTrackingSample {
+            source_seq: FrameSeq(seq),
+            captured_at: MonoTimeNs(time_ns),
+            inference_started_at: MonoTimeNs(time_ns + 1),
+            inference_finished_at: MonoTimeNs(time_ns + 2),
+            camera_to_face: CameraFaceTransform {
+                rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                translation_xyz: [translation_x, 0.0, 0.0],
+            },
+            face_center: [0.5, 0.5],
+            landmarks: Arc::from(vec![FaceLandmark::default(); 478]),
+            blendshapes: FaceBlendshapeSet::default(),
+            quality: FaceTrackingQuality {
+                matrix_determinant: 1.0,
+                ..FaceTrackingQuality::default()
+            },
+        }
+    }
+
+    #[test]
+    fn first_valid_sample_is_available_without_blocking() {
+        let mut collector = AutoNeutralCollector::new();
+        let update = collector.observe(&sample(1, 1, 2.0)).unwrap();
+        assert_eq!(update.state, AutoNeutralState::Ready);
+        assert_eq!(update.recent_sample_count, 1);
+        assert!(!update.used_robust_window);
+        assert_eq!(update.reference.translation_xyz[0], 2.0);
+    }
+
+    #[test]
+    fn robust_window_uses_recent_median_and_does_not_reject_motion() {
+        let mut collector = AutoNeutralCollector::new();
+        for seq in 0..16 {
+            let x = if seq == 15 {
+                100.0
+            } else {
+                1.0 + seq as f32 * 0.01
+            };
+            let update = collector
+                .observe(&sample(seq + 1, seq * 20_000_000, x))
+                .unwrap();
+            if seq == 15 {
+                assert!(update.used_robust_window);
+                assert!((update.reference.translation_xyz[0] - 1.07).abs() < 0.02);
+            }
+        }
+    }
+
+    #[test]
+    fn recenter_is_instant_and_starts_a_fresh_window() {
+        let mut collector = AutoNeutralCollector::new();
+        for seq in 0..16 {
+            let _ = collector.observe(&sample(seq + 1, seq * 20_000_000, 0.0));
+        }
+        let update = collector.recenter(&sample(99, 1_000_000_000, 4.0)).unwrap();
+        assert!(update.reference_changed);
+        assert_eq!(update.reference.translation_xyz[0], 4.0);
+        assert_eq!(update.recent_sample_count, 1);
+        assert!(!update.used_robust_window);
+    }
+
+    #[test]
+    fn no_face_keeps_waiting_without_fabricating_a_reference() {
+        let collector = AutoNeutralCollector::new();
+        assert_eq!(collector.state(), AutoNeutralState::WaitingForFace);
+        assert!(collector.reference().is_none());
+    }
+}

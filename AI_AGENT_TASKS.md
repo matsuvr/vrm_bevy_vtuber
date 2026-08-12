@@ -7312,6 +7312,8 @@ Commit: `feat(mocap): derive neutral-relative pose from MediaPipe transforms`
 
 #### M1-08-015-006: Replace calibration with auto-neutral and instant Recenter
 
+状態: `DONE`
+
 30-frame collector gateをproduction pathから除去し、first-valid auto-neutral、300 ms／15 sampleのrobust recent window、one-sample fallback、instant Recenter、waiting-for-face、filter resetを実装する。expression/head motionをreject理由にしない。
 
 Commit: `feat(mocap): replace blocking calibration with instant recenter`
