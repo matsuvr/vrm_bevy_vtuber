@@ -1,6 +1,6 @@
 # ADR-010: head-relative gaze coordinationとVRM LookAt統合
 
-Status: Accepted for Q2-06-002 implementation
+Status: Accepted and implemented by Q2-06-002 (2026-08-12)
 Date: 2026-08-12
 
 ## Context

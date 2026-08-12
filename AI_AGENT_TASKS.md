@@ -9878,7 +9878,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 ## Q2-06: BodyTracking上半身追従とhead-relative gaze
 
-状態: `IN_PROGRESS`
+状態: `DONE`
 実行単位: `Q2-06-001`、`Q2-06-002`
 重点参照: DESIGN.md §7.3、§11.8、§15.4、§16.5〜§16.9、ADR-002、ADR-004、ADR-010
 
@@ -9958,7 +9958,7 @@ cargo deny check
 
 #### Q2-06-002: head-relative gaze coordinationとVRM LookAt統合
 
-状態: `IN_PROGRESS`
+状態: `DONE`
 依存: `Q2-06-001`
 親参照: DESIGN.md §7.3、§11.8、§15.4、§16.5〜§16.9、ADR-002、ADR-004、ADR-010
 
@@ -9998,6 +9998,18 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 - webcam gaze用world target、gaze由来の追加head rotation、独立eye world transform、Eye translation変更を追加しない。
 - BoneとExpressionを同時適用せず、Bevy／MediaPipe／無関係なdependencyを更新しない。
 - random saccade、IK、未実施hardware acceptanceを対応済みと表現しない。
+
+**完了記録（2026-08-12）**
+
+- `AvatarControlFrame`の正本をfinite／boundedな`GazeSignal`へ変更し、valid centered gazeと`Unavailable`を型で区別した。MediaPipe typed eye channelから左右眼観測、blink weight、agreement confidence、共通gazeを直接生成し、synthetic coefficient round-tripを削除した。
+- neutral profileをversion 2へ更新して左右眼horizontal／vertical baselineを追加し、旧値はzero baseline defaultで安全に扱う。専用filterはtracked half-life 0.055秒、neutral return 0.150秒、unavailable hold 0.080秒とし、loss／reacquisitionもheadと同時に連続補間する。
+- vendored `bevy_vrm1`へworld target不要の`DirectLookAtInput`を追加した。Boneは既存rest local／globalと左右inner／outer・up／down range mapを再利用し、animation baseへ非累積加算する。Expressionはrange-map済みweightを既存の1frame 1回`ModifyExpressions`経路へ渡す。
+- モデル作者のLookAt typeを優先してBone／Expressionを排他的に選び、破損宣言またはmetadata欠損はcapability snapshotとwarningへfallback理由を残す。旧`apply_tracked_eye_gaze`、独自eye range設定、重複`GazeMode`／`ExpressionAndEyeBones`実行modeは削除した。
+- 実行testでAnimation→body input→direct BodyTracking→gaze input→GazeControl→Expression→伝播→Constraint→伝播→SpringBoneを固定した。head階層追従、counter-rotation、translation／scale不変、non-identity rest、center復帰、animation base、非累積、backend排他、replacement／despawn cleanupを自動検証した。
+- root workspaceでfmt、check、clippy、`cargo test --workspace --no-fail-fast`、`cargo deny check`、対象gaze／loss recovery／schedule test、`git diff --check`が成功した。`deny.toml`はlock済み依存の`Ubuntu-font-1.0`、`CDLA-Permissive-2.0`、固定MediaPipe Git sourceだけを監査済み許可へ追加し、dependency versionは変更していない。
+- vendored `bevy_vrm1`でfmt、all-target check、all-target clippy、76 unit tests、10 doctestsが成功した。base revisionとlicenseは不変である。
+- Windowsではlicensed test VRM 1.0のimport、描画、lifecycle `Ready`まで実画面で確認した。C922 MSMFは5秒で150 framesを取得しstage errorなしだったが、顔がframe内になく`face_count=0`だったため、head／eye visual acceptanceは`NOT RUN`。macOS実機確認も`NOT RUN`。
+- commits: `docs(gaze): define head-relative coordination`、`refactor(core): make gaze availability explicit`、`feat(tracking): filter calibrated binocular gaze`、`feat(vrm): add direct head-relative look at`、`feat(avatar): coordinate gaze through VRM LookAt`、`test(vrm): verify additive direct eye gaze`、`test(gaze): cover composition and schedule regressions`、`chore(policy): audit locked runtime licenses`、`docs(gaze): record Q2-06-002 completion`。
 
 ---
 
