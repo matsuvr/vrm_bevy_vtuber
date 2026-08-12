@@ -9,6 +9,8 @@
 pub mod calibration;
 /// Confidence synthesis and hysteresis gating.
 pub mod confidence;
+/// MediaPipe blendshape and gaze mapping.
+pub mod expressions;
 /// Tracking filters: rotation smoothing and expression filtering.
 pub mod filter;
 /// Loss hold, neutral decay, and recovery blend.
@@ -30,6 +32,10 @@ pub use confidence::{
     ConfidenceAssessment, ConfidenceConfigError, ConfidenceError, ConfidenceGate,
     ConfidenceGateParams, ConfidenceInputs, ConfidencePolicies, ConfidenceSignal, ConfidenceSource,
     MissingSourcePolicy, synthesize,
+};
+pub use expressions::{
+    map_mediapipe_expressions, map_mediapipe_gaze, map_mediapipe_raw_expressions,
+    parse_mediapipe_blendshapes,
 };
 pub use filter::{
     ExpressionCalibration, ExpressionCalibrationError, ExpressionChannel, ExpressionFilter,

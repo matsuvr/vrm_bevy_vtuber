@@ -7328,6 +7328,8 @@ Commit: `feat(mocap): add stable head tracking and loss recovery`
 
 #### M1-08-015-008: Map MediaPipe blendshapes to VRM control
 
+状態: `DONE`
+
 exact typed 52-category parser、blink、A/I/U、gaze、missing/duplicate diagnostics、capability fallbackを実装する。invalid Peppa expression mappingと`BasicExpressionFallback`のproduction reachabilityを削除する。
 
 Commit: `feat(mocap): drive VRM expressions from MediaPipe blendshapes`
