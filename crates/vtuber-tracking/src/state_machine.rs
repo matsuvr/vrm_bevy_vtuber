@@ -38,7 +38,7 @@ pub struct StateMachineParams {
 impl Default for StateMachineParams {
     fn default() -> Self {
         Self {
-            hold_duration: Duration::from_millis(150),
+            hold_duration: Duration::from_millis(300),
             return_duration: Duration::from_millis(500),
         }
     }

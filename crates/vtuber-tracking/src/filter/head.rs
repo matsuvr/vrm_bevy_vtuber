@@ -1,11 +1,11 @@
-//! Quaternion-centered exponential smoothing for head rotation.
+//! Quaternion-centered SO(3) biquad smoothing for head rotation.
 //!
 //! The filter operates directly on [`UnitQuaternion`] values in the canonical
 //! tracking basis described in `DESIGN.md` §11.6. Smoothing in quaternion
 //! space avoids Euler-angle wrapping, gimbal-lock singularities, and
 //! independent per-axis low-pass artefacts.
 
-use nalgebra::{Quaternion, UnitQuaternion};
+use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use vtuber_core::types::MonoTimeNs;
 
 /// Parameters for the head rotation filter.
@@ -22,6 +22,11 @@ pub struct HeadFilterParams {
     /// Larger gaps are clamped to this value so that a stale observation
     /// cannot fully snap the output.
     pub max_dt_sec: f32,
+    /// Maximum accepted rotation step in radians.
+    ///
+    /// A larger single-frame step is treated as an outlier and quarantined
+    /// until a later sample returns within the physical limit.
+    pub max_step_rad: f32,
 }
 
 impl Default for HeadFilterParams {
@@ -29,6 +34,7 @@ impl Default for HeadFilterParams {
         Self {
             time_constant_sec: 0.05,
             max_dt_sec: 0.5,
+            max_step_rad: 1.25,
         }
     }
 }
@@ -48,16 +54,17 @@ impl HeadFilterParams {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct FilterState {
     quat: UnitQuaternion<f32>,
+    velocity: Vector3<f32>,
     last_time: MonoTimeNs,
 }
 
 /// Quaternion-centered exponential smoothing filter for head rotation.
 ///
-/// The filter maintains an internal quaternion state. On each update it
-/// blends the current state toward the new target using spherical linear
-/// interpolation (slerp). The blend factor is derived from the elapsed time
-/// since the last update and a time constant, making the smoothing
-/// independent of the input frame rate.
+/// The filter maintains an internal quaternion state and a tangent-space
+/// angular velocity. On each update it applies a critically damped second
+/// order (biquad) step to the local rotation error. The step is derived from
+/// elapsed time and a time constant, making the smoothing independent of the
+/// input frame rate.
 ///
 /// The filter handles quaternion sign ambiguity by choosing the sign of the
 /// target quaternion that yields the shortest arc from the current state.
@@ -67,6 +74,7 @@ struct FilterState {
 pub struct HeadRotationFilter {
     params: HeadFilterParams,
     state: Option<FilterState>,
+    quarantined_samples: u64,
 }
 
 impl HeadRotationFilter {
@@ -76,6 +84,7 @@ impl HeadRotationFilter {
         Self {
             params,
             state: None,
+            quarantined_samples: 0,
         }
     }
 
@@ -91,6 +100,7 @@ impl HeadRotationFilter {
     /// that observation.
     pub fn reset(&mut self) {
         self.state = None;
+        self.quarantined_samples = 0;
     }
 
     /// Reacquires tracking, discarding the previous smoothed state.
@@ -100,6 +110,12 @@ impl HeadRotationFilter {
     /// state.
     pub fn reacquire(&mut self) {
         self.reset();
+    }
+
+    /// Number of single-frame target rotations rejected as outliers.
+    #[must_use]
+    pub fn quarantined_samples(&self) -> u64 {
+        self.quarantined_samples
     }
 
     /// Updates the filter with a new target rotation.
@@ -127,6 +143,7 @@ impl HeadRotationFilter {
         let Some(state) = self.state else {
             self.state = Some(FilterState {
                 quat: target,
+                velocity: Vector3::zeros(),
                 last_time: timestamp,
             });
             return target;
@@ -144,20 +161,31 @@ impl HeadRotationFilter {
             return state.quat;
         }
 
-        // Exponential smoothing coefficient: alpha = 1 - exp(-dt / tau).
-        // Clamp tau to avoid division by zero and alpha to [0, 1] for
-        // robustness against non-finite parameters.
+        // Clamp tau to avoid division by zero and non-finite parameters.
         let tau = self.params.time_constant_sec.max(f32::EPSILON);
-        let alpha = (1.0_f32 - (-dt_sec / tau).exp()).clamp(0.0, 1.0);
 
         // Choose the quaternion sign that gives the shortest arc.
         let signed_target = choose_shortest_arc(state.quat, target);
+        let error = (state.quat.inverse() * signed_target).scaled_axis();
+        let max_step = if self.params.max_step_rad.is_finite() {
+            self.params.max_step_rad.max(0.0)
+        } else {
+            f32::MAX
+        };
+        if error.norm() > max_step {
+            self.quarantined_samples = self.quarantined_samples.saturating_add(1);
+            return state.quat;
+        }
 
-        // Slerp toward the signed target.
-        let smoothed = state.quat.slerp(&signed_target, alpha);
+        // A critically damped second-order response in the local rotation
+        // vector is the SO(3) equivalent of a biquad. The quaternion remains
+        // on SO(3); only the tangent-space error and velocity are filtered.
+        let (smoothed, velocity) =
+            so3_biquad_step(state.quat, signed_target, state.velocity, dt_sec, tau);
 
         self.state = Some(FilterState {
             quat: smoothed,
+            velocity,
             last_time: timestamp,
         });
 
@@ -171,6 +199,26 @@ impl HeadRotationFilter {
     pub fn current(&self) -> Option<UnitQuaternion<f32>> {
         self.state.map(|s| s.quat)
     }
+}
+
+fn so3_biquad_step(
+    current: UnitQuaternion<f32>,
+    target: UnitQuaternion<f32>,
+    velocity: Vector3<f32>,
+    dt_sec: f32,
+    time_constant_sec: f32,
+) -> (UnitQuaternion<f32>, Vector3<f32>) {
+    let error = (current.inverse() * target).scaled_axis();
+    let omega = 1.0 / time_constant_sec.max(f32::EPSILON);
+    let decay = (-omega * dt_sec).exp();
+    let combined = velocity + error * omega;
+    let new_error = (error + combined * dt_sec) * decay;
+    let new_velocity = (velocity - combined * (omega * dt_sec)) * decay;
+    let step = error - new_error;
+    (
+        current * UnitQuaternion::from_scaled_axis(step),
+        new_velocity,
+    )
 }
 
 /// Returns `target` or `-target`, whichever is closer to `current`.
@@ -243,5 +291,18 @@ mod tests {
         assert_relative_eq!(out1.quaternion().i, out2.quaternion().i, epsilon = 1e-6);
         assert_relative_eq!(out1.quaternion().j, out2.quaternion().j, epsilon = 1e-6);
         assert_relative_eq!(out1.quaternion().k, out2.quaternion().k, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn large_single_frame_rotation_is_quarantined() {
+        let mut filter = HeadRotationFilter::new(HeadFilterParams::default());
+        let initial = UnitQuaternion::identity();
+        let out1 = filter.update(initial, ts(1_000_000_000));
+        let out2 = filter.update(
+            UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 2.0),
+            ts(1_016_666_667),
+        );
+        assert_relative_eq!(out1.angle_to(&out2), 0.0, epsilon = 1e-6);
+        assert_eq!(filter.quarantined_samples(), 1);
     }
 }

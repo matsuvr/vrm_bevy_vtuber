@@ -7320,6 +7320,8 @@ Commit: `feat(mocap): replace blocking calibration with instant recenter`
 
 #### M1-08-015-007: Add tracking hysteresis, SO(3) filter, and recovery
 
+状態: `DONE`
+
 3-hit acquire、5-miss/300 ms loss、hold/neutral return/reacquire、SO(3) biquad、limits/outlier quarantine、deterministic replayを実装する。
 
 Commit: `feat(mocap): add stable head tracking and loss recovery`

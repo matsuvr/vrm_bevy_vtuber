@@ -263,7 +263,9 @@ impl Default for ConfidenceGateParams {
             enter_threshold: 0.75,
             exit_threshold: 0.50,
             required_consecutive_good: 3,
-            required_consecutive_bad: 3,
+            // Five misses at the normal 15 Hz tracking cadence is roughly
+            // 300 ms. A separate watchdog still handles a stalled worker.
+            required_consecutive_bad: 5,
             max_count: u32::MAX,
         }
     }
