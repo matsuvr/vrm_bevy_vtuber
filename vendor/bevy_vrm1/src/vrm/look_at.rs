@@ -266,24 +266,40 @@ fn apply_direct_eye(
     } else {
         apply_right_eye_bone(transform, rest, rest_global, properties, yaw, pitch)
     };
-    let gaze_delta = (rest.rotation.inverse() * target.rotation).normalize();
+    let Some((output, state)) = compose_direct_eye_rotation(
+        transform.rotation,
+        rest.rotation,
+        target.rotation,
+        applied.copied(),
+    ) else {
+        return;
+    };
+    commands
+        .entity(entity)
+        .insert((transform.with_rotation(output), state));
+}
+
+fn compose_direct_eye_rotation(
+    current: Quat,
+    rest: Quat,
+    target: Quat,
+    applied: Option<AppliedEyeGaze>,
+) -> Option<(Quat, AppliedEyeGaze)> {
+    let gaze_delta = (rest.inverse() * target).normalize();
     let animated_base = match applied {
-        Some(applied) if transform.rotation.abs_diff_eq(applied.last_output, 1.0e-5) => {
-            (transform.rotation * applied.last_delta.inverse()).normalize()
+        Some(applied) if current.abs_diff_eq(applied.last_output, 1.0e-5) => {
+            (current * applied.last_delta.inverse()).normalize()
         }
-        _ => transform.rotation,
+        _ => current,
     };
     let output = (animated_base * gaze_delta).normalize();
-    if !output.is_finite() {
-        return;
-    }
-    commands.entity(entity).insert((
-        transform.with_rotation(output),
+    output.is_finite().then_some((
+        output,
         AppliedEyeGaze {
             last_output: output,
             last_delta: gaze_delta,
         },
-    ));
+    ))
 }
 
 fn expression_weights(
@@ -602,5 +618,37 @@ mod tests {
         );
         assert!(output.rotation.is_finite());
         assert!(!output.rotation.abs_diff_eq(rest_rotation, 1.0e-5));
+    }
+
+    #[test]
+    fn direct_eye_delta_does_not_accumulate_across_frames() {
+        let rest = Quat::IDENTITY;
+        let target = Quat::from_rotation_y(0.2);
+        let (first, state) = compose_direct_eye_rotation(rest, rest, target, None).unwrap();
+        let (second, _) = compose_direct_eye_rotation(first, rest, target, Some(state)).unwrap();
+        assert!(second.abs_diff_eq(first, 1.0e-5));
+    }
+
+    #[test]
+    fn direct_eye_returns_to_animated_base_at_center() {
+        let rest = Quat::IDENTITY;
+        let animated_base = Quat::from_rotation_z(0.15);
+        let target = Quat::from_rotation_y(0.25);
+        let (looked, state) =
+            compose_direct_eye_rotation(animated_base, rest, target, None).unwrap();
+        let (centered, _) = compose_direct_eye_rotation(looked, rest, rest, Some(state)).unwrap();
+        assert!(centered.abs_diff_eq(animated_base, 1.0e-5));
+    }
+
+    #[test]
+    fn external_animation_change_becomes_the_new_additive_base() {
+        let rest = Quat::IDENTITY;
+        let target = Quat::from_rotation_y(0.2);
+        let (_, state) = compose_direct_eye_rotation(rest, rest, target, None).unwrap();
+        let new_animation = Quat::from_rotation_z(-0.3);
+        let (output, _) =
+            compose_direct_eye_rotation(new_animation, rest, target, Some(state)).unwrap();
+        let expected = (new_animation * target).normalize();
+        assert!(output.abs_diff_eq(expected, 1.0e-5));
     }
 }
