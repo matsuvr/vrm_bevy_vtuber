@@ -10022,7 +10022,7 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 
 #### Q2-06-002-002: auto-neutral窓とgaze baseline品質を修正する
 
-状態: `PENDING`
+状態: `DONE`
 依存: `Q2-06-002-001`
 
 - 15Hzでも15 sampleのrobust windowへ到達できる期間へ変更する。

@@ -214,8 +214,10 @@ pub fn tracking_bridge_system(
         };
         match neutral_update {
             Ok(update) => {
-                if update.reference_changed {
+                if update.pose_reference_changed {
                     tracking.pipeline.reset();
+                } else if update.gaze_baseline_changed {
+                    tracking.pipeline.reset_gaze_filter();
                 }
                 tracking.recenter_requested = false;
                 tracking.last_recenter_error = None;
