@@ -1,6 +1,6 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — live MediaPipe tracking, face loss/reacquire, Start/Stop, avatar replace/unload/reload, latency observation, and 30-minute soak were exercised; direct avatar motion and capture-to-apply latency remain unverified
+**Status:** BLOCKED — live MediaPipe tracking, face loss/reacquire, Start/Stop, avatar replace/unload/reload, camera unplug/reconnect, timed reacquisition, resource sampling, and 30-minute soak were exercised; the Live preview and viewport framing are not valid for direct avatar verification, and capture-to-apply latency remains unavailable
 **Date:** 2026-08-12
 **Commit SHA:** `ee88dfa`
 **Binary:** `vtuber-desktop` (release profile)
@@ -79,6 +79,20 @@ The UI did not expose a direct numeric avatar-apply counter or a
 capture-to-apply latency value, and the viewport framing did not provide a
 recordable head/expression visual result in this run. Therefore this evidence
 does not claim the VRM head, blink, mouth, or gaze visual checks as PASS.
+
+Follow-up physical inspection found the display condition itself is a blocker.
+The user-provided Setup screenshot showed no camera image (Setup does not
+render the optional preview by design) and only the avatar below the waist;
+the avatar head was outside the viewport. In the preceding Live screen,
+`Show Preview` was enabled but the UI remained `Waiting for camera frames…`
+while the same process reported `Face detected: yes`. The source inspection
+found a fixed camera at `(0.0, 0.0, 2.5)` looking at `(0.0, 0.0, 0.0)` in
+`crates/vtuber-avatar/src/plugin.rs`; this does not implement DESIGN.md §19.2
+head/upper-body framing. Consequently head pose, blink, mouth, and gaze must
+remain BLOCKED until preview registration and camera framing are repaired and
+the live protocol is repeated. The screenshot was not copied into the
+repository because raw camera/UI captures are not required as a release
+artifact.
 
 The 60-second diagnostics observation showed approximately:
 
@@ -302,9 +316,10 @@ cargo test -p vtuber-core -p vtuber-camera -p vtuber-app --lib --tests
 cargo clippy -p vtuber-core -p vtuber-camera -p vtuber-app --all-targets -- -D warnings
 ```
 
-The live checklist below was exercised with one imported VRM 1.0 model. Camera
-unplug/replug, thread-count measurement, and a timed two-second reacquisition
-measurement were not performed.
+The live checklist below was exercised with one imported VRM 1.0 model.
+Camera unplug/replug, a timed reacquisition observation, and a bounded
+thread/RSS sample were performed. The resource sample is recorded separately
+in `docs/acceptance/artifacts/windows-m1-2026-08-12-resource-sample.txt`.
 
 ### 4.1 Face Loss / Return
 
@@ -312,7 +327,7 @@ measurement were not performed.
 - [x] Verify: `Face detected: no`, `Tracking: Initializing`, confidence `0.00`
 - [ ] Verify: avatar holds neutral or last pose (no direct viewport evidence)
 - [x] Return face to frame
-- [ ] Verify: tracking resumes within 2 seconds (not timed)
+- [x] Verify: tracking resumes within 2 seconds (first post-return observation at approximately 405 ms)
 - [ ] Verify: no stale pose remains (no direct viewport evidence)
 
 ### 4.2 Camera Stop / Restart
@@ -320,8 +335,8 @@ measurement were not performed.
 - [x] Click "Stop" and verify lifecycle reached `Idle`
 - [x] Click "Start" and verify lifecycle reached `Running`
 - [x] Repeat Stop/Start three times in the same process
-- [ ] If possible: unplug camera, replug
-- [ ] Verify: app handles disconnect gracefully, reconnect works
+- [x] Unplug camera and replug it
+- [x] Verify: app handles disconnect gracefully; Stop → Idle → Start restored tracking after reconnect
 
 ### 4.3 Avatar Replace
 
@@ -336,7 +351,7 @@ measurement were not performed.
 - [ ] No permanent freeze on face loss (viewport evidence missing)
 - [x] Camera restart recovers tracking
 - [ ] Avatar replace leaves no stale state (viewport evidence missing)
-- [ ] Thread count returns to baseline after each operation (not measured)
+- [ ] Thread count returns to baseline after each operation (only one bounded sample was measured)
 
 ---
 
@@ -379,7 +394,7 @@ from the live release UI._
 
 | Metric | Start | Mid | End | Trend |
 |--------|-------|-----|-----|-------|
-| RSS (MB) | Not measured | Not measured | Not measured | NOT VERIFIED |
+| RSS (MB) | 888.14 MiB (separate sample) | 897.01 MiB max (separate sample) | 893.52 MiB (separate sample) | PARTIAL; not sampled once per minute during soak |
 | p95 latency (ms) | wait ~41.9 / total ~6.8 | wait ~41.8 / total ~7.8 | wait 41.46 / total 7.45 | stable sampled |
 | Render FPS | Not exposed | Not exposed | Not exposed | NOT RUN |
 | Tracking Hz | 30-31 | 30-31 | 30.0 | stable |
@@ -388,10 +403,10 @@ from the live release UI._
 ### 6.3 Soak Summary
 
 - [x] No process crash
-- [ ] No memory continuous increase trend (RSS not measured)
+- [ ] No memory continuous increase trend (59-second resource sample only; not a soak trend)
 - [x] No latency continuous increase trend in sampled diagnostics
 - [x] Worker threads terminated on Stop (user confirmed Stop after soak)
-- [ ] Clean shutdown confirmed (process remained open after Stop)
+- [x] Clean shutdown confirmed (`vtuber-desktop` process not running after user closed the window)
 
 ---
 
@@ -403,11 +418,11 @@ from the live release UI._
 | 2 | Tracking Hz | ≥ 15 | 30-31 Hz | PASS |
 | 3 | p95 capture-to-apply | ≤ 180ms | `(none)` | NOT VERIFIED |
 | 4 | Queue depth | ≤ 1 | Slot overwrites 0 | PASS |
-| 5 | No memory/latency increase | stable | latency stable sampled; RSS not measured | PARTIAL |
+| 5 | No memory/latency increase | stable | latency stable sampled; separate 59-second RSS/thread sample; no soak resource trend | PARTIAL |
 | 6 | No process crash | 0 crashes | 0 observed | PASS |
 | 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** BLOCKED — live tracking, loss/reacquire, lifecycle recovery, latency stage timing, and the 30-minute soak are evidenced, but direct avatar motion and capture-to-apply latency remain unverified.
+**Overall Gate:** BLOCKED — live tracking, loss/reacquire, lifecycle recovery, camera reconnect, timed reacquisition, resource sampling, clean shutdown, latency stage timing, and the 30-minute soak are evidenced, but the Live preview/viewport framing prevents direct avatar motion verification and capture-to-apply latency remains `(none)`.
 
 ---
 
@@ -415,8 +430,8 @@ from the live release UI._
 
 | # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
 |---|---------|----------|----------|-------------|---------------|
-| 1 | Direct avatar head/expression/gaze visual result was not recorded | test-environment | High | Repeat the live protocol with viewport evidence or an avatar-apply metric | Yes |
-| 2 | capture-to-apply diagnostics are `(none)` and RSS/thread-count artifacts were not exported | performance | High | Expose/export capture-to-apply and resource metrics, then rerun the gate | Yes |
+| 1 | Live preview stayed `Waiting for camera frames…` and fixed viewport framing cropped the avatar head | correctness / test-environment | High | Repair preview asset registration and implement DESIGN.md §19.2 framing, then rerun direct head/expression/gaze checks | Yes |
+| 2 | capture-to-apply diagnostics are `(none)`; the resource summary is bounded but not a 30-minute soak export | performance | High | Expose/export capture-to-apply and required soak metrics, then rerun the gate | Yes |
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment
 
@@ -432,10 +447,12 @@ Categories: correctness, compatibility, performance, hardware-specific, test-env
 | face_landmarker.task | `64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF` | assets/models/face_landmarker.task |
 | inore-vrm1.vrm | `B5A3D4126C4A30EF3BFBCFC764A24DC48511B558799D98D4C2FF1DB0BDC7AB01` | tests/fixtures/vrm/inore-vrm1.vrm |
 | Metrics CSV | — | not generated; live diagnostics recorded in this report |
-| Soak metrics | — | no exported artifact; 30-minute live observation recorded |
+| Resource sample summary | — | `docs/acceptance/artifacts/windows-m1-2026-08-12-resource-sample.txt` |
+| Soak metrics | — | no exported once-per-minute artifact; 30-minute live observation recorded |
 
 ---
 
-_Report generated from the automated, live GUI, latency-observation, and
-30-minute soak evidence above. Direct GUI avatar motion and capture-to-apply
-latency remain intentionally unverified._
+_Report generated from the automated, live GUI, latency-observation, resource,
+and 30-minute soak evidence above. Direct GUI avatar motion remains blocked by
+the invalid preview/viewport display, and capture-to-apply latency remains
+intentionally unverified._

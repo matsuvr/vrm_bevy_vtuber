@@ -7359,7 +7359,7 @@ Commit: `refactor(mocap): remove legacy custom face pipeline`
 
 section 16 protocolをC922とapproved VRMで実施し、10/10 Recenter、physical signs、real VRM head/blink/mouth/gaze、15 Hz以上、capture-to-apply p95 180 ms以下、Stop/Start 3回を測定する。thresholdを下げて合格扱いにしない。
 
-2026-08-12のlive release GUI runではC922選択、VRM 1.0 import/Ready、auto-neutral、face loss/reacquire、3回のStop/Start、avatar replace/unload/reload、MediaPipe worker Running（capture/inference約30 Hz）を確認した。30分soakも完了したが、viewport上のhead／blink／mouth／gaze結果を記録できず、capture-to-applyは`(none)`だったため、functional／performance gateはBLOCKEDのままとする。
+2026-08-12のlive release GUI runではC922選択、VRM 1.0 import/Ready、auto-neutral、face loss/reacquire、3回のStop/Start、avatar replace/unload/reload、camera unplug/replug後のStop→Start復旧、約405 msでの再取得観測、MediaPipe worker Running（capture/inference約30 Hz）、59秒のRSS/thread sample、clean shutdownを確認した。30分soakも完了したが、Live previewが`Waiting for camera frames…`のままで、固定viewport cameraによりavatar headが画面外だったためhead／blink／mouth／gazeは検証不能であり、capture-to-applyも`(none)`だった。functional／performance gateはBLOCKEDのままとする。
 
 Commit: `test(mocap): record live Windows acceptance evidence`
 
@@ -7507,7 +7507,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 #### M1-08-018: Windows functional／recovery acceptanceを実pipelineで実施する
 
 状態: `BLOCKED`
-備考: release build、C922でのMediaPipe worker起動、auto-neutral、face loss/reacquire、Start／Stop、avatar replace／unload／reload、30分soakは確認済み。viewport上のavatar motionを記録できず、camera unplug/replugと2秒reacquisition計測も未実施のためBLOCKED。
+備考: release build、C922でのMediaPipe worker起動、auto-neutral、face loss/reacquire、Start／Stop、avatar replace／unload／reload、camera unplug/replug後のStop→Start復旧、2秒以内の再取得観測、59秒RSS/thread sample、clean shutdown、30分soakは確認済み。ただしLive previewが`Waiting for camera frames…`で、固定camera framingによりavatar headがviewport外となり、head／blink／mouth／gazeを直接確認できないためBLOCKED。
 依存: `M1-08-017`
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
@@ -7552,7 +7552,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 #### M1-08-019: latency、30分soak、Windows final gateを閉じる
 
 状態: `BLOCKED`
-備考: release appで約60秒のdiagnostics観測と30分soakを実施し、tracking 30-31 Hz、inference wait p95約41.9 ms、inference total p95約6.8 ms、soak終端は41.46／7.45 ms、slot overwrite 0を記録した。ただしcapture-to-applyが`(none)`、RSS／render FPS／thread-count artifactがなく、`M1-08-018`のviewport functional gateも未完了のためBLOCKED。
+備考: release appで約60秒のdiagnostics観測と30分soakを実施し、tracking 30-31 Hz、inference wait p95約41.9 ms、inference total p95約6.8 ms、soak終端は41.46／7.45 ms、slot overwrite 0を記録した。別途59秒のRSS/thread sample（RSS 888.14–897.01 MiB、thread 129–131）とsummary artifactを作成したが、capture-to-applyは`(none)`で、30分soakのbounded resource export、render FPS、`M1-08-018`のviewport functional gateも未完了のためBLOCKED。
 依存: `M1-08-018`
 親参照: DESIGN.md §6、§20.2〜§20.3、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
