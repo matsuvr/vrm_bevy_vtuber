@@ -223,7 +223,7 @@ mod tests {
             confidence: 1.0,
             state: TrackingState::Tracking,
             head: HeadPose::default(),
-            gaze: None,
+            gaze: vtuber_core::GazeSignal::UNAVAILABLE,
             expressions: ExpressionCoefficients::default(),
         }
     }

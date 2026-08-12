@@ -17,7 +17,7 @@ use nalgebra::{Quaternion, UnitQuaternion};
 use thiserror::Error;
 
 use vtuber_core::types::{
-    AvatarControlFrame, ExpressionCoefficients, HeadPose, MonoTimeNs, TrackingState,
+    AvatarControlFrame, ExpressionCoefficients, GazeSignal, HeadPose, MonoTimeNs, TrackingState,
 };
 
 use crate::pose::{quaternion_to_semantic_pose, semantic_pose_to_quaternion};
@@ -450,7 +450,7 @@ fn neutral_frame(
         confidence: 0.0,
         state,
         head: HeadPose::default(),
-        gaze: None,
+        gaze: GazeSignal::degraded(0.0, 0.0, 0.0),
         expressions: ExpressionCoefficients::default(),
     }
 }
@@ -499,7 +499,7 @@ fn blend_to_neutral(
         confidence: lerp(from.confidence, 0.0, t),
         state,
         head: quaternion_to_semantic_pose(q),
-        gaze: None,
+        gaze: GazeSignal::degraded(0.0, 0.0, 0.0),
         expressions: blend_expressions(&from.expressions, &ExpressionCoefficients::default(), t),
     }
 }
@@ -562,7 +562,7 @@ mod tests {
                 pitch_rad: pitch,
                 roll_rad: roll,
             },
-            gaze: None,
+            gaze: GazeSignal::UNAVAILABLE,
             expressions: ExpressionCoefficients {
                 aa: expression_value,
                 ..ExpressionCoefficients::default()

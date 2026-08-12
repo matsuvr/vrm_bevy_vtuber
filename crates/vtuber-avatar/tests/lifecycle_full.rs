@@ -425,7 +425,7 @@ fn full_lifecycle_control_frame_generation_boundary() {
             confidence: 1.0,
             state: vtuber_core::types::TrackingState::Tracking,
             head: vtuber_core::types::HeadPose::default(),
-            gaze: None,
+            gaze: vtuber_core::GazeSignal::UNAVAILABLE,
             expressions: vtuber_core::types::ExpressionCoefficients::default(),
         }),
     };

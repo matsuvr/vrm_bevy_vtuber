@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use vtuber_core::control::{CalibrationSettings, TrackingPipelineSettings};
 use vtuber_core::types::{
-    AvatarControlFrame, FrameSeq, GazePose, HeadPose, Landmark3, LandmarkSchemaId, MonoTimeNs,
+    AvatarControlFrame, FrameSeq, GazeSignal, HeadPose, Landmark3, LandmarkSchemaId, MonoTimeNs,
     NamedCoefficient, RawFaceObservation, TrackingState,
 };
 use vtuber_core::{CameraFaceTransform, FaceTrackingSample, NormalizedRect};
@@ -531,7 +531,14 @@ impl TrackingPipeline {
             observation.map(|obs| compute_neutral_relative_pose(profile, obs, now))
         });
 
-        self.update_with_pose(observation, now, dt, pose_result, calibration_available)
+        self.update_with_pose(
+            observation,
+            None,
+            now,
+            dt,
+            pose_result,
+            calibration_available,
+        )
     }
 
     /// Runs one canonical MediaPipe sample through the existing tracking
@@ -549,12 +556,14 @@ impl TrackingPipeline {
         dt: Duration,
     ) -> PipelineUpdate {
         let observation = sample.map(media_pipe_sample_to_observation);
+        let gaze = sample.map(|sample| map_mediapipe_gaze(&sample.blendshapes));
         let pose_result = match (sample, neutral) {
             (Some(sample), Some(neutral)) => Some(media_pipe_pose_frame(sample, neutral, now)),
             _ => None,
         };
         self.update_with_pose(
             observation.as_ref(),
+            gaze,
             now,
             dt,
             pose_result,
@@ -565,6 +574,7 @@ impl TrackingPipeline {
     fn update_with_pose(
         &mut self,
         observation: Option<&RawFaceObservation>,
+        direct_gaze: Option<GazeSignal>,
         now: MonoTimeNs,
         dt: Duration,
         pose_result: Option<Result<HeadPoseFrame, HeadPoseFailure>>,
@@ -600,7 +610,7 @@ impl TrackingPipeline {
         let tracked = observation.map(|obs| {
             let head = self.update_head_filter(&pose_result, now);
             let expressions = self.expression_filter.update(&obs.expressions, now);
-            let gaze = extract_gaze(obs);
+            let gaze = direct_gaze.unwrap_or_else(|| extract_gaze(obs));
 
             AvatarControlFrame {
                 source_seq: obs.source_seq,
@@ -714,8 +724,7 @@ fn media_pipe_sample_to_observation(sample: &FaceTrackingSample) -> RawFaceObser
         })
         .collect();
     let raw_expressions = map_mediapipe_raw_expressions(&sample.blendshapes, 1.0);
-    let gaze = map_mediapipe_gaze(&sample.blendshapes);
-    let mut blendshapes = sample
+    let blendshapes = sample
         .blendshapes
         .as_array()
         .iter()
@@ -727,24 +736,6 @@ fn media_pipe_sample_to_observation(sample: &FaceTrackingSample) -> RawFaceObser
             value: *value,
         })
         .collect::<Vec<_>>();
-    blendshapes.extend([
-        NamedCoefficient {
-            name: "eyeLookLeft".into(),
-            value: gaze_to_coefficient(gaze.yaw_rad, false),
-        },
-        NamedCoefficient {
-            name: "eyeLookRight".into(),
-            value: gaze_to_coefficient(gaze.yaw_rad, true),
-        },
-        NamedCoefficient {
-            name: "eyeLookUp".into(),
-            value: gaze_to_coefficient(gaze.pitch_rad, true),
-        },
-        NamedCoefficient {
-            name: "eyeLookDown".into(),
-            value: gaze_to_coefficient(gaze.pitch_rad, false),
-        },
-    ]);
     RawFaceObservation {
         source_seq: sample.source_seq,
         captured_at: sample.captured_at,
@@ -763,11 +754,6 @@ fn media_pipe_sample_to_observation(sample: &FaceTrackingSample) -> RawFaceObser
         },
         schema: LandmarkSchemaId("mediapipe-478"),
     }
-}
-
-fn gaze_to_coefficient(value: f32, positive_direction: bool) -> f32 {
-    let signed = if positive_direction { value } else { -value };
-    (signed / 0.6).clamp(0.0, 1.0)
 }
 
 fn mean_landmark_confidence(landmarks: &[Landmark3]) -> Option<f32> {
@@ -829,34 +815,27 @@ fn default_expression_calibration() -> ExpressionCalibration {
 /// `eyeLookRight`, `eyeLookUp`, and `eyeLookDown` (case-sensitive). When
 /// all four are present, yaw = right - left and pitch = up - down. The
 /// result is clamped to a physiologically plausible range.
-fn extract_gaze(observation: &RawFaceObservation) -> Option<GazePose> {
-    let coefficients = observation.blendshapes.as_ref()?;
+fn extract_gaze(observation: &RawFaceObservation) -> GazeSignal {
+    let Some(coefficients) = observation.blendshapes.as_ref() else {
+        return GazeSignal::UNAVAILABLE;
+    };
     let find = |name: &str| {
         coefficients
             .iter()
             .find(|c| c.name == name)
             .map(|c| c.value.clamp(0.0, 1.0))
-            .unwrap_or(0.0)
     };
 
-    let left = find("eyeLookLeft");
-    let right = find("eyeLookRight");
-    let up = find("eyeLookUp");
-    let down = find("eyeLookDown");
+    let (Some(left), Some(right), Some(up), Some(down)) = (
+        find("eyeLookLeft"),
+        find("eyeLookRight"),
+        find("eyeLookUp"),
+        find("eyeLookDown"),
+    ) else {
+        return GazeSignal::UNAVAILABLE;
+    };
 
-    if left == 0.0 && right == 0.0 && up == 0.0 && down == 0.0 {
-        return None;
-    }
-
-    // Maximum expected eye movement: 35 degrees in either direction.
-    const MAX_GAZE_RAD: f32 = 35.0f32.to_radians();
-    let yaw = ((right - left) * MAX_GAZE_RAD).clamp(-MAX_GAZE_RAD, MAX_GAZE_RAD);
-    let pitch = ((up - down) * MAX_GAZE_RAD).clamp(-MAX_GAZE_RAD, MAX_GAZE_RAD);
-
-    Some(GazePose {
-        yaw_rad: yaw,
-        pitch_rad: pitch,
-    })
+    GazeSignal::tracked(right - left, up - down, observation.face_confidence)
 }
 
 // -----------------------------------------------------------------------------
@@ -1354,12 +1333,20 @@ mod assembly {
         let mut obs = observation(1, neutral_profile().landmarks.clone(), relaxed_expression());
         obs.blendshapes = Some(vec![
             NamedCoefficient {
+                name: "eyeLookLeft".into(),
+                value: 0.0,
+            },
+            NamedCoefficient {
                 name: "eyeLookRight".into(),
                 value: 0.5,
             },
             NamedCoefficient {
                 name: "eyeLookUp".into(),
                 value: 0.25,
+            },
+            NamedCoefficient {
+                name: "eyeLookDown".into(),
+                value: 0.0,
             },
         ]);
 
@@ -1369,15 +1356,11 @@ mod assembly {
             Duration::from_millis(33),
         );
         let frame = update.frame.expect("should emit frame");
-        let gaze = frame.gaze.expect("gaze should be present");
         assert!(
-            gaze.yaw_rad > 0.0,
-            "looking right should yield positive yaw"
+            frame.gaze.horizontal > 0.0,
+            "looking right should be positive"
         );
-        assert!(
-            gaze.pitch_rad > 0.0,
-            "looking up should yield positive pitch"
-        );
+        assert!(frame.gaze.vertical > 0.0, "looking up should be positive");
     }
 
     #[test]
@@ -1392,6 +1375,59 @@ mod assembly {
             Duration::from_millis(33),
         );
         let frame = update.frame.expect("should emit frame");
-        assert!(frame.gaze.is_none());
+        assert!(!frame.gaze.is_available());
+    }
+
+    #[test]
+    fn right_then_center_keeps_center_as_valid_zero_gaze() {
+        let mut pipeline = TrackingPipeline::new(config()).unwrap();
+        pipeline.apply_calibration(neutral_profile()).unwrap();
+
+        let mut right = observation(1, neutral_profile().landmarks.clone(), relaxed_expression());
+        right.blendshapes = Some(vec![
+            NamedCoefficient {
+                name: "eyeLookLeft".into(),
+                value: 0.0,
+            },
+            NamedCoefficient {
+                name: "eyeLookRight".into(),
+                value: 0.8,
+            },
+            NamedCoefficient {
+                name: "eyeLookUp".into(),
+                value: 0.0,
+            },
+            NamedCoefficient {
+                name: "eyeLookDown".into(),
+                value: 0.0,
+            },
+        ]);
+        let right_frame = pipeline
+            .update(
+                Some(&right),
+                MonoTimeNs(33_333_333),
+                Duration::from_millis(33),
+            )
+            .frame
+            .expect("right frame");
+        assert!(right_frame.gaze.horizontal > 0.0);
+
+        let mut center = right;
+        center.source_seq = FrameSeq(2);
+        center.captured_at = MonoTimeNs(66_666_666);
+        for coefficient in center.blendshapes.as_mut().expect("four channels") {
+            coefficient.value = 0.0;
+        }
+        let center_frame = pipeline
+            .update(
+                Some(&center),
+                MonoTimeNs(66_666_666),
+                Duration::from_millis(33),
+            )
+            .frame
+            .expect("center frame");
+        assert!(center_frame.gaze.is_available());
+        assert_eq!(center_frame.gaze.horizontal, 0.0);
+        assert_eq!(center_frame.gaze.vertical, 0.0);
     }
 }

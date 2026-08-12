@@ -9,7 +9,8 @@ use std::time::Duration;
 use approx::assert_relative_eq;
 
 use vtuber_core::types::{
-    AvatarControlFrame, ExpressionCoefficients, FrameSeq, HeadPose, MonoTimeNs, TrackingState,
+    AvatarControlFrame, ExpressionCoefficients, FrameSeq, GazeSignal, HeadPose, MonoTimeNs,
+    TrackingState,
 };
 use vtuber_tracking::loss_recovery::{
     LossRecovery, LossRecoveryConfigError, LossRecoveryParams, MAX_DECAY_DURATION,
@@ -38,7 +39,7 @@ fn frame(seq: u64, yaw: f32, pitch: f32, roll: f32, expression_value: f32) -> Av
             pitch_rad: pitch,
             roll_rad: roll,
         },
-        gaze: None,
+        gaze: GazeSignal::UNAVAILABLE,
         expressions: ExpressionCoefficients {
             aa: expression_value,
             ..ExpressionCoefficients::default()

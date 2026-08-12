@@ -6,7 +6,7 @@
 //! into tracking or avatar code.
 
 use vtuber_core::{
-    ExpressionCoefficients, FaceBlendshapeSet, FaceTrackingContractError, GazePose,
+    ExpressionCoefficients, FaceBlendshapeSet, FaceTrackingContractError, GazeSignal,
     MediaPipeBlendshape, RawExpressionObservation,
 };
 
@@ -82,16 +82,84 @@ pub fn map_mediapipe_raw_expressions(
     }
 }
 
-/// Converts eye look categories to semantic gaze radians.
+/// One eye's normalized eye-in-head observation before binocular fusion.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PerEyeGazeObservation {
+    /// Horizontal in `[-1, 1]`; unmirrored image right is positive.
+    pub horizontal: f32,
+    /// Vertical in `[-1, 1]`; up is positive.
+    pub vertical: f32,
+    /// Eye-openness-derived weight in `[0, 1]`.
+    pub weight: f32,
+}
+
+/// Binocular diagnostics retained alongside the fused common gaze.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BinocularGazeObservation {
+    /// Left-eye observation.
+    pub left: PerEyeGazeObservation,
+    /// Right-eye observation.
+    pub right: PerEyeGazeObservation,
+    /// Agreement factor in `[0, 1]`.
+    pub agreement: f32,
+    /// Common gaze used by VRM LookAt.
+    pub common: GazeSignal,
+}
+
+/// Converts typed MediaPipe eye channels directly to normalized common gaze.
 ///
-/// Positive yaw means the unmirrored image's right side and positive pitch
-/// means looking up.  The scale is deliberately conservative because the
-/// avatar eye-bone adapter applies the final model-specific limits.
+/// This deliberately does not create synthetic named coefficients and does
+/// not claim that the model scores are calibrated physical angles.
 #[must_use]
-pub fn map_mediapipe_gaze(values: &FaceBlendshapeSet) -> GazePose {
-    GazePose {
-        yaw_rad: (look_right(values) - look_left(values)) * 0.6,
-        pitch_rad: (look_up(values) - look_down(values)) * 0.45,
+pub fn map_mediapipe_gaze(values: &FaceBlendshapeSet) -> GazeSignal {
+    observe_mediapipe_gaze(values).common
+}
+
+/// Produces per-eye diagnostics and the fused common gaze.
+#[must_use]
+pub fn observe_mediapipe_gaze(values: &FaceBlendshapeSet) -> BinocularGazeObservation {
+    let left = PerEyeGazeObservation {
+        horizontal: (value(values, MediaPipeBlendshape::EyeLookOutLeft)
+            - value(values, MediaPipeBlendshape::EyeLookInLeft))
+        .clamp(-1.0, 1.0),
+        vertical: (value(values, MediaPipeBlendshape::EyeLookUpLeft)
+            - value(values, MediaPipeBlendshape::EyeLookDownLeft))
+        .clamp(-1.0, 1.0),
+        weight: (1.0 - value(values, MediaPipeBlendshape::EyeBlinkLeft)).clamp(0.0, 1.0),
+    };
+    let right = PerEyeGazeObservation {
+        horizontal: (value(values, MediaPipeBlendshape::EyeLookInRight)
+            - value(values, MediaPipeBlendshape::EyeLookOutRight))
+        .clamp(-1.0, 1.0),
+        vertical: (value(values, MediaPipeBlendshape::EyeLookUpRight)
+            - value(values, MediaPipeBlendshape::EyeLookDownRight))
+        .clamp(-1.0, 1.0),
+        weight: (1.0 - value(values, MediaPipeBlendshape::EyeBlinkRight)).clamp(0.0, 1.0),
+    };
+    let disagreement = ((left.horizontal - right.horizontal).abs()
+        + (left.vertical - right.vertical).abs())
+        * 0.25;
+    let agreement = (1.0 - disagreement).clamp(0.0, 1.0);
+    let weight_sum = left.weight + right.weight;
+    let common = if weight_sum <= 0.15 {
+        GazeSignal::UNAVAILABLE
+    } else {
+        let horizontal =
+            (left.horizontal * left.weight + right.horizontal * right.weight) / weight_sum;
+        let vertical = (left.vertical * left.weight + right.vertical * right.weight) / weight_sum;
+        let openness = (weight_sum * 0.5).clamp(0.0, 1.0);
+        let confidence = (openness * agreement).clamp(0.0, 1.0);
+        if left.weight > 0.2 && right.weight > 0.2 && agreement >= 0.5 {
+            GazeSignal::tracked(horizontal, vertical, confidence)
+        } else {
+            GazeSignal::degraded(horizontal, vertical, confidence.min(0.5))
+        }
+    };
+    BinocularGazeObservation {
+        left,
+        right,
+        agreement,
+        common,
     }
 }
 
@@ -134,6 +202,7 @@ fn average(left: f32, right: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vtuber_core::GazeTrackingState;
 
     fn set(values: &[(MediaPipeBlendshape, f32)]) -> FaceBlendshapeSet {
         let pairs: Vec<(&str, f32)> = MediaPipeBlendshape::ALL
@@ -182,8 +251,52 @@ mod tests {
         assert!(expressions.look_left.abs() < 1.0e-6);
         assert!((expressions.look_up - 0.4).abs() < 1.0e-6);
         let gaze = map_mediapipe_gaze(&values);
-        assert!((gaze.yaw_rad - 0.48).abs() < 1.0e-6);
-        assert!((gaze.pitch_rad - 0.18).abs() < 1.0e-6);
+        assert!((gaze.horizontal - 0.766_666_65).abs() < 1.0e-6);
+        assert!((gaze.vertical - 0.366_666_67).abs() < 1.0e-6);
+        assert_eq!(gaze.state, GazeTrackingState::Degraded);
+    }
+
+    #[test]
+    fn binocular_gaze_signs_agreement_and_blink_weight_are_explicit() {
+        let right = set(&[
+            (MediaPipeBlendshape::EyeLookOutLeft, 0.8),
+            (MediaPipeBlendshape::EyeLookInRight, 0.6),
+            (MediaPipeBlendshape::EyeLookUpLeft, 0.4),
+            (MediaPipeBlendshape::EyeLookUpRight, 0.4),
+        ]);
+        let observation = observe_mediapipe_gaze(&right);
+        assert!(observation.left.horizontal > 0.0);
+        assert!(observation.right.horizontal > 0.0);
+        assert!(observation.common.horizontal > 0.0);
+        assert!(observation.common.vertical > 0.0);
+
+        let disagrees = set(&[
+            (MediaPipeBlendshape::EyeLookOutLeft, 1.0),
+            (MediaPipeBlendshape::EyeLookOutRight, 1.0),
+        ]);
+        assert!(
+            observe_mediapipe_gaze(&disagrees).common.confidence < observation.common.confidence
+        );
+
+        let left_blinked = set(&[
+            (MediaPipeBlendshape::EyeBlinkLeft, 1.0),
+            (MediaPipeBlendshape::EyeLookOutLeft, 1.0),
+            (MediaPipeBlendshape::EyeLookInRight, 0.5),
+        ]);
+        let blinked = observe_mediapipe_gaze(&left_blinked);
+        assert!((blinked.common.horizontal - 0.5).abs() < 1.0e-6);
+        assert_eq!(blinked.common.state, GazeTrackingState::Degraded);
+
+        let both_blinked = set(&[
+            (MediaPipeBlendshape::EyeBlinkLeft, 1.0),
+            (MediaPipeBlendshape::EyeBlinkRight, 1.0),
+            (MediaPipeBlendshape::EyeLookOutLeft, 1.0),
+            (MediaPipeBlendshape::EyeLookInRight, 1.0),
+        ]);
+        assert_eq!(
+            observe_mediapipe_gaze(&both_blinked).common,
+            GazeSignal::UNAVAILABLE
+        );
     }
 
     #[test]

@@ -227,14 +227,9 @@ fn assert_frames_eq(a: &AvatarControlFrame, b: &AvatarControlFrame) {
         epsilon = 1e-5
     );
     assert_relative_eq!(a.expressions.aa, b.expressions.aa, epsilon = 1e-5);
-    match (a.gaze, b.gaze) {
-        (Some(ag), Some(bg)) => {
-            assert_relative_eq!(ag.yaw_rad, bg.yaw_rad, epsilon = 1e-5);
-            assert_relative_eq!(ag.pitch_rad, bg.pitch_rad, epsilon = 1e-5);
-        }
-        (None, None) => {}
-        _ => panic!("gaze mismatch: {:?} vs {:?}", a.gaze, b.gaze),
-    }
+    assert_eq!(a.gaze.state, b.gaze.state);
+    assert_relative_eq!(a.gaze.horizontal, b.gaze.horizontal, epsilon = 1e-5);
+    assert_relative_eq!(a.gaze.vertical, b.gaze.vertical, epsilon = 1e-5);
 }
 
 #[test]
@@ -429,8 +424,16 @@ fn replay_gaze_appears_when_blendshapes_present() {
         relaxed_expression(),
         Some(vec![
             NamedCoefficient {
+                name: "eyeLookLeft".into(),
+                value: 0.0,
+            },
+            NamedCoefficient {
                 name: "eyeLookRight".into(),
                 value: 0.6,
+            },
+            NamedCoefficient {
+                name: "eyeLookUp".into(),
+                value: 0.0,
             },
             NamedCoefficient {
                 name: "eyeLookDown".into(),
@@ -441,7 +444,6 @@ fn replay_gaze_appears_when_blendshapes_present() {
 
     let outputs = replay(&stream, &mut pipeline);
     let frame = outputs.first().expect("should emit frame");
-    let gaze = frame.gaze.expect("gaze should be present");
-    assert!(gaze.yaw_rad > 0.0, "right gaze must be positive yaw");
-    assert!(gaze.pitch_rad < 0.0, "down gaze must be negative pitch");
+    assert!(frame.gaze.horizontal > 0.0, "right gaze must be positive");
+    assert!(frame.gaze.vertical < 0.0, "down gaze must be negative");
 }

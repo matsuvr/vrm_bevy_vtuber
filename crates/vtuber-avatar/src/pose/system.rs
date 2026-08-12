@@ -229,7 +229,7 @@ mod tests {
                 pitch_rad: 0.2,
                 roll_rad: 0.1,
             },
-            gaze: None,
+            gaze: vtuber_core::GazeSignal::UNAVAILABLE,
             expressions: ExpressionCoefficients::default(),
         }
     }

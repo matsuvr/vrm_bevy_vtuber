@@ -28,7 +28,12 @@ pub fn apply_tracked_eye_gaze(
     if capabilities.gaze != GazeMode::EyeBones {
         return;
     }
-    let Some(gaze) = control_frame.frame.as_ref().and_then(|frame| frame.gaze) else {
+    let Some(gaze) = control_frame
+        .frame
+        .as_ref()
+        .map(|frame| frame.gaze)
+        .filter(|gaze| gaze.is_available())
+    else {
         return;
     };
     let Some(root) = lifecycle.active_root() else {
@@ -39,8 +44,8 @@ pub fn apply_tracked_eye_gaze(
     };
     let delta = compute_eye_bone_rotation(
         &RawGazeInput {
-            yaw_rad: gaze.yaw_rad,
-            pitch_rad: gaze.pitch_rad,
+            yaw_rad: gaze.horizontal,
+            pitch_rad: gaze.vertical,
         },
         &EyeBoneGazeSettings::default(),
     );

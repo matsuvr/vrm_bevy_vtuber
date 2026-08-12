@@ -136,13 +136,82 @@ pub struct HeadPose {
     pub roll_rad: f32,
 }
 
-/// Semantic gaze direction in radians.
+/// Availability and reliability of an eye-in-head gaze observation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GazeTrackingState {
+    /// Both eyes provide a reliable common gaze estimate.
+    Tracked,
+    /// A usable estimate exists, but binocular agreement or visibility is reduced.
+    Degraded,
+    /// No new eye-in-head observation is available.
+    #[default]
+    Unavailable,
+}
+
+/// Engine-neutral, normalized eye-in-head gaze signal.
+///
+/// This is not a physical angle. Model-specific conversion to VRM LookAt
+/// degrees belongs to the avatar adapter.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct GazePose {
-    /// Positive when looking right.
-    pub yaw_rad: f32,
-    /// Positive when looking up.
-    pub pitch_rad: f32,
+pub struct GazeSignal {
+    /// Horizontal eye-in-head signal in `[-1, 1]`; image right is positive.
+    pub horizontal: f32,
+    /// Vertical eye-in-head signal in `[-1, 1]`; up is positive.
+    pub vertical: f32,
+    /// Reliability in `[0, 1]`.
+    pub confidence: f32,
+    /// Whether this value is tracked, degraded, or unavailable.
+    pub state: GazeTrackingState,
+}
+
+impl GazeSignal {
+    /// Explicit unavailable signal. Unlike centered tracked gaze, it carries no observation.
+    pub const UNAVAILABLE: Self = Self {
+        horizontal: 0.0,
+        vertical: 0.0,
+        confidence: 0.0,
+        state: GazeTrackingState::Unavailable,
+    };
+
+    /// Builds a bounded tracked signal, safely degrading non-finite input to unavailable.
+    #[must_use]
+    pub fn tracked(horizontal: f32, vertical: f32, confidence: f32) -> Self {
+        Self::available(horizontal, vertical, confidence, GazeTrackingState::Tracked)
+    }
+
+    /// Builds a bounded degraded signal, safely degrading non-finite input to unavailable.
+    #[must_use]
+    pub fn degraded(horizontal: f32, vertical: f32, confidence: f32) -> Self {
+        Self::available(
+            horizontal,
+            vertical,
+            confidence,
+            GazeTrackingState::Degraded,
+        )
+    }
+
+    fn available(
+        horizontal: f32,
+        vertical: f32,
+        confidence: f32,
+        state: GazeTrackingState,
+    ) -> Self {
+        if !horizontal.is_finite() || !vertical.is_finite() || !confidence.is_finite() {
+            return Self::UNAVAILABLE;
+        }
+        Self {
+            horizontal: horizontal.clamp(-1.0, 1.0),
+            vertical: vertical.clamp(-1.0, 1.0),
+            confidence: confidence.clamp(0.0, 1.0),
+            state,
+        }
+    }
+
+    /// Returns whether this signal contains a current or degraded observation.
+    #[must_use]
+    pub const fn is_available(self) -> bool {
+        !matches!(self.state, GazeTrackingState::Unavailable)
+    }
 }
 
 /// Expression coefficients applied to the avatar.
@@ -217,8 +286,34 @@ pub struct AvatarControlFrame {
     pub state: TrackingState,
     /// Head pose relative to calibrated neutral.
     pub head: HeadPose,
-    /// Optional gaze pose.
-    pub gaze: Option<GazePose>,
+    /// Explicit normalized eye-in-head gaze signal.
+    pub gaze: GazeSignal,
     /// Expression coefficients.
     pub expressions: ExpressionCoefficients,
+}
+
+#[cfg(test)]
+mod gaze_contract_tests {
+    use super::*;
+
+    #[test]
+    fn centered_tracked_gaze_is_distinct_from_unavailable() {
+        let centered = GazeSignal::tracked(0.0, 0.0, 1.0);
+        assert!(centered.is_available());
+        assert_eq!(centered.horizontal, 0.0);
+        assert_eq!(centered.vertical, 0.0);
+        assert_ne!(centered, GazeSignal::UNAVAILABLE);
+    }
+
+    #[test]
+    fn gaze_contract_clamps_ranges_and_rejects_non_finite_values() {
+        let bounded = GazeSignal::degraded(2.0, -2.0, 4.0);
+        assert_eq!(bounded.horizontal, 1.0);
+        assert_eq!(bounded.vertical, -1.0);
+        assert_eq!(bounded.confidence, 1.0);
+        assert_eq!(
+            GazeSignal::tracked(f32::NAN, 0.0, 1.0),
+            GazeSignal::UNAVAILABLE
+        );
+    }
 }

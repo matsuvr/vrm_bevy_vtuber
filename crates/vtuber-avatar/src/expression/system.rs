@@ -212,11 +212,12 @@ pub fn apply_tracked_expressions(
     );
     let gaze = frame
         .gaze
-        .map(|gaze| {
+        .is_available()
+        .then(|| {
             map_gaze_to_expressions(
                 &RawGazeInput {
-                    yaw_rad: gaze.yaw_rad,
-                    pitch_rad: gaze.pitch_rad,
+                    yaw_rad: frame.gaze.horizontal,
+                    pitch_rad: frame.gaze.vertical,
                 },
                 &capabilities.look_directions,
                 &Default::default(),

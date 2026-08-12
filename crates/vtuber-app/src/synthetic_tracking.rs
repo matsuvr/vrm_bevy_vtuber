@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use vtuber_avatar::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
 use vtuber_avatar::unload::{ActiveControlFrame, set_active_control_frame, tag_control_frame};
 use vtuber_core::types::{
-    AvatarControlFrame, ExpressionCoefficients, FrameSeq, GazePose, HeadPose, MonoTimeNs,
+    AvatarControlFrame, ExpressionCoefficients, FrameSeq, GazeSignal, HeadPose, MonoTimeNs,
     TrackingState,
 };
 
@@ -41,10 +41,10 @@ pub struct SyntheticTrackingSource {
     pub blink_period: f32,
     /// Mouth openness cycle period in seconds.
     pub mouth_period: f32,
-    /// Gaze yaw amplitude in radians.
-    pub gaze_yaw_amp: f32,
-    /// Gaze pitch amplitude in radians.
-    pub gaze_pitch_amp: f32,
+    /// Normalized horizontal gaze amplitude.
+    pub gaze_horizontal_amp: f32,
+    /// Normalized vertical gaze amplitude.
+    pub gaze_vertical_amp: f32,
 }
 
 impl Default for SyntheticTrackingSource {
@@ -61,8 +61,8 @@ impl Default for SyntheticTrackingSource {
             roll_period: 5.0,
             blink_period: 3.5,
             mouth_period: 2.0,
-            gaze_yaw_amp: 0.25,
-            gaze_pitch_amp: 0.15,
+            gaze_horizontal_amp: 0.5,
+            gaze_vertical_amp: 0.4,
         }
     }
 }
@@ -89,10 +89,11 @@ impl SyntheticTrackingSource {
         let mouth_phase = (two_pi * t / self.mouth_period).sin();
         let mouth = (mouth_phase * 0.5 + 0.5).clamp(0.0, 1.0) * 0.6;
 
-        let gaze = Some(GazePose {
-            yaw_rad: self.gaze_yaw_amp * (two_pi * t / (self.yaw_period * 0.7)).sin(),
-            pitch_rad: self.gaze_pitch_amp * (two_pi * t / (self.pitch_period * 1.3)).sin(),
-        });
+        let gaze = GazeSignal::tracked(
+            self.gaze_horizontal_amp * (two_pi * t / (self.yaw_period * 0.7)).sin(),
+            self.gaze_vertical_amp * (two_pi * t / (self.pitch_period * 1.3)).sin(),
+            1.0,
+        );
 
         let expressions = ExpressionCoefficients {
             blink_left: blink,
@@ -215,9 +216,8 @@ mod tests {
     fn synthetic_source_gaze_present() {
         let mut src = SyntheticTrackingSource::default();
         let f = src.next_frame();
-        assert!(f.gaze.is_some());
-        let gaze = f.gaze.unwrap();
-        assert!(gaze.yaw_rad.is_finite());
-        assert!(gaze.pitch_rad.is_finite());
+        assert!(f.gaze.is_available());
+        assert!(f.gaze.horizontal.is_finite());
+        assert!(f.gaze.vertical.is_finite());
     }
 }

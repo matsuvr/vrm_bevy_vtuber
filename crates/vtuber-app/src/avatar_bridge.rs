@@ -109,7 +109,7 @@ mod tests {
                 confidence: 1.0,
                 state: vtuber_core::TrackingState::Tracking,
                 head: vtuber_core::HeadPose::default(),
-                gaze: None,
+                gaze: vtuber_core::GazeSignal::UNAVAILABLE,
                 expressions: vtuber_core::ExpressionCoefficients::default(),
             });
 
@@ -148,7 +148,7 @@ mod tests {
                 yaw_rad: 0.2,
                 ..Default::default()
             },
-            gaze: None,
+            gaze: vtuber_core::GazeSignal::UNAVAILABLE,
             expressions: vtuber_core::ExpressionCoefficients::default(),
         };
         {
