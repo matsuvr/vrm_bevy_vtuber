@@ -29,6 +29,10 @@ allow = [
     "Unicode-3.0",
     "MPL-2.0",
     "OFL-1.1",
+    # Embedded default UI font shipped transitively by epaint_default_fonts.
+    "Ubuntu-font-1.0",
+    # Mozilla CA root data shipped transitively by the pinned MediaPipe runtime.
+    "CDLA-Permissive-2.0",
     "CC0-1.0",
     "Zlib",
     "IJG",
@@ -51,7 +55,8 @@ skip-tree = []
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-git = [
-    "https://github.com/not-elm/bevy_vrm1",
+    # ADR-009 pins this source to revision 527037fa0fe1339750140283930bbb9560460e9e.
+    "https://github.com/nikicat/mediapipe-rs",
 ]
 
 [sources.allow-org]
