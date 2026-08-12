@@ -41,6 +41,54 @@ pub enum LookAt {
     Target(Entity),
 }
 
+/// Direct head-relative `LookAt` input for tracker-owned eye-in-head gaze.
+///
+/// Unlike [`LookAt::Target`], this component requires no world-space target
+/// entity. It is inserted on the VRM root and uses VRM LookAt-space degrees.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct DirectLookAtInput {
+    /// VRM LookAt-space yaw in degrees. Positive points toward model left.
+    pub yaw_degrees: f32,
+    /// VRM LookAt-space pitch in degrees. Positive points down.
+    pub pitch_degrees: f32,
+    /// Effective input weight in `[0, 1]`.
+    pub weight: f32,
+    /// Whether a tracked or returning input is active.
+    pub active: bool,
+}
+
+impl Default for DirectLookAtInput {
+    fn default() -> Self {
+        Self {
+            yaw_degrees: 0.0,
+            pitch_degrees: 0.0,
+            weight: 0.0,
+            active: false,
+        }
+    }
+}
+
+/// Range-mapped look-direction weights generated for Expression `LookAt`.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct LookAtExpressionWeights {
+    /// `lookLeft` weight.
+    pub look_left: f32,
+    /// `lookRight` weight.
+    pub look_right: f32,
+    /// `lookUp` weight.
+    pub look_up: f32,
+    /// `lookDown` weight.
+    pub look_down: f32,
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+struct AppliedEyeGaze {
+    last_output: Quat,
+    last_delta: Quat,
+}
+
 pub(super) struct LookAtPlugin;
 
 impl Plugin for LookAtPlugin {
@@ -49,26 +97,29 @@ impl Plugin for LookAtPlugin {
         app: &mut App,
     ) {
         app.register_type::<LookAt>()
+            .register_type::<DirectLookAtInput>()
+            .register_type::<LookAtExpressionWeights>()
             .register_type::<LookAtProperties>()
             .register_type::<LookAtType>()
             .add_systems(
                 PostUpdate,
-                track_looking_target
-                    .in_set(VrmSystemSets::GazeControl)
-                    .after(VrmSystemSets::PropagateAfterConstraints),
+                (track_direct_look_at, track_looking_target).in_set(VrmSystemSets::GazeControl),
             );
     }
 }
 
 pub(crate) fn track_looking_target(
     mut commands: Commands,
-    vrms: Query<(
-        &LookAt,
-        &LookAtProperties,
-        &HeadBoneEntity,
-        &LeftEyeBoneEntity,
-        &RightEyeBoneEntity,
-    )>,
+    vrms: Query<
+        (
+            &LookAt,
+            &LookAtProperties,
+            &HeadBoneEntity,
+            &LeftEyeBoneEntity,
+            &RightEyeBoneEntity,
+        ),
+        Without<DirectLookAtInput>,
+    >,
     transforms: Query<&Transform>,
     global_transforms: Query<&GlobalTransform>,
     rests: Query<(&RestTransform, &RestGlobalTransform)>,
@@ -124,6 +175,150 @@ pub(crate) fn track_looking_target(
                 }
             }
         });
+}
+
+fn track_direct_look_at(
+    mut commands: Commands,
+    vrms: Query<(
+        Entity,
+        &DirectLookAtInput,
+        &LookAtProperties,
+        Option<&LeftEyeBoneEntity>,
+        Option<&RightEyeBoneEntity>,
+    )>,
+    eyes: Query<(
+        &Transform,
+        &RestTransform,
+        &RestGlobalTransform,
+        Option<&AppliedEyeGaze>,
+    )>,
+) {
+    for (root, input, properties, left_eye, right_eye) in vrms.iter() {
+        let (yaw, pitch, weight) = sanitized_direct_input(*input);
+        match properties.r#type {
+            LookAtType::Bone => {
+                commands
+                    .entity(root)
+                    .insert(LookAtExpressionWeights::default());
+                let (Some(left_eye), Some(right_eye)) = (left_eye, right_eye) else {
+                    continue;
+                };
+                apply_direct_eye(
+                    &mut commands,
+                    &eyes,
+                    left_eye.0,
+                    properties,
+                    yaw * weight,
+                    pitch * weight,
+                    true,
+                );
+                apply_direct_eye(
+                    &mut commands,
+                    &eyes,
+                    right_eye.0,
+                    properties,
+                    yaw * weight,
+                    pitch * weight,
+                    false,
+                );
+            }
+            LookAtType::Expression => {
+                commands
+                    .entity(root)
+                    .insert(expression_weights(properties, yaw, pitch, weight));
+            }
+        }
+    }
+}
+
+fn sanitized_direct_input(input: DirectLookAtInput) -> (f32, f32, f32) {
+    if !input.active
+        || !input.yaw_degrees.is_finite()
+        || !input.pitch_degrees.is_finite()
+        || !input.weight.is_finite()
+    {
+        return (0.0, 0.0, 0.0);
+    }
+    let weight = input.weight.clamp(0.0, 1.0);
+    (input.yaw_degrees, input.pitch_degrees, weight)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_direct_eye(
+    commands: &mut Commands,
+    eyes: &Query<(
+        &Transform,
+        &RestTransform,
+        &RestGlobalTransform,
+        Option<&AppliedEyeGaze>,
+    )>,
+    entity: Entity,
+    properties: &LookAtProperties,
+    yaw: f32,
+    pitch: f32,
+    is_left: bool,
+) {
+    let Ok((transform, rest, rest_global, applied)) = eyes.get(entity) else {
+        return;
+    };
+    let target = if is_left {
+        apply_left_eye_bone(transform, rest, rest_global, properties, yaw, pitch)
+    } else {
+        apply_right_eye_bone(transform, rest, rest_global, properties, yaw, pitch)
+    };
+    let gaze_delta = (rest.rotation.inverse() * target.rotation).normalize();
+    let animated_base = match applied {
+        Some(applied) if transform.rotation.abs_diff_eq(applied.last_output, 1.0e-5) => {
+            (transform.rotation * applied.last_delta.inverse()).normalize()
+        }
+        _ => transform.rotation,
+    };
+    let output = (animated_base * gaze_delta).normalize();
+    if !output.is_finite() {
+        return;
+    }
+    commands.entity(entity).insert((
+        transform.with_rotation(output),
+        AppliedEyeGaze {
+            last_output: output,
+            last_delta: gaze_delta,
+        },
+    ));
+}
+
+fn expression_weights(
+    properties: &LookAtProperties,
+    yaw: f32,
+    pitch: f32,
+    weight: f32,
+) -> LookAtExpressionWeights {
+    let horizontal = map_range(yaw.abs(), properties.range_map_horizontal_outer) * weight;
+    let vertical_map = if pitch >= 0.0 {
+        properties.range_map_vertical_down
+    } else {
+        properties.range_map_vertical_up
+    };
+    let vertical = map_range(pitch.abs(), vertical_map) * weight;
+    LookAtExpressionWeights {
+        look_left: if yaw > 0.0 { horizontal } else { 0.0 },
+        look_right: if yaw < 0.0 { horizontal } else { 0.0 },
+        look_up: if pitch < 0.0 { vertical } else { 0.0 },
+        look_down: if pitch > 0.0 { vertical } else { 0.0 },
+    }
+}
+
+fn map_range(
+    input: f32,
+    range: RangeMap,
+) -> f32 {
+    if !input.is_finite()
+        || !range.input_max_value.is_finite()
+        || !range.output_scale.is_finite()
+        || range.input_max_value <= 0.0
+    {
+        return 0.0;
+    }
+    (input.min(range.input_max_value) / range.input_max_value * range.output_scale).clamp(0.0, 1.0)
 }
 
 fn apply_bone(
@@ -249,27 +444,15 @@ fn apply_left_eye_bone(
     let range_map_vertical_down = properties.range_map_vertical_down;
     let range_map_vertical_up = properties.range_map_vertical_up;
     let yaw = if yaw_degrees > 0.0 {
-        yaw_degrees.min(range_map_horizontal_outer.input_max_value)
-            / range_map_horizontal_outer.input_max_value
-            * range_map_horizontal_outer.output_scale
+        map_range_output(yaw_degrees, range_map_horizontal_outer)
     } else {
-        -(yaw_degrees
-            .abs()
-            .min(range_map_horizontal_inner.input_max_value)
-            / range_map_horizontal_inner.input_max_value
-            * range_map_horizontal_inner.output_scale)
+        -map_range_output(yaw_degrees.abs(), range_map_horizontal_inner)
     };
 
     let pitch = if pitch_degrees > 0.0 {
-        pitch_degrees.min(range_map_vertical_down.input_max_value)
-            / range_map_vertical_down.input_max_value
-            * range_map_vertical_down.output_scale
+        map_range_output(pitch_degrees, range_map_vertical_down)
     } else {
-        -(pitch_degrees
-            .abs()
-            .min(range_map_vertical_up.input_max_value)
-            / range_map_vertical_up.input_max_value
-            * range_map_vertical_up.output_scale)
+        -map_range_output(pitch_degrees.abs(), range_map_vertical_up)
     };
     left_eye.with_rotation(to_eye_rotation(yaw, pitch, rest_tf, rest_gtf))
 }
@@ -288,27 +471,15 @@ fn apply_right_eye_bone(
     let range_map_vertical_up = properties.range_map_vertical_up;
 
     let yaw = if yaw_degrees > 0.0 {
-        yaw_degrees.min(range_map_horizontal_inner.input_max_value)
-            / range_map_horizontal_inner.input_max_value
-            * range_map_horizontal_inner.output_scale
+        map_range_output(yaw_degrees, range_map_horizontal_inner)
     } else {
-        -(yaw_degrees
-            .abs()
-            .min(range_map_horizontal_outer.input_max_value)
-            / range_map_horizontal_outer.input_max_value
-            * range_map_horizontal_outer.output_scale)
+        -map_range_output(yaw_degrees.abs(), range_map_horizontal_outer)
     };
 
     let pitch = if pitch_degrees > 0.0 {
-        pitch_degrees.min(range_map_vertical_down.input_max_value)
-            / range_map_vertical_down.input_max_value
-            * range_map_vertical_down.output_scale
+        map_range_output(pitch_degrees, range_map_vertical_down)
     } else {
-        -(pitch_degrees
-            .abs()
-            .min(range_map_vertical_up.input_max_value)
-            / range_map_vertical_up.input_max_value
-            * range_map_vertical_up.output_scale)
+        -map_range_output(pitch_degrees.abs(), range_map_vertical_up)
     };
 
     right_eye.with_rotation(to_eye_rotation(yaw, pitch, rest_tf, rest_gtf))
@@ -324,4 +495,112 @@ fn to_eye_rotation(
     (rest_tf.rotation * rest_gtf.rotation().inverse())
         * Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), pitch.to_radians(), 0.0)
         * rest_gtf.rotation()
+}
+
+fn map_range_output(
+    input: f32,
+    range: RangeMap,
+) -> f32 {
+    if !input.is_finite()
+        || !range.input_max_value.is_finite()
+        || !range.output_scale.is_finite()
+        || range.input_max_value <= 0.0
+    {
+        return 0.0;
+    }
+    input.min(range.input_max_value) / range.input_max_value * range.output_scale.max(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn properties(r#type: LookAtType) -> LookAtProperties {
+        LookAtProperties {
+            offset_from_head_bone: [0.0; 3],
+            range_map_horizontal_inner: RangeMap {
+                input_max_value: 20.0,
+                output_scale: 5.0,
+            },
+            range_map_horizontal_outer: RangeMap {
+                input_max_value: 40.0,
+                output_scale: 10.0,
+            },
+            range_map_vertical_down: RangeMap {
+                input_max_value: 30.0,
+                output_scale: 12.0,
+            },
+            range_map_vertical_up: RangeMap {
+                input_max_value: 15.0,
+                output_scale: 8.0,
+            },
+            r#type,
+        }
+    }
+
+    #[test]
+    fn direct_input_needs_no_cursor_or_target_entity() {
+        let input = DirectLookAtInput {
+            yaw_degrees: 12.0,
+            pitch_degrees: -4.0,
+            weight: 0.5,
+            active: true,
+        };
+        assert_eq!(sanitized_direct_input(input), (12.0, -4.0, 0.5));
+    }
+
+    #[test]
+    fn expression_output_is_directionally_exclusive_and_range_mapped() {
+        let weights = expression_weights(&properties(LookAtType::Expression), 20.0, -7.5, 1.0);
+        assert_eq!(weights.look_left, 1.0);
+        assert_eq!(weights.look_right, 0.0);
+        assert_eq!(weights.look_up, 1.0);
+        assert_eq!(weights.look_down, 0.0);
+    }
+
+    #[test]
+    fn zero_input_max_value_produces_neutral_without_division() {
+        let mut properties = properties(LookAtType::Expression);
+        properties.range_map_horizontal_outer.input_max_value = 0.0;
+        let weights = expression_weights(&properties, 30.0, 0.0, 1.0);
+        assert_eq!(weights.look_left, 0.0);
+        assert!(weights.look_left.is_finite());
+        assert_eq!(
+            map_range_output(30.0, properties.range_map_horizontal_outer),
+            0.0
+        );
+    }
+
+    #[test]
+    fn left_and_right_eyes_use_outer_and_inner_maps_separately() {
+        let properties = properties(LookAtType::Bone);
+        let rest = RestTransform(Transform::IDENTITY);
+        let rest_global = RestGlobalTransform(GlobalTransform::IDENTITY);
+        let current = Transform::IDENTITY;
+        let left = apply_left_eye_bone(&current, &rest, &rest_global, &properties, 20.0, 0.0);
+        let right = apply_right_eye_bone(&current, &rest, &rest_global, &properties, 20.0, 0.0);
+        let (_, left_yaw, _) = left.rotation.to_euler(EulerRot::XYZ);
+        let (_, right_yaw, _) = right.rotation.to_euler(EulerRot::XYZ);
+        assert!((left_yaw.to_degrees() - 5.0).abs() < 1.0e-3);
+        assert!((right_yaw.to_degrees() - 5.0).abs() < 1.0e-3);
+    }
+
+    #[test]
+    fn non_identity_rest_orientation_produces_finite_local_rotation() {
+        let rest_rotation = Quat::from_rotation_z(0.3);
+        let rest = RestTransform(Transform::from_rotation(rest_rotation));
+        let rest_global = RestGlobalTransform(GlobalTransform::from(Transform::from_rotation(
+            Quat::from_euler(EulerRot::XYZ, 0.2, -0.1, 0.3),
+        )));
+        let output = apply_left_eye_bone(
+            &Transform::from_rotation(rest_rotation),
+            &rest,
+            &rest_global,
+            &properties(LookAtType::Bone),
+            -10.0,
+            5.0,
+        );
+        assert!(output.rotation.is_finite());
+        assert!(!output.rotation.abs_diff_eq(rest_rotation, 1.0e-5));
+    }
 }

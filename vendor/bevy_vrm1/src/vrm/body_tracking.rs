@@ -133,7 +133,6 @@ impl Plugin for BodyTrackingPlugin {
             PostUpdate,
             track_body_tracking
                 .in_set(VrmSystemSets::GazeControl)
-                .after(VrmSystemSets::PropagateAfterConstraints)
                 .before(track_looking_target)
                 .run_if(any_with_component::<BodyTracking>),
         );

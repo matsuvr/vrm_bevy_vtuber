@@ -250,6 +250,7 @@ pub(super) fn register(app: &mut App) {
             PostUpdate,
             apply_direct_body_tracking
                 .after(AnimationSystems)
+                .before(VrmSystemSets::GazeControl)
                 .before(VrmSystemSets::Constraints)
                 .run_if(any_with_component::<BodyTrackingPoseInput>),
         );

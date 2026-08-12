@@ -6,7 +6,7 @@ use crate::vrm::first_person::FirstPersonRegistry;
 use crate::vrm::gltf::extensions::vrmc_vrm::LookAtProperties;
 use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
 use crate::vrm::loader::VrmHandle;
-use crate::vrm::look_at::LookAt;
+use crate::vrm::look_at::{DirectLookAtInput, LookAt, LookAtExpressionWeights};
 use crate::vrm::mtoon::VrmcMaterialRegistry;
 use crate::vrm::node_constraint::registry::NodeConstraintRegistry;
 use crate::vrm::spring_bone::registry::{
@@ -91,6 +91,8 @@ fn remove_vrm_components(
         // Gaze/Body
         .try_remove::<LookAtProperties>()
         .try_remove::<LookAt>()
+        .try_remove::<DirectLookAtInput>()
+        .try_remove::<LookAtExpressionWeights>()
         .try_remove::<BodyTracking>()
         .try_remove::<BodyTrackingPoseInput>()
         .try_remove::<BodyTrackingProfile>()

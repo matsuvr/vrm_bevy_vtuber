@@ -51,7 +51,7 @@ pub mod prelude {
         gltf::prelude::*,
         humanoid_bone::prelude::*,
         loader::{VrmAsset, VrmHandle},
-        look_at::LookAt,
+        look_at::{DirectLookAtInput, LookAt, LookAtExpressionWeights},
         mtoon::prelude::*,
         spring_bone::{SpringJointProps, SpringJoints, SpringRoot},
     };
@@ -140,6 +140,20 @@ impl Plugin for VrmPlugin {
             VrmFirstPersonPlugin,
         ));
 
+        app.configure_sets(
+            PostUpdate,
+            (
+                VrmSystemSets::GazeControl,
+                VrmSystemSets::Expressions,
+                VrmSystemSets::PropagateAfterExpressions,
+                VrmSystemSets::Constraints,
+                VrmSystemSets::PropagateAfterConstraints,
+                VrmSystemSets::SpringBone,
+            )
+                .chain()
+                .after(AnimationSystems),
+        );
+
         // Add manual transform propagation systems to follow VRM spec update order
         // See: https://vrm.dev/api/api_update/
         app.add_systems(
@@ -148,7 +162,7 @@ impl Plugin for VrmPlugin {
                 .chain()
                 .in_set(VrmSystemSets::PropagateAfterConstraints)
                 .after(VrmSystemSets::Constraints)
-                .before(VrmSystemSets::GazeControl),
+                .before(VrmSystemSets::SpringBone),
         );
         app.add_systems(
             PostUpdate,
@@ -156,7 +170,7 @@ impl Plugin for VrmPlugin {
                 .chain()
                 .in_set(VrmSystemSets::PropagateAfterExpressions)
                 .after(VrmSystemSets::Expressions)
-                .before(VrmSystemSets::SpringBone),
+                .before(VrmSystemSets::Constraints),
         );
 
         app.register_type::<Vrm>()

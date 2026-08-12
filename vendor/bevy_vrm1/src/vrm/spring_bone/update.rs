@@ -17,7 +17,7 @@ impl Plugin for SpringBoneUpdatePlugin {
             PostUpdate,
             update_spring_bones
                 .in_set(VrmSystemSets::SpringBone)
-                .after(VrmSystemSets::PropagateAfterExpressions),
+                .after(VrmSystemSets::PropagateAfterConstraints),
         );
     }
 }
