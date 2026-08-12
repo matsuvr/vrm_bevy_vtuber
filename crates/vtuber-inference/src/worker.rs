@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use vtuber_core::types::{FrameSeq, RawFaceObservation, VideoFrame};
-use vtuber_core::{LatestSlot, ReadResult, StopToken};
+use vtuber_core::{FaceTrackingOutcome, LatestSlot, ReadResult, StopToken};
 
 use crate::controller::{ControlCommand, InferenceWorkerResult};
 use crate::descriptor::{FacePipelineDescriptor, ModelDescriptor, RuntimeSettings};
@@ -12,7 +12,10 @@ use crate::error::{InferenceError, Result};
 use crate::metrics::InferenceStage;
 use crate::pipeline::Pipeline;
 use crate::preprocess::{PreprocessBuffers, PreprocessParams, preprocess_frame};
-use crate::runtime::{FaceInference, FrameFaceInference, FrameInferenceOutcome, InferenceOutcome};
+use crate::runtime::{
+    FaceInference, FaceTrackingInference, FrameFaceInference, FrameInferenceOutcome,
+    InferenceOutcome,
+};
 use crate::state::{FailureStage, InferenceWorkerState, SharedStatus};
 
 /// Maximum consecutive recoverable per-frame errors before the worker halts.
@@ -40,9 +43,11 @@ pub fn run_inference_worker(
     frame_slot: Arc<LatestSlot<VideoFrame>>,
     output_slot: Arc<LatestSlot<RawFaceObservation>>,
     outcome_slot: Arc<LatestSlot<InferenceOutcome>>,
+    canonical_outcome_slot: Arc<LatestSlot<FaceTrackingOutcome>>,
 ) -> InferenceWorkerResult {
     let mut context: Option<InferenceContext> = None;
     let mut composite_runtime: Option<Box<dyn FrameFaceInference>> = None;
+    let mut mediapipe_runtime: Option<Box<dyn FaceTrackingInference>> = None;
     let mut last_gen = 0u64;
     let mut last_overwritten = 0u64;
     let mut last_processed_seq: Option<FrameSeq> = None;
@@ -74,6 +79,7 @@ pub fn run_inference_worker(
                         Ok(ctx) => {
                             context = Some(ctx);
                             composite_runtime = None;
+                            mediapipe_runtime = None;
                             failed = false;
                             update_status(&status, |s| {
                                 s.transition_to(InferenceWorkerState::Running);
@@ -106,6 +112,36 @@ pub fn run_inference_worker(
                         Ok(runtime) => {
                             context = None;
                             composite_runtime = Some(runtime);
+                            mediapipe_runtime = None;
+                            failed = false;
+                            update_status(&status, |s| {
+                                s.transition_to(InferenceWorkerState::Running);
+                                s.clear_consecutive_errors();
+                            });
+                        }
+                        Err(err) => {
+                            failed = true;
+                            update_status(&status, |s| {
+                                s.record_failure(FailureStage::ModelLoad, err);
+                            });
+                        }
+                    }
+                }
+                Ok(ControlCommand::LoadMediaPipe { task_path }) => {
+                    update_status(&status, |s| {
+                        s.set_pipeline_info(
+                            Some("mediapipe-face-landmarker".into()),
+                            Some(crate::backend::mediapipe::TASK_BUNDLE_SHA256.into()),
+                            None,
+                        );
+                        s.transition_to(InferenceWorkerState::LoadingModel);
+                    });
+
+                    match load_mediapipe_runtime(&task_path) {
+                        Ok(runtime) => {
+                            context = None;
+                            composite_runtime = None;
+                            mediapipe_runtime = Some(runtime);
                             failed = false;
                             update_status(&status, |s| {
                                 s.transition_to(InferenceWorkerState::Running);
@@ -129,6 +165,7 @@ pub fn run_inference_worker(
                 Ok(ControlCommand::Reset) => {
                     context = None;
                     composite_runtime = None;
+                    mediapipe_runtime = None;
                     failed = false;
                     last_gen = 0;
                     last_processed_seq = None;
@@ -154,7 +191,10 @@ pub fn run_inference_worker(
             }
         }
 
-        if paused || (context.is_none() && composite_runtime.is_none()) || failed {
+        if paused
+            || (context.is_none() && composite_runtime.is_none() && mediapipe_runtime.is_none())
+            || failed
+        {
             // Wait briefly before polling again so the loop remains responsive.
             std::thread::sleep(Duration::from_millis(10));
             continue;
@@ -186,6 +226,19 @@ pub fn run_inference_worker(
                         &status,
                         &output_slot,
                         &outcome_slot,
+                    ) {
+                        failed = true;
+                    }
+                    continue;
+                }
+
+                if let Some(runtime) = mediapipe_runtime.as_mut() {
+                    if process_mediapipe_frame(
+                        runtime,
+                        &frame,
+                        wait_duration,
+                        &status,
+                        &canonical_outcome_slot,
                     ) {
                         failed = true;
                     }
@@ -417,6 +470,77 @@ fn process_composite_frame(
     }
 }
 
+/// Processes one frame through the worker-owned canonical MediaPipe runtime.
+fn process_mediapipe_frame(
+    runtime: &mut Box<dyn FaceTrackingInference>,
+    frame: &VideoFrame,
+    wait_duration: Duration,
+    status: &SharedStatus,
+    canonical_outcome_slot: &LatestSlot<FaceTrackingOutcome>,
+) -> bool {
+    let total_started = Instant::now();
+    let outcome = runtime.infer_face_tracking(frame);
+    let elapsed = total_started.elapsed();
+    record_mediapipe_timing(status, wait_duration, elapsed);
+
+    match outcome {
+        Ok(outcome) => {
+            let source_seq = outcome.source_seq();
+            let finished_at = match &outcome {
+                FaceTrackingOutcome::Face(sample) => sample.inference_finished_at,
+                FaceTrackingOutcome::NoFace {
+                    inference_finished_at,
+                    ..
+                } => *inference_finished_at,
+            };
+            let overwritten_before = canonical_outcome_slot.overwritten_count();
+            if !canonical_outcome_slot.publish(outcome.clone()) {
+                update_status(status, |s| s.record_dropped());
+            }
+            let overwritten_delta = canonical_outcome_slot
+                .overwritten_count()
+                .saturating_sub(overwritten_before);
+            update_status(status, |s| {
+                s.record_output_overwritten(overwritten_delta);
+                s.set_last_roi(None);
+                s.clear_consecutive_errors();
+                match outcome {
+                    FaceTrackingOutcome::Face(_) => {
+                        s.record_processed(source_seq, finished_at, elapsed);
+                    }
+                    FaceTrackingOutcome::NoFace { .. } => {
+                        s.record_no_face(source_seq, finished_at, elapsed);
+                    }
+                }
+            });
+            false
+        }
+        Err(error) => update_status(status, |s| {
+            s.record_frame_error(
+                mediapipe_failure_stage(&error),
+                error,
+                MAX_CONSECUTIVE_RECOVERABLE_ERRORS,
+            )
+        }),
+    }
+}
+
+fn mediapipe_failure_stage(error: &InferenceError) -> FailureStage {
+    match error {
+        InferenceError::MediaPipeFrameConversion(_) => FailureStage::Preprocess,
+        InferenceError::MediaPipeOutputContract(_) => FailureStage::Decode,
+        InferenceError::MediaPipeFrameInference(_) => FailureStage::Runtime,
+        _ => FailureStage::FrameInference,
+    }
+}
+
+fn record_mediapipe_timing(status: &SharedStatus, wait_duration: Duration, elapsed: Duration) {
+    update_status(status, |s| {
+        s.record_stage_duration(InferenceStage::Wait, wait_duration);
+        s.record_stage_duration(InferenceStage::Total, elapsed);
+    });
+}
+
 fn composite_failure_stage(error: &InferenceError) -> FailureStage {
     match error {
         InferenceError::ExecutionFailed(message) if message.starts_with("detector:") => {
@@ -614,6 +738,12 @@ fn load_composite_runtime(
             "the production composite pipeline requires the onnx feature".into(),
         ))
     }
+}
+
+fn load_mediapipe_runtime(task_path: &std::path::Path) -> Result<Box<dyn FaceTrackingInference>> {
+    Ok(Box::new(
+        crate::backend::mediapipe::MediaPipeRuntime::from_task_path(task_path)?,
+    ))
 }
 
 fn update_status<F, R>(status: &SharedStatus, f: F) -> R

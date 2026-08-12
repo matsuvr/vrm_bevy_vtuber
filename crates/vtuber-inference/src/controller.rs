@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use vtuber_core::types::{RawFaceObservation, VideoFrame};
-use vtuber_core::{LatestSlot, WorkerHandle, WorkerResult};
+use vtuber_core::{FaceTrackingOutcome, LatestSlot, WorkerHandle, WorkerResult};
 
 use crate::descriptor::{FacePipelineDescriptor, ModelDescriptor, RuntimeSettings};
 use crate::error::InferenceError;
@@ -39,6 +39,11 @@ pub enum ControlCommand {
         /// Runtime settings, including detector cadence.
         settings: RuntimeSettings,
     },
+    /// Load the approved MediaPipe Face Landmarker task in VIDEO mode.
+    LoadMediaPipe {
+        /// SHA-256-verified task bundle path.
+        task_path: std::path::PathBuf,
+    },
     /// Stop inference but keep the worker alive.
     Pause,
     /// Resume inference after a pause.
@@ -57,6 +62,7 @@ pub struct InferenceController {
     pub(crate) frame_slot: Arc<LatestSlot<VideoFrame>>,
     pub(crate) output_slot: Arc<LatestSlot<RawFaceObservation>>,
     pub(crate) outcome_slot: Arc<LatestSlot<InferenceOutcome>>,
+    pub(crate) canonical_outcome_slot: Arc<LatestSlot<FaceTrackingOutcome>>,
     pub(crate) worker: Option<WorkerHandle<InferenceWorkerResult>>,
 }
 
@@ -69,6 +75,7 @@ impl Drop for InferenceController {
         }
         self.output_slot.close();
         self.outcome_slot.close();
+        self.canonical_outcome_slot.close();
     }
 }
 
@@ -87,6 +94,7 @@ impl InferenceController {
         output_slot: Arc<LatestSlot<RawFaceObservation>>,
     ) -> Self {
         let outcome_slot = Arc::new(LatestSlot::new());
+        let canonical_outcome_slot = Arc::new(LatestSlot::new());
         Self {
             status: Arc::new(std::sync::Mutex::new(
                 crate::state::InferenceWorkerStatus::new(),
@@ -95,6 +103,7 @@ impl InferenceController {
             frame_slot,
             output_slot,
             outcome_slot,
+            canonical_outcome_slot,
             worker: None,
         }
     }
@@ -115,6 +124,12 @@ impl InferenceController {
     #[must_use]
     pub fn outcome_slot(&self) -> Arc<LatestSlot<InferenceOutcome>> {
         Arc::clone(&self.outcome_slot)
+    }
+
+    /// Returns the latest-only canonical MediaPipe face/no-face outcome slot.
+    #[must_use]
+    pub fn canonical_outcome_slot(&self) -> Arc<LatestSlot<FaceTrackingOutcome>> {
+        Arc::clone(&self.canonical_outcome_slot)
     }
 
     /// Returns a snapshot of the current worker status.
@@ -155,9 +170,18 @@ impl InferenceController {
         let frame_slot = Arc::clone(&self.frame_slot);
         let output_slot = Arc::clone(&self.output_slot);
         let outcome_slot = Arc::clone(&self.outcome_slot);
+        let canonical_outcome_slot = Arc::clone(&self.canonical_outcome_slot);
 
         let worker = WorkerHandle::spawn("inference-worker", move |stop| {
-            run_inference_worker(rx, stop, status, frame_slot, output_slot, outcome_slot)
+            run_inference_worker(
+                rx,
+                stop,
+                status,
+                frame_slot,
+                output_slot,
+                outcome_slot,
+                canonical_outcome_slot,
+            )
         });
 
         self.worker = Some(worker);
@@ -228,6 +252,31 @@ impl InferenceController {
             settings,
         })
         .map_err(|_| InferenceError::Internal("inference worker command channel closed".into()))?;
+        Ok(())
+    }
+
+    /// Loads the approved MediaPipe Face Landmarker task.
+    ///
+    /// The task and native runtime are both constructed inside the worker;
+    /// only the plain path crosses the controller boundary.
+    pub fn load_mediapipe(&mut self, task_path: std::path::PathBuf) -> Result<(), InferenceError> {
+        let tx = self
+            .command_tx
+            .as_ref()
+            .ok_or_else(|| InferenceError::Internal("inference worker not started".into()))?;
+
+        {
+            let mut status = self
+                .status
+                .lock()
+                .expect("InferenceController status mutex poisoned");
+            status.transition_to(InferenceWorkerState::LoadingModel);
+        }
+
+        tx.send(ControlCommand::LoadMediaPipe { task_path })
+            .map_err(|_| {
+                InferenceError::Internal("inference worker command channel closed".into())
+            })?;
         Ok(())
     }
 
@@ -303,6 +352,7 @@ impl InferenceController {
 
         self.output_slot.close();
         self.outcome_slot.close();
+        self.canonical_outcome_slot.close();
         final_metrics
     }
 }
@@ -446,6 +496,7 @@ mod tests {
         let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
         let mut controller =
             InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+        let canonical_outcome_slot = controller.canonical_outcome_slot();
 
         controller.start_worker().expect("start worker");
 
@@ -454,7 +505,30 @@ mod tests {
         let metrics = controller.shutdown();
         assert!(frame_slot.is_closed());
         assert!(output_slot.is_closed());
+        assert!(canonical_outcome_slot.is_closed());
         assert_eq!(metrics.drops.processed, 0);
+    }
+
+    #[test]
+    fn mediapipe_load_failure_is_reported_as_a_typed_model_error() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let mut controller =
+            InferenceController::new(Arc::clone(&frame_slot), Arc::clone(&output_slot));
+
+        controller.start_worker().expect("start worker");
+        controller
+            .load_mediapipe(std::path::PathBuf::from("missing-face-landmarker.task"))
+            .expect("send MediaPipe load command");
+        std::thread::sleep(Duration::from_millis(150));
+
+        let status = controller.status();
+        assert_eq!(status.state, InferenceWorkerState::Failed);
+        assert!(matches!(
+            status.last_failure.as_ref().map(|failure| &failure.error),
+            Some(InferenceError::MediaPipeLoadFailed(_))
+        ));
+        controller.shutdown();
     }
 
     #[test]

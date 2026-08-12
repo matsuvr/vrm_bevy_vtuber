@@ -7286,7 +7286,11 @@ Commit: `refactor(mocap): add canonical MediaPipe face sample contract`
 
 #### M1-08-015-004: Replace the production worker backend
 
+状態: `DONE`
+
 MediaPipe VIDEO modeをexisting inference workerへ統合する。strict timestamp、stride-aware pixel conversion、latest-only output、typed error、worker内construct/drop、deterministic shutdownを満たし、Bevyへ依存しない。
+
+`InferenceController::load_mediapipe`からworker内でCPU／VIDEO modeの`FaceLandmarker`を構築し、canonical `FaceTrackingOutcome`をcapacity-one slotへ発行する。task bundle hash、timestamp、pixel layout、478 landmarks、52 blendshapes、matrix、NoFaceをtyped contractとして検証する。2026-08-12のWindows C922 gateは29.011 Hz、1,728 face results、478 landmarks、52 blendshapes、one valid matrix、zero contract failures、zero capture overwrites、three Stop/Start cyclesを再確認した。これはnative binding／task gateの実機証拠であり、GUI／VRM／pose sign acceptanceではない。
 
 Commit: `feat(mocap): replace production worker with MediaPipe Face Landmarker`
 

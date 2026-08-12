@@ -5,6 +5,21 @@ use thiserror::Error;
 /// Errors that can occur during inference model loading or execution.
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum InferenceError {
+    /// Failure while loading the approved MediaPipe native runtime or task.
+    #[error("MediaPipe runtime load failed: {0}")]
+    MediaPipeLoadFailed(String),
+    /// The captured timestamp could not be represented in MediaPipe VIDEO mode.
+    #[error("MediaPipe timestamp is out of range")]
+    MediaPipeTimestampOutOfRange,
+    /// The captured frame could not be converted to packed RGB pixels.
+    #[error("MediaPipe frame conversion failed: {0}")]
+    MediaPipeFrameConversion(String),
+    /// MediaPipe returned a result outside the canonical face contract.
+    #[error("MediaPipe output contract failed: {0}")]
+    MediaPipeOutputContract(String),
+    /// MediaPipe rejected or failed to process a frame.
+    #[error("MediaPipe frame inference failed: {0}")]
+    MediaPipeFrameInference(String),
     /// Failure to load the model from disk.
     #[error("model load failed: {0}")]
     LoadFailed(String),

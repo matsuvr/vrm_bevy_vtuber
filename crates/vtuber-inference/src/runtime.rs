@@ -5,6 +5,7 @@ use crate::error::InferenceError;
 use crate::error::Result;
 use std::time::Duration;
 
+use vtuber_core::FaceTrackingOutcome;
 use vtuber_core::types::{LandmarkSchemaId, RawFaceObservation, VideoFrame};
 
 /// Result of one production frame-level inference attempt.
@@ -78,6 +79,16 @@ pub trait FrameFaceInference: Send {
     fn take_timing(&mut self) -> FrameInferenceTiming {
         FrameInferenceTiming::default()
     }
+}
+
+/// Canonical MediaPipe face-tracking boundary owned by the inference worker.
+///
+/// Implementations own all live native/runtime state. The worker passes only a
+/// borrowed, engine-independent [`VideoFrame`] and receives a validated
+/// [`FaceTrackingOutcome`].
+pub trait FaceTrackingInference: Send {
+    /// Runs one frame through the canonical face-tracking backend.
+    fn infer_face_tracking(&mut self, frame: &VideoFrame) -> Result<FaceTrackingOutcome>;
 }
 
 /// Trait for a face inference runtime.

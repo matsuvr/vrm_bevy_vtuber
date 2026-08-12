@@ -10,6 +10,7 @@ description = "Face model loading, preprocessing, and pure-Rust inference for vr
 
 [dependencies]
 vtuber-core = { path = "../vtuber-core" }
+mediapipe = { git = "https://github.com/nikicat/mediapipe-rs", rev = "527037fa0fe1339750140283930bbb9560460e9e", version = "=0.1.0" }
 tract-tflite = "=0.23.4"
 tract-onnx = { version = "=0.23.4", optional = true }
 tract-core = { version = "=0.23.4", optional = true }

@@ -63,5 +63,8 @@ pub use metrics::{DropCounters, InferenceMetrics, InferenceStage, StageTimingSna
 pub use runtime::FrameInferenceTiming;
 #[cfg(feature = "onnx")]
 pub use runtime::OnnxRuntime;
-pub use runtime::{FaceInference, FrameFaceInference, FrameInferenceOutcome, InferenceOutcome};
+pub use runtime::{
+    FaceInference, FaceTrackingInference, FrameFaceInference, FrameInferenceOutcome,
+    InferenceOutcome,
+};
 pub use state::{FailureStage, InferenceWorkerState, InferenceWorkerStatus, WorkerFailure};
