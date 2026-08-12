@@ -57,6 +57,14 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
             ui.label(format!("{}", diagnostics.slot_overwrites));
             ui.end_row();
 
+            ui.label("Avatar frames applied");
+            ui.label(format!("{}", diagnostics.avatar_frames_applied));
+            ui.end_row();
+
+            ui.label("Avatar frames skipped");
+            ui.label(format!("{}", diagnostics.avatar_frames_skipped));
+            ui.end_row();
+
             ui.label("Capture-to-apply p50");
             ui.label(
                 diagnostics

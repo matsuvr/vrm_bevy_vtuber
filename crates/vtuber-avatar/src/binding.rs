@@ -16,6 +16,7 @@ use crate::capabilities::{AvatarCapabilities, BonePresence, ExpressionCapabiliti
 use crate::lifecycle::{
     ActiveAvatar, AvatarGeneration, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
 };
+use crate::pose::{RestOrientationError, build_rest_orientation_cache};
 
 /// Maximum time to wait for transient bone components after entering `Binding`.
 const BIND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -93,6 +94,20 @@ pub enum AvatarBindError {
         /// Entity that is missing the component.
         entity: Entity,
     },
+    /// A bone has not received its propagated global transform yet.
+    MissingGlobalTransform {
+        /// Bone name.
+        bone: &'static str,
+        /// Entity missing the component.
+        entity: Entity,
+    },
+    /// A bone rest transform cannot define a stable orientation.
+    InvalidRestOrientation {
+        /// Bone name.
+        bone: &'static str,
+        /// Entity with the invalid rest orientation.
+        entity: Entity,
+    },
     /// Binding did not complete within the deadline.
     Timeout,
 }
@@ -105,7 +120,9 @@ impl AvatarBindError {
             Self::MissingRequiredBone { bone }
             | Self::BoneEntityDespawned { bone, .. }
             | Self::MissingTransform { bone, .. }
-            | Self::MissingRestTransform { bone, .. } => Some(*bone),
+            | Self::MissingRestTransform { bone, .. }
+            | Self::MissingGlobalTransform { bone, .. }
+            | Self::InvalidRestOrientation { bone, .. } => Some(*bone),
             Self::Timeout => None,
         }
     }
@@ -130,6 +147,18 @@ impl std::fmt::Display for AvatarBindError {
                 write!(
                     f,
                     "humanoid bone `{bone}` entity {entity:?} has no RestTransform"
+                )
+            }
+            Self::MissingGlobalTransform { bone, entity } => {
+                write!(
+                    f,
+                    "humanoid bone `{bone}` entity {entity:?} has no GlobalTransform"
+                )
+            }
+            Self::InvalidRestOrientation { bone, entity } => {
+                write!(
+                    f,
+                    "humanoid bone `{bone}` entity {entity:?} has an invalid rest orientation"
                 )
             }
             Self::Timeout => write!(f, "humanoid bone binding timed out"),
@@ -168,6 +197,12 @@ pub fn bind_humanoid_bones(
         (With<ActiveAvatar>, With<BindTriggered>),
     >,
     bone_query: Query<(Option<&Transform>, Option<&RestTransform>)>,
+    root_rest_query: Query<Option<&RestTransform>>,
+    bone_rest_query: Query<(
+        Option<&Transform>,
+        Option<&GlobalTransform>,
+        Option<&RestTransform>,
+    )>,
     deadlines: Query<&BindingDeadline>,
     expression_maps: Query<Option<&ExpressionEntityMap>>,
     spring_roots: Query<Entity, With<SpringRoot>>,
@@ -228,6 +263,23 @@ pub fn bind_humanoid_bones(
             // rejected as stale.
             binding.generation = lifecycle.current_generation();
 
+            let rest_cache = match build_rest_orientation_cache(
+                binding.generation,
+                &binding,
+                &root_rest_query,
+                &bone_rest_query,
+            ) {
+                Ok(cache) => cache,
+                Err(error) => {
+                    let error = rest_orientation_bind_error(error);
+                    warn!("avatar rest-orientation binding is not ready: {error}");
+                    if error.is_permanent() || Instant::now() >= deadline {
+                        fail_binding(&mut commands, &mut lifecycle, root_entity, error);
+                    }
+                    return;
+                }
+            };
+
             let expression_map = expression_maps.get(root_entity).ok().flatten();
             let expression_caps = ExpressionCapabilities::from_map(expression_map);
             let has_spring_bone = spring_roots
@@ -250,7 +302,7 @@ pub fn bind_humanoid_bones(
 
             commands
                 .entity(root_entity)
-                .insert((binding, Visibility::Inherited));
+                .insert((binding, rest_cache, Visibility::Inherited));
             commands.entity(root_entity).remove::<BindingDeadline>();
             lifecycle.set_capabilities(Some(capabilities));
             lifecycle.finish_ready();
@@ -258,7 +310,7 @@ pub fn bind_humanoid_bones(
         Err(error) => {
             // A missing head is permanent, so fail immediately. Everything else
             // is retried until the deadline.
-            let permanent = error.bone_name() == Some("head");
+            let permanent = error.is_permanent();
             if permanent || Instant::now() >= deadline {
                 fail_binding(&mut commands, &mut lifecycle, root_entity, error);
             }
@@ -278,12 +330,45 @@ fn fail_binding(
     }
 
     let failure = match &error {
-        AvatarBindError::Timeout => AvatarLifecycleFailure::BindingTimeout,
+        AvatarBindError::Timeout | AvatarBindError::MissingGlobalTransform { .. } => {
+            AvatarLifecycleFailure::BindingTimeout
+        }
+        AvatarBindError::InvalidRestOrientation { bone, .. } => {
+            AvatarLifecycleFailure::InvalidRestOrientation { bone }
+        }
         _ => AvatarLifecycleFailure::MissingRequiredBone {
             bone: error.bone_name().unwrap_or("head"),
         },
     };
     lifecycle.fail(failure);
+}
+
+impl AvatarBindError {
+    fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            Self::MissingRequiredBone { bone: "head" }
+                | Self::BoneEntityDespawned { bone: "head", .. }
+                | Self::MissingTransform { bone: "head", .. }
+                | Self::MissingRestTransform { bone: "head", .. }
+                | Self::InvalidRestOrientation { .. }
+        )
+    }
+}
+
+fn rest_orientation_bind_error(error: RestOrientationError) -> AvatarBindError {
+    match error {
+        RestOrientationError::MissingGlobalTransform { bone, entity } => {
+            AvatarBindError::MissingGlobalTransform { bone, entity }
+        }
+        RestOrientationError::MissingRestTransform { bone, entity } => {
+            AvatarBindError::MissingRestTransform { bone, entity }
+        }
+        RestOrientationError::NonUniformScale { bone, entity }
+        | RestOrientationError::InvalidRotation { bone, entity } => {
+            AvatarBindError::InvalidRestOrientation { bone, entity }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -14,6 +14,13 @@ use crate::lifecycle::AvatarGeneration;
 /// Error extracting rest orientation from a bone entity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RestOrientationError {
+    /// The bone entity has no `GlobalTransform` yet.
+    MissingGlobalTransform {
+        /// Bone name (e.g. "head", "neck").
+        bone: &'static str,
+        /// Entity that was expected to have the component.
+        entity: Entity,
+    },
     /// The bone entity has no `RestTransform` component.
     MissingRestTransform {
         /// Bone name (e.g. "head", "neck").
@@ -41,6 +48,9 @@ pub enum RestOrientationError {
 impl std::fmt::Display for RestOrientationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MissingGlobalTransform { bone, entity } => {
+                write!(f, "bone `{bone}` entity {entity:?} has no GlobalTransform")
+            }
             Self::MissingRestTransform { bone, entity } => {
                 write!(f, "bone `{bone}` entity {entity:?} has no RestTransform")
             }
@@ -93,24 +103,31 @@ const SCALE_UNIFORMITY_EPSILON: f32 = 1e-4;
 pub fn build_rest_orientation_cache(
     generation: AvatarGeneration,
     binding: &AvatarBinding,
-    root_query: &Query<(&GlobalTransform, Option<&RestTransform>)>,
-    bone_query: &Query<(&Transform, &GlobalTransform, Option<&RestTransform>)>,
+    root_query: &Query<Option<&RestTransform>>,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&GlobalTransform>,
+        Option<&RestTransform>,
+    )>,
 ) -> Result<RestOrientationCache, RestOrientationError> {
     // Root rest global rotation.
-    let (root_gt, root_rest) = root_query
-        .get(binding.root)
-        .expect("binding root must exist in root_query");
+    let root_rest = root_query.get(binding.root).ok().flatten();
     let root_rest_global = root_rest
         .map(|r| extract_rotation(&r.0, "root", binding.root))
         .transpose()?
         .unwrap_or(Quat::IDENTITY);
     // If root has no RestTransform, use identity (common for root entities).
-    let _ = root_gt; // GlobalTransform used for reference but rotation comes from RestTransform.
 
     // Head rest local and global.
-    let (_head_t, head_gt, head_rest) = bone_query
-        .get(binding.head)
-        .expect("binding head must exist in bone_query");
+    let (head_t, head_gt, head_rest) = bone_query.get(binding.head).unwrap_or((None, None, None));
+    let _head_t = head_t.ok_or(RestOrientationError::MissingRestTransform {
+        bone: "head",
+        entity: binding.head,
+    })?;
+    let head_gt = head_gt.ok_or(RestOrientationError::MissingGlobalTransform {
+        bone: "head",
+        entity: binding.head,
+    })?;
     let head_rest_transform = head_rest.ok_or(RestOrientationError::MissingRestTransform {
         bone: "head",
         entity: binding.head,
@@ -120,9 +137,16 @@ pub fn build_rest_orientation_cache(
 
     // Neck rest local and global (optional).
     let (neck_rest_local, neck_rest_global) = if let Some(neck_entity) = binding.neck {
-        let (_neck_t, neck_gt, neck_rest) = bone_query
-            .get(neck_entity)
-            .expect("binding neck must exist in bone_query");
+        let (neck_t, neck_gt, neck_rest) =
+            bone_query.get(neck_entity).unwrap_or((None, None, None));
+        let _neck_t = neck_t.ok_or(RestOrientationError::MissingRestTransform {
+            bone: "neck",
+            entity: neck_entity,
+        })?;
+        let neck_gt = neck_gt.ok_or(RestOrientationError::MissingGlobalTransform {
+            bone: "neck",
+            entity: neck_entity,
+        })?;
         let neck_rest_transform = neck_rest.ok_or(RestOrientationError::MissingRestTransform {
             bone: "neck",
             entity: neck_entity,

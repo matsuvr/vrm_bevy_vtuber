@@ -43,11 +43,12 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-017` | `DONE` | MediaPipe identity／contract diagnostics、worker recovery、reverse shutdown、retry、no-face通常状態を自動検証済み。 |
 | `M1-08-018`〜`M1-08-019` | `BLOCKED` | MediaPipe実顔動作／recovery、latency export、30分soakが未実施のためfinal gateを閉じられない。 |
 | `M1-08-020` | `DONE` | Live preview texture登録とavatar骨基準viewport framingを修正し、自動検証とapproved VRMのrelease GUI framing確認を完了した。 |
+| `M1-08-021` | `DONE` | production bindingでgeneration一致のrest-orientation cacheを構築し、実cameraでhead／blink／mouth／gazeとavatar apply latencyを確認した。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-現在の実行単位は、表示repair後の**`M1-08-015-011`／`M1-08-018`実機functional受入**である。M1-08-020は自動検証とapproved VRMのrelease GUI framing確認を完了したが、その確認時はcameraが列挙されず、実camera preview／head／blink／mouth／gazeは再実施待ちである。親015は`IN_PROGRESS`、018／019は`BLOCKED`、`M1-09`は`DEFERRED`とする。旧UltraFace／PeppaPig／planar poseの実装・実機証拠は新backendの受入証拠として扱わず、歴史的なfailure baselineとして保持する。
+現在の実行単位は、**`M1-08-015-011`／`M1-08-018`のC922再受入**である。M1-08-021でproduction bindingの`RestOrientationCache`欠落を修正し、ELECOM 2MP Webcamとapproved VRMによるrelease GUI runでpreview、head、blink、mouth、gaze、avatar apply 5,111 frame、skip 0、capture-to-apply p50 30.82 ms／p95 48.23 msを確認した。親015は`IN_PROGRESS`、018／019はC922 final gateとperformance export待ちで`BLOCKED`、`M1-09`は`DEFERRED`とする。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -84,7 +85,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-05` | `M1-05-001`〜`M1-05-008` | 8 | `LEGACY_PROGRESS` |
 | `M1-06` | `M1-06-001`〜`M1-06-009` | 9 | `LEGACY_PROGRESS` |
 | `M1-07` | `M1-07-001`〜`M1-07-009` | 9 | `LEGACY_PROGRESS`＋GUI補完済み |
-| `M1-08` | top-level `M1-08-001`〜`020`、repair `M1-08-013-001`〜`009` | 20 + repair 9 | `BLOCKED`（020 done、015-011／018／019再受入待ち） |
+| `M1-08` | top-level `M1-08-001`〜`021`、repair `M1-08-013-001`〜`009` | 21 + repair 9 | `BLOCKED`（021 done、015-011／018／019再受入待ち） |
 | `M1-09` | `M1-09-001`〜`M1-09-008` | 8 | `DEFERRED` |
 | `Q2-01` | `Q2-01-001`〜`Q2-01-008` | 8 | `PENDING` |
 | `Q2-02` | `Q2-02-001`〜`Q2-02-008` | 8 | `PENDING` |
@@ -7436,7 +7437,6 @@ cargo clippy -p vtuber-avatar -p vtuber-app -p vtuber-desktop --all-targets -- -
 cargo build -p vtuber-desktop --release
 ```
 
-
 #### M1-08-017: 既存Diagnostics／error recovery／shutdownを実pipelineで監査する
 
 状態: `DONE`
@@ -7509,7 +7509,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 状態: `BLOCKED`
 備考: release build、C922でのMediaPipe worker起動、auto-neutral、face loss/reacquire、Start／Stop、avatar replace／unload／reload、camera unplug/replug後のStop→Start復旧、2秒以内の再取得観測、59秒RSS/thread sample、clean shutdown、30分soakは確認済み。ただしLive previewが`Waiting for camera frames…`で、固定camera framingによりavatar headがviewport外となり、head／blink／mouth／gazeを直接確認できないためBLOCKED。
-依存: `M1-08-020`
+依存: `M1-08-021`
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
 **変更候補**
@@ -7660,6 +7660,43 @@ workspace test／clippyとrelease buildが成功し、release GUIでapproved
 `inore-vrm1.vrm`の顔／上半身がviewportへ表示されることを確認した。
 このGUI確認時はcamera列挙が`None`だったため、実camera previewとfunctional
 motionは015-011／018の再受入で確認する。
+
+#### M1-08-021: production rest-orientation cacheとreal pose applyを修復する
+
+状態: `DONE`
+依存: `M1-08-020`
+親参照: DESIGN.md §15、§20.2〜§20.3、§21.5、ADR-004
+
+**実装指示**
+
+- humanoid binding成功時にavatar generationと一致する`RestOrientationCache`を構築し、cache挿入前にlifecycleを`Ready`へ遷移しない。
+- `GlobalTransform`が未伝播ならbinding deadlineまでretryし、external model／component欠落でpanicしない。
+- model replacement後は新generationのcacheだけを使用し、stale cacheを再利用しない。
+- real sourceでpose apply sampleが増加し、capture-to-applyが数値化されることをrelease GUIで確認する。
+
+**完了条件**
+
+- binding統合testが`AvatarBinding`と同じgenerationの`RestOrientationCache`挿入を証明する。
+- head `GlobalTransform`未生成時は`Binding`で待機し、生成後に`Ready`へ進む。
+- workspace test／clippy／release buildが成功する。
+- 実camera／approved VRMでhead motionとcapture-to-apply sampleを確認する。
+
+**検証**
+
+```powershell
+cargo fmt --all -- --check
+cargo test -p vtuber-avatar -p vtuber-app --no-fail-fast
+cargo clippy -p vtuber-avatar -p vtuber-app --all-targets -- -D warnings
+cargo build -p vtuber-desktop --release
+```
+
+2026-08-12にproduction binding成功時の`RestOrientationCache`構築を接続し、
+generation一致のbinding／cacheを同時挿入してから`Ready`へ遷移するよう修正した。
+ELECOM 2MP Webcamとapproved `inore-vrm1.vrm`のrelease GUI runでは、実preview
+とhead、両目blink、mouth-open、eye gazeを直接確認した。Diagnosticsはavatar
+apply 5,111 frame、skip 0、capture-to-apply p50 30.82 ms／p95 48.23 ms、
+tracking 30.0 Hz、slot overwrite 0を示した。C922固有のfinal rerunは
+M1-08-015-011／018に残す。
 
 
 ## M1-09: macOS vertical acceptance（保留）

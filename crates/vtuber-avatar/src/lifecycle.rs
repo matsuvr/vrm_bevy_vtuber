@@ -159,6 +159,11 @@ pub enum AvatarLifecycleFailure {
     },
     /// Binding did not complete within the deadline.
     BindingTimeout,
+    /// A required bone has an unusable rest orientation.
+    InvalidRestOrientation {
+        /// Humanoid bone name, e.g. `head`.
+        bone: &'static str,
+    },
     /// The VRM asset failed to load.
     AssetLoadFailed,
 }
@@ -170,6 +175,9 @@ impl std::fmt::Display for AvatarLifecycleFailure {
                 write!(f, "required humanoid bone is missing: {bone}")
             }
             Self::BindingTimeout => f.write_str("avatar binding timed out"),
+            Self::InvalidRestOrientation { bone } => {
+                write!(f, "humanoid bone has invalid rest orientation: {bone}")
+            }
             Self::AssetLoadFailed => f.write_str("VRM asset failed to load"),
         }
     }

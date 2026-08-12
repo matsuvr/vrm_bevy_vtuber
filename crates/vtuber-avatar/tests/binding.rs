@@ -6,6 +6,7 @@ use bevy_vrm1::prelude::*;
 use vtuber_avatar::bind::BindTriggered;
 use vtuber_avatar::binding::{AvatarBinding, bind_humanoid_bones};
 use vtuber_avatar::lifecycle::{ActiveAvatar, AvatarLifecycle, AvatarLifecycleState};
+use vtuber_avatar::pose::RestOrientationCache;
 
 fn test_app() -> App {
     let mut app = App::new();
@@ -17,7 +18,11 @@ fn test_app() -> App {
 
 fn spawn_bone(app: &mut App) -> Entity {
     app.world_mut()
-        .spawn((Transform::IDENTITY, RestTransform(Transform::IDENTITY)))
+        .spawn((
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            RestTransform(Transform::IDENTITY),
+        ))
         .id()
 }
 
@@ -59,6 +64,11 @@ fn humanoid_binding_head_only_ready() {
     assert!(binding.spine.is_none());
     assert!(binding.left_eye.is_none());
     assert!(binding.right_eye.is_none());
+    let cache = app
+        .world()
+        .get::<RestOrientationCache>(root)
+        .expect("rest orientations should be cached before Ready");
+    assert_eq!(cache.generation, binding.generation);
 
     assert_eq!(
         app.world().get::<Visibility>(root),
@@ -71,6 +81,39 @@ fn humanoid_binding_head_only_ready() {
         .expect("successful binding should publish capabilities");
     assert!(capabilities.bones.head);
     assert!(!capabilities.bones.neck);
+}
+
+#[test]
+fn humanoid_binding_waits_for_global_transform_then_caches() {
+    let mut app = test_app();
+    let head = app
+        .world_mut()
+        .spawn((Transform::IDENTITY, RestTransform(Transform::IDENTITY)))
+        .id();
+    app.world_mut().entity_mut(head).remove::<GlobalTransform>();
+    let root = app
+        .world_mut()
+        .spawn((ActiveAvatar, BindTriggered, HeadBoneEntity(head)))
+        .id();
+
+    enter_binding(&mut app, root);
+    app.update();
+    assert_eq!(
+        app.world().resource::<AvatarLifecycle>().state(),
+        AvatarLifecycleState::Binding
+    );
+    assert!(app.world().get::<AvatarBinding>(root).is_none());
+
+    app.world_mut()
+        .entity_mut(head)
+        .insert(GlobalTransform::IDENTITY);
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<AvatarLifecycle>().state(),
+        AvatarLifecycleState::Ready
+    );
+    assert!(app.world().get::<RestOrientationCache>(root).is_some());
 }
 
 #[test]

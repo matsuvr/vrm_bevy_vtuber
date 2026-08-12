@@ -55,7 +55,11 @@ fn test_app() -> App {
 
 fn spawn_bone(app: &mut App) -> Entity {
     app.world_mut()
-        .spawn((Transform::IDENTITY, RestTransform(Transform::IDENTITY)))
+        .spawn((
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            RestTransform(Transform::IDENTITY),
+        ))
         .id()
 }
 

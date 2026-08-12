@@ -104,6 +104,41 @@ real C922 preview and head/blink/mouth/gaze protocol were not rerun and remain
 BLOCKED rather than being inferred from the automated texture-registration
 tests.
 
+### Post-repair real pose-apply validation
+
+`M1-08-021` found that production humanoid binding never constructed the
+`RestOrientationCache` required by `apply_tracked_head_pose`. The lifecycle
+could therefore reach `Ready` while every real control frame was skipped.
+Binding now constructs a generation-matched cache before entering `Ready`,
+waits for a transient missing `GlobalTransform`, and reports an invalid rest
+orientation as a typed lifecycle failure instead of panicking.
+
+The rebuilt release binary (SHA-256
+`9AE2538289654EB5B7655442246A2012BC252B979E62D017A6E47EE39D4492C6`) was
+run with the connected `ELECOM 2MP Webcam` and approved
+`inore-vrm1.vrm`. This is a correctness confirmation on available hardware,
+not a substitute for the C922-specific final gate. The live preview displayed
+camera frames, the avatar head followed real yaw/pitch motion, and held physical
+prompts visibly produced both-eye blink, mouth-open, and eye-gaze responses.
+Diagnostics after the guided checks showed:
+
+```text
+capture rate: 29.0 Hz
+inference rate: 30.0 Hz
+tracking rate: 30.0 Hz
+slot overwrites: 0
+avatar frames applied: 5,111
+avatar frames skipped: 0
+capture-to-apply p50: 30.82 ms
+capture-to-apply p95: 48.23 ms
+```
+
+This closes the preview/framing/real-pose correctness blocker and proves the
+latency clock path is populated. `M1-08-018` remains blocked only until the
+same final functional matrix is repeated on the required C922, and
+`M1-08-019` still requires render FPS plus the bounded 30-minute resource
+export.
+
 The 60-second diagnostics observation showed approximately:
 
 ```text
