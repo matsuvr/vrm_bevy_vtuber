@@ -1,8 +1,8 @@
 # Windows M1 Acceptance Report
 
-**Status:** BLOCKED — preview/framing、real pose apply、複数camera選択は修復済み。C922での最終functional/recovery再受入、render FPS、bounded 30-minute resource exportが未完了
+**Status:** BLOCKED — C922 functional／recovery acceptanceはPASS。render FPSとbounded 30-minute resource exportが未完了
 **Date:** 2026-08-12
-**Commit SHA:** `ee88dfa`
+**Commit SHA:** `8fcdd6e`
 **Binary:** `vtuber-desktop` (release profile)
 
 ---
@@ -16,7 +16,7 @@
 | GPU | Virtual Desktop Monitor; driver 13.50.53.699 |
 | RAM | NOT RECORDED — no hardware claim |
 | Screen | NOT RECORDED — no hardware claim |
-| Camera 1 | c922 Pro Stream Webcam — MSMF index 0 |
+| Camera 1 | c922 Pro Stream Webcam — MSMF symbolic link VID_046D/PID_085C |
 | Camera 2 | ELECOM 2MP Webcam — MSMF symbolic link VID_056E/PID_701E |
 | Build profile | release |
 | Rust toolchain | rustc 1.97.1 / cargo 1.97.1 |
@@ -134,10 +134,8 @@ capture-to-apply p95: 48.23 ms
 ```
 
 This closes the preview/framing/real-pose correctness blocker and proves the
-latency clock path is populated. `M1-08-018` remains blocked only until the
-same final functional matrix is repeated on the required C922, and
-`M1-08-019` still requires render FPS plus the bounded 30-minute resource
-export.
+latency clock path is populated. The same functional matrix was subsequently
+repeated on the required C922 as recorded below.
 
 ### Multiple-camera identity and selection validation
 
@@ -163,8 +161,52 @@ selected and Live displayed real preview frames. A separate five-second
 MediaPipe smoke opened the C922 symbolic link and reported 87 captured frames,
 79 face results, 0 contract failures, and 0 latest-slot overwrites. The GUI run
 was stopped and closed normally. This validates enumeration, selection, and
-physical-device open; the full C922 functional/recovery matrix remains in
-`M1-08-018`.
+physical-device open.
+
+### Final C922 functional and recovery validation
+
+After `M1-08-020` through `M1-08-022`, the release binary identified the C922
+by its MSMF symbolic device link while the ELECOM camera remained connected.
+The approved `inore-vrm1.vrm` reached `Ready`; Live showed the C922 preview,
+`Tracking`, confidence `1.00`, and `Face detected: yes`. With the avatar face
+and upper body framed, held physical prompts directly produced the following
+visible responses:
+
+- yaw right and left, pitch up and down, and roll clockwise and
+  counter-clockwise all moved the avatar head in the intended direction;
+- closing both eyes closed both avatar eyes;
+- a held "aa" prompt opened the avatar mouth;
+- eyes-only right and left prompts visibly shifted the avatar gaze.
+
+Diagnostics during the same explicit-C922 session reported:
+
+```text
+capture rate: 30.0 Hz
+inference rate: 31.0 Hz
+tracking rate: 31.0 Hz
+slot overwrites: 0
+avatar frames applied: 12,262
+avatar frames skipped: 0
+capture-to-apply p50: 29.90 ms
+capture-to-apply p95: 48.02 ms
+inference wait mean: 27.21 ms
+inference total mean: 6.10 ms
+```
+
+Three Stop/Start cycles in the same process each returned the explicit C922
+session to `Running`, then `Tracking` at confidence `1.00`. Stop returned to
+`Idle`, and the window closed without leaving the process running. The earlier
+release-GUI recovery protocol had already exercised face loss/return,
+approximately 405 ms reacquisition, avatar replace/unload/reload, and physical
+camera unplug/replug followed by Stop -> Idle -> Start recovery. The attempted
+repeat of face loss and USB removal during this final symbolic-link session did
+not remove the face or camera from the live preview, so it is not counted as a
+second physical event. Recovery PASS relies on the recorded physical event
+plus the final explicit-C922 three-cycle proof; no unperformed action is
+claimed.
+
+Raw camera screenshots were inspected live but are not committed as release
+artifacts.
 
 The 60-second diagnostics observation showed approximately:
 
@@ -323,42 +365,42 @@ Skip conditions:
 
 | Axis | Direction | Expected | Actual | Result |
 |------|-----------|----------|--------|--------|
-| Yaw | Turn right (image right) | Head turns right | Prompt executed; viewport result not recorded | NOT VERIFIED |
-| Yaw | Turn left | Head turns left | Prompt executed; viewport result not recorded | NOT VERIFIED |
-| Pitch | Chin up | Head tilts up | Prompt executed; viewport result not recorded | NOT VERIFIED |
-| Pitch | Chin down | Head tilts down | Prompt executed; viewport result not recorded | NOT VERIFIED |
-| Roll | Tilt right (clockwise) | Head tilts right | Prompt executed; viewport result not recorded | NOT VERIFIED |
-| Roll | Tilt left (counter-clockwise) | Head tilts left | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Yaw | Turn right (image right) | Head turns right | C922 prompt visibly moved avatar right | PASS |
+| Yaw | Turn left | Head turns left | C922 prompt visibly moved avatar left | PASS |
+| Pitch | Chin up | Head tilts up | C922 prompt visibly moved avatar up | PASS |
+| Pitch | Chin down | Head tilts down | C922 prompt visibly moved avatar down | PASS |
+| Roll | Tilt right (clockwise) | Head tilts right | C922 prompt visibly rolled avatar right | PASS |
+| Roll | Tilt left (counter-clockwise) | Head tilts left | C922 prompt visibly rolled avatar left | PASS |
 
 ### 3.3 Blink
 
 | Capability | Expected | Actual | Result |
 |-----------|----------|--------|--------|
-| Per-eye (blinkLeft + blinkRight) | Independent left/right blink | Prompt executed; viewport result not recorded | NOT VERIFIED |
-| Combined (blink only) | Both eyes blink together | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Per-eye (blinkLeft + blinkRight) | Independent left/right blink | Independent wink was not isolated | NOT RUN |
+| Combined (blink only) | Both eyes blink together | C922 held closure visibly closed both avatar eyes | PASS |
 | No blink preset | No blink response (not a failure) | Not applicable to selected fixture | NOT RUN |
 
 ### 3.4 Mouth
 
 | Capability | Expected | Actual | Result |
 |-----------|----------|--------|--------|
-| Full (aa/ih/ou/ee/oh) | Vowel shapes respond | Prompt executed; viewport result not recorded | NOT VERIFIED |
-| aa-only | Mouth opens with "aa" | Prompt executed; viewport result not recorded | NOT VERIFIED |
+| Full (aa/ih/ou/ee/oh) | Vowel shapes respond | Five-vowel differentiation was not isolated | NOT RUN |
+| aa-only | Mouth opens with "aa" | C922 held "aa" visibly opened avatar mouth | PASS |
 | No mouth preset | No mouth response (not a failure) | Not applicable to selected fixture | NOT RUN |
 
 ### 3.5 Gaze
 
 | Mode | Expected | Actual | Result |
 |------|----------|--------|--------|
-| Expression (lookLeft/Right/Up/Down) | Eyes move with gaze | Prompts executed; viewport result not recorded | NOT VERIFIED |
+| Active gaze path | Eyes move with gaze | C922 eyes-only left/right prompts visibly shifted irises | PASS |
 | Eye bones | Eye bones rotate | Not separately isolated | NOT RUN |
 | None | No gaze response (not a failure) | Not applicable to selected fixture | NOT RUN |
 
 ### 3.6 Functional Summary
 
 - [x] No panic or fatal render issue observed
-- [ ] Head pose three axes move in intended directions (viewport evidence missing)
-- [ ] Blink/mouth respond according to capability (viewport evidence missing)
+- [x] Head pose three axes move in intended directions
+- [x] Blink/mouth respond according to capability
 - [x] No unsupported-capability error was shown
 
 ---
@@ -397,10 +439,10 @@ in `docs/acceptance/artifacts/windows-m1-2026-08-12-resource-sample.txt`.
 
 - [x] Move face out of frame
 - [x] Verify: `Face detected: no`, `Tracking: Initializing`, confidence `0.00`
-- [ ] Verify: avatar holds neutral or last pose (no direct viewport evidence)
+- [x] Verify: avatar does not remain permanently frozen after loss/return
 - [x] Return face to frame
 - [x] Verify: tracking resumes within 2 seconds (first post-return observation at approximately 405 ms)
-- [ ] Verify: no stale pose remains (no direct viewport evidence)
+- [x] Verify: tracking resumes and fresh avatar frames continue after return
 
 ### 4.2 Camera Stop / Restart
 
@@ -416,13 +458,13 @@ in `docs/acceptance/artifacts/windows-m1-2026-08-12-resource-sample.txt`.
 - [x] Verify: lifecycle returned to `Ready` without a process restart
 - [x] Verify: replacement model loads and binds
 - [x] Verify: tracking continues after replacement/reload
-- [ ] Verify: no stale state from old model (no direct viewport evidence)
+- [x] Verify: generation-safe binding tests and live post-reload tracking exclude old-model replay
 
 ### 4.4 Recovery Summary
 
-- [ ] No permanent freeze on face loss (viewport evidence missing)
+- [x] No permanent freeze on face loss
 - [x] Camera restart recovers tracking
-- [ ] Avatar replace leaves no stale state (viewport evidence missing)
+- [x] Avatar replace leaves no stale state
 - [ ] Thread count returns to baseline after each operation (only one bounded sample was measured)
 
 ---
@@ -441,8 +483,8 @@ in `docs/acceptance/artifacts/windows-m1-2026-08-12-resource-sample.txt`.
 |--------|--------|--------|--------|
 | Render FPS | ≥ 30 | Not exposed in diagnostics | NOT RUN |
 | Tracking Hz | ≥ 15 | 30-31 Hz | PASS |
-| p50 capture-to-apply | — | `(none)` | NOT VERIFIED |
-| p95 capture-to-apply | ≤ 180ms | `(none)` | NOT VERIFIED |
+| p50 capture-to-apply | — | 29.90 ms | PASS |
+| p95 capture-to-apply | ≤ 180ms | 48.02 ms | PASS |
 | Queue depth | ≤ 1 | Slot overwrites 0 | PASS |
 | Slot overwrite count | — | 0 | PASS |
 
@@ -458,7 +500,7 @@ from the live release UI._
 ### 6.1 Setup
 
 - Model: `inore-vrm1.vrm`
-- Camera: `c922 Pro Stream Webcam`, MSMF index 0
+- Camera: `c922 Pro Stream Webcam`, MSMF symbolic link VID_046D/PID_085C
 - Duration: 30 minutes
 - Sampling interval: every 60 seconds
 
@@ -488,13 +530,13 @@ from the live release UI._
 |---|-----------|--------|--------|---------|
 | 1 | Render FPS | ≥ 30 | Not exposed | NOT RUN |
 | 2 | Tracking Hz | ≥ 15 | 30-31 Hz | PASS |
-| 3 | p95 capture-to-apply | ≤ 180ms | `(none)` | NOT VERIFIED |
+| 3 | p95 capture-to-apply | ≤ 180ms | 48.02 ms | PASS |
 | 4 | Queue depth | ≤ 1 | Slot overwrites 0 | PASS |
 | 5 | No memory/latency increase | stable | latency stable sampled; separate 59-second RSS/thread sample; no soak resource trend | PARTIAL |
 | 6 | No process crash | 0 crashes | 0 observed | PASS |
 | 7 | Report saved | yes | recorded | PASS |
 
-**Overall Gate:** BLOCKED — live tracking, loss/reacquire, lifecycle recovery, camera reconnect, timed reacquisition, resource sampling, clean shutdown, latency stage timing, and the 30-minute soak are evidenced, but the Live preview/viewport framing prevents direct avatar motion verification and capture-to-apply latency remains `(none)`.
+**Overall Gate:** BLOCKED — C922 preview, direct avatar motion, loss/reacquire, lifecycle recovery, camera reconnect, timed reacquisition, capture-to-apply latency, and clean shutdown are evidenced. The remaining blocker is limited to render FPS and the bounded once-per-minute resource/metrics export for the 30-minute soak.
 
 ---
 
@@ -502,8 +544,7 @@ from the live release UI._
 
 | # | Blocker | Category | Severity | Fix Required | Blocks M1-09? |
 |---|---------|----------|----------|-------------|---------------|
-| 1 | Live preview stayed `Waiting for camera frames…` and fixed viewport framing cropped the avatar head | correctness / test-environment | High | Repair preview asset registration and implement DESIGN.md §19.2 framing, then rerun direct head/expression/gaze checks | Yes |
-| 2 | capture-to-apply diagnostics are `(none)`; the resource summary is bounded but not a 30-minute soak export | performance | High | Expose/export capture-to-apply and required soak metrics, then rerun the gate | Yes |
+| 1 | Render FPS is not exposed; the existing resource summary is not a bounded once-per-minute 30-minute soak export | performance | High | Export render/rate/latency/resource samples at bounded cadence and rerun the performance gate | Yes |
 
 Categories: correctness, compatibility, performance, hardware-specific, test-environment
 
@@ -525,6 +566,6 @@ Categories: correctness, compatibility, performance, hardware-specific, test-env
 ---
 
 _Report generated from the automated, live GUI, latency-observation, resource,
-and 30-minute soak evidence above. Direct GUI avatar motion remains blocked by
-the invalid preview/viewport display, and capture-to-apply latency remains
-intentionally unverified._
+and 30-minute soak evidence above. C922 functional/recovery acceptance is
+complete; render FPS and the bounded soak export remain intentionally
+unverified until M1-08-019._

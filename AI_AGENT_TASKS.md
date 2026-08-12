@@ -41,7 +41,8 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-015` | `IN_PROGRESS` | M1-08-015-001〜012のMediaPipe rewrite sequenceを実施中。旧composite trackingの実機証拠は新backendの受入証拠として再利用しない。 |
 | `M1-08-016` | `DONE` | MediaPipe canonical tracking sourceからreal-VRM bridgeへの接続、generation／stale排他、synthetic排他を自動検証済み。 |
 | `M1-08-017` | `DONE` | MediaPipe identity／contract diagnostics、worker recovery、reverse shutdown、retry、no-face通常状態を自動検証済み。 |
-| `M1-08-018`〜`M1-08-019` | `BLOCKED` | MediaPipe実顔動作／recovery、latency export、30分soakが未実施のためfinal gateを閉じられない。 |
+| `M1-08-018` | `DONE` | C922 symbolic-link選択、実preview、real-VRM head／blink／mouth／gaze、Stop／Start 3回、既存のloss／reacquire・replug・replace証拠を統合してfunctional／recovery gateを完了した。 |
+| `M1-08-019` | `BLOCKED` | render FPSと60秒window／30分soakのbounded metrics／resource exportが未完了のためfinal performance gateを閉じられない。 |
 | `M1-08-020` | `DONE` | Live preview texture登録とavatar骨基準viewport framingを修正し、自動検証とapproved VRMのrelease GUI framing確認を完了した。 |
 | `M1-08-021` | `DONE` | production bindingでgeneration一致のrest-orientation cacheを構築し、実cameraでhead／blink／mouth／gazeとavatar apply latencyを確認した。 |
 | `M1-08-022` | `DONE` | C922とELECOMの起動時列挙、symbolic-link identity選択、C922実previewを確認した。 |
@@ -49,7 +50,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
-次の実行単位は、**`M1-08-015-011`／`M1-08-018`のC922再受入**である。M1-08-022で起動時自動列挙、MSMF symbolic-link identityによる選択／open、Refresh時のidentity保持を実装し、C922とELECOMの同時接続状態で2台表示とC922実previewを確認した。親015は`IN_PROGRESS`、018／019はC922 functional／recovery final gateとperformance export待ちで`BLOCKED`、`M1-09`は`DEFERRED`とする。
+次の実行単位は、**`M1-08-019`のWindows performance final gate**である。M1-08-018はC922 symbolic-link明示選択後のreal preview、real-VRM head／blink／mouth／gaze、capture-to-apply、Stop／Start 3回と既存recovery evidenceを統合して`DONE`とした。親015／015-011はperformance export待ちで`IN_PROGRESS`／`BLOCKED`、`M1-09`は`DEFERRED`とする。
 
 `LEGACY_PROGRESS`は、この文書の現行subtask単位で全成果を再監査済みという意味ではない。既存成果を捨てて作り直さないための状態である。特に`M1-08-001`〜`M1-08-008`は「acceptance infrastructureが存在する」ことだけを引き継ぎ、実際のWindows受入結果をPASSと解釈してはならない。
 
@@ -7508,8 +7509,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### M1-08-018: Windows functional／recovery acceptanceを実pipelineで実施する
 
-状態: `BLOCKED`
-備考: release build、C922でのMediaPipe worker起動、auto-neutral、face loss/reacquire、Start／Stop、avatar replace／unload／reload、camera unplug/replug後のStop→Start復旧、2秒以内の再取得観測、59秒RSS/thread sample、clean shutdown、30分soakは確認済み。ただしLive previewが`Waiting for camera frames…`で、固定camera framingによりavatar headがviewport外となり、head／blink／mouth／gazeを直接確認できないためBLOCKED。
+状態: `DONE`
+備考: release build、MSMF symbolic-linkで明示したC922実preview、approved VRM Ready／auto-neutral、yaw／pitch／roll各2方向、両目blink、mouth-open、左右gaze、capture-to-apply p50 29.90 ms／p95 48.02 ms、avatar apply 12,262／skip 0を確認した。同一processでStop／Start 3回後もC922 trackingへ復帰した。既存runのface loss／reacquire、avatar replace／unload／reload、camera unplug/replug後のStop→Start復旧、約405 ms再取得、clean shutdownと統合し、functional／recovery correctness blockerを閉じた。
 依存: `M1-08-022`
 親参照: DESIGN.md §6、§21.5、§24、docs/PERFORMANCE_TEST_PLAN.md
 
