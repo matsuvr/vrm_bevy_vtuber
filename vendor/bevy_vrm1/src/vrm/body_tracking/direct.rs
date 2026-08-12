@@ -489,6 +489,13 @@ pub fn apply_direct_body_tracking(
     let dt = time.delta_secs();
     let default_profile = BodyTrackingProfile::default();
 
+    // Direct-pose state is local to this system rather than stored on model
+    // entities. Drop entries as soon as an avatar (or one of its humanoid
+    // bones) is despawned so repeated model replacement cannot retain stale
+    // smoothing state indefinitely.
+    bone_states.retain(|entity, _| transforms.contains(*entity));
+    root_rest_rotations.retain(|entity, _| root_globals.contains(*entity));
+
     for (root, input, profile, head, neck, upper_chest, chest, spine) in vrms.iter() {
         let Ok(root_global) = root_globals.get(root) else {
             continue;

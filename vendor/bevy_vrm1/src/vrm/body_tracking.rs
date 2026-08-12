@@ -516,6 +516,91 @@ mod tests {
     }
 
     #[test]
+    fn direct_input_root_is_excluded_from_legacy_writer() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_systems(
+            Update,
+            (apply_direct_body_tracking, track_body_tracking).chain(),
+        );
+
+        let target = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(1.0, 0.0, 2.0),
+                GlobalTransform::from_xyz(1.0, 0.0, 2.0),
+            ))
+            .id();
+        let head = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                RestTransform(Transform::IDENTITY),
+                RestGlobalTransform(GlobalTransform::IDENTITY),
+            ))
+            .id();
+        let range = RangeMap {
+            input_max_value: 90.0,
+            output_scale: 1.0,
+        };
+        let head_only = BodyBoneWeights {
+            head: 1.0,
+            neck: 0.0,
+            upper_chest: 0.0,
+            chest: 0.0,
+            spine: 0.0,
+        };
+        let profile = BodyTrackingProfile {
+            small_yaw_weights: head_only,
+            large_yaw_weights: head_only,
+            pitch_weights: head_only,
+            roll_weights: head_only,
+            bone_half_lives: BodyBoneHalfLives {
+                head_seconds: 0.0,
+                neck_seconds: 0.0,
+                upper_chest_seconds: 0.0,
+                chest_seconds: 0.0,
+                spine_seconds: 0.0,
+            },
+            ..default()
+        };
+        let root = app
+            .world_mut()
+            .spawn((
+                Vrm,
+                GlobalTransform::IDENTITY,
+                HeadBoneEntity(head),
+                LookAt::Target(target),
+                LookAtProperties {
+                    offset_from_head_bone: [0.0; 3],
+                    range_map_horizontal_inner: range,
+                    range_map_horizontal_outer: range,
+                    range_map_vertical_down: range,
+                    range_map_vertical_up: range,
+                    r#type: LookAtType::Bone,
+                },
+                BodyTracking::default(),
+                SmoothedGaze::default(),
+                BodyTrackingPoseInput {
+                    yaw_radians: 0.0,
+                    pitch_radians: 0.0,
+                    roll_radians: 0.4,
+                    weight: 1.0,
+                    active: true,
+                },
+                profile,
+            ))
+            .id();
+        app.world_mut().entity_mut(head).insert(ChildOf(root));
+
+        app.update();
+
+        let actual = app.world().get::<Transform>(head).unwrap().rotation;
+        let expected = Quat::from_rotation_z(-0.4);
+        assert!(actual.angle_between(expected) < 1.0e-5);
+    }
+
+    #[test]
     fn test_bone_rotation_identity_at_zero() {
         let rest_tf = RestTransform(Transform::IDENTITY);
         let rest_gtf = RestGlobalTransform(GlobalTransform::IDENTITY);

@@ -25,7 +25,8 @@ fn avatar_schedule_has_no_synthetic_look_at_api() {
     // importing those types, and our lib.rs doesn't re-export them.
 }
 
-/// Verify that the expression system ordering follows the design:
+/// Verify that the schedule integration points required by the design remain
+/// public and type-check together:
 ///
 /// 1. apply_avatar_request_events (Update, chained)
 /// 2. despawn_unloading_avatar (Update, chained)
@@ -36,12 +37,14 @@ fn avatar_schedule_has_no_synthetic_look_at_api() {
 /// 7. VrmSystemSets::SpringBone (PostUpdate, bevy_vrm1 internal)
 #[test]
 fn avatar_schedule_ordering_matches_design() {
-    // Verify bind_humanoid_bones is exported (it's in the chained Update systems).
-    let _ = vtuber_avatar::bind_humanoid_bones;
+    use bevy::ecs::schedule::IntoScheduleConfigs;
+    use bevy_vrm1::prelude::VrmSystemSets;
+    use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
 
-    // The ordering is enforced by the plugin.rs system registration.
-    // Update systems run before PostUpdate, so our pose system runs
-    // before bevy_vrm1's Constraints/Expressions/SpringBone.
+    // These expressions compile only while the direct writer and its declared
+    // constraints boundary remain valid Bevy system configuration points.
+    let _ = vtuber_avatar::bind_humanoid_bones;
+    let _direct_before_constraints = apply_direct_body_tracking.before(VrmSystemSets::Constraints);
 }
 
 /// Verify that the lifecycle types are properly exported for schedule integration.

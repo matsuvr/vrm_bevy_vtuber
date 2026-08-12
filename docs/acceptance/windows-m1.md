@@ -106,12 +106,14 @@ tests.
 
 ### Post-repair real pose-apply validation
 
-`M1-08-021` found that production humanoid binding never constructed the
-`RestOrientationCache` required by `apply_tracked_head_pose`. The lifecycle
-could therefore reach `Ready` while every real control frame was skipped.
-Binding now constructs a generation-matched cache before entering `Ready`,
-waits for a transient missing `GlobalTransform`, and reports an invalid rest
-orientation as a typed lifecycle failure instead of panicking.
+`M1-08-021` found that the former application-owned pose writer lacked the
+rest-orientation data it required, so the lifecycle could reach `Ready` while
+every real control frame was skipped. `Q2-06-001` replaces that writer and its
+cache with direct-pose `bevy_vrm1::BodyTracking`: binding now requires the
+runtime-provided `RestTransform` and `RestGlobalTransform` components before
+entering `Ready`, while the application bridge only updates a
+generation-matched pose input. Missing rest data remains a transient binding
+condition rather than a panic.
 
 The rebuilt release binary (SHA-256
 `9AE2538289654EB5B7655442246A2012BC252B979E62D017A6E47EE39D4492C6`) was
