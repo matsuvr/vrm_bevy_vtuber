@@ -1,6 +1,6 @@
 # References
 
-基準日: 2026-08-04
+基準日: 2026-08-12
 
 実装時には検索結果や古いtutorialではなく、固定version／revisionの一次資料とsourceを確認する。URLの`latest`は探索用に限定し、実装判断には記載したtagまたはcommitを使う。
 
@@ -45,6 +45,17 @@ f9593fd78136fb9e0507bcae111e09291ec9b82a
 
 ## VRM 1.0 specification
 
+LookAt判断の固定参照revision:
+
+```text
+821c11b250d8c70d5804ee13431e42bee56ea9c0
+```
+
+- Pinned LookAt (English): https://github.com/vrm-c/vrm-specification/blob/821c11b250d8c70d5804ee13431e42bee56ea9c0/specification/VRMC_vrm-1.0/lookAt.md
+- Pinned LookAt (Japanese): https://github.com/vrm-c/vrm-specification/blob/821c11b250d8c70d5804ee13431e42bee56ea9c0/specification/VRMC_vrm-1.0/lookAt.ja.md
+- Pinned VRMC_vrm execution order: https://github.com/vrm-c/vrm-specification/blob/821c11b250d8c70d5804ee13431e42bee56ea9c0/specification/VRMC_vrm-1.0/README.md
+- Pinned LookAt schema: https://github.com/vrm-c/vrm-specification/blob/821c11b250d8c70d5804ee13431e42bee56ea9c0/specification/VRMC_vrm-1.0/schema/VRMC_vrm.lookAt.schema.json
+
 - VRM 1.0 overview: https://vrm.dev/en/vrm1/
 - Developer characteristics and T-pose direction: https://vrm.dev/en/vrm/vrm_development/
 - Coordinate conversion notes: https://vrm.dev/api/coordinate/
@@ -72,6 +83,8 @@ f9593fd78136fb9e0507bcae111e09291ec9b82a
 ## Face tracking and pure-Rust inference
 
 - MediaPipe Face Landmarker guide: https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker
+- MediaPipe Face Landmarker result contract: https://ai.google.dev/edge/api/mediapipe/python/mp/tasks/vision/FaceLandmarkerResult
+- MediaPipe 52 blendshape categories: https://ai.google.dev/edge/api/mediapipe/python/mp/tasks/vision/drawing_styles/face_landmarker/Blendshapes
 - MediaPipe source: https://github.com/google-ai-edge/mediapipe
 - `tract` source: https://github.com/sonos/tract
 - `tract-tflite` v0.23.0 source: https://github.com/sonos/tract/tree/v0.23.0/tflite
@@ -83,6 +96,12 @@ f9593fd78136fb9e0507bcae111e09291ec9b82a
 - Schönemann, P. “A generalized solution of the orthogonal Procrustes problem.” Psychometrika, 1966.
 - Casiez, G.; Roussel, N.; Vogel, D. “1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in Interactive Systems.” CHI 2012.
 - `nalgebra` SVD documentation: https://docs.rs/nalgebra/latest/nalgebra/linalg/struct.SVD.html
+
+## Gaze coordination references
+
+- OpenSeeFace gaze implementation, pinned commit `85aa70fc67582d046e771ea73625182a0d8f7475`: https://github.com/emilianavt/OpenSeeFace/blob/85aa70fc67582d046e771ea73625182a0d8f7475/Examples/OpenSeeVRMDriver.cs
+- Freedman, E. G.; Sparks, D. L. “Eye-Head Coordination During Head-Unrestrained Gaze Shifts in Rhesus Monkeys.” Journal of Neurophysiology 77(5), 1997. https://doi.org/10.1152/jn.1997.77.5.2328
+- Andrist, S.; Pejsa, T.; Mutlu, B.; Gleicher, M. “A Head-Eye Coordination Model for Animating Gaze Shifts of Virtual Characters.” Gaze-In 2012. https://graphics.cs.wisc.edu/Papers/2012/APMG12a/APMG12a.pdf
 
 ## Packaging
 

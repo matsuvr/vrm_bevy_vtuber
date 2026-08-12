@@ -54,13 +54,7 @@ tracking喪失時はtarget yaw／pitch／rollを0へ戻し、bone別half-lifeで
 
 ### Gaze
 
-`bevy_vrm1::LookAt`は使用しない。優先順位:
-
-1. `lookLeft / lookRight / lookUp / lookDown` Expression
-2. left／right eye bone
-3. disabled
-
-eye bone systemは`VrmSystemSets::GazeControl`へ置き、`PropagateAfterConstraints`後、Expression前に実行する。
+この節の旧MVP判断はADR-010で置換された。Webcam gazeはhead poseとは別の計測／フィルタ入力だが、適用時はhead-relativeなLookAt deltaである。モデル作者の`LookAtType`を尊重してBoneまたはExpressionを排他的に選び、tracked body pose後、Expression／Constraint／SpringBone前のVRM 1.0順序で解決する。
 
 ### Expressions
 
@@ -68,4 +62,4 @@ procedural expressionは`ModifyExpressions`へ統合し、1アバター・1フ�
 
 ## Consequences
 
-tracking coreはBevy／VRM座標を知らない。`vtuber-avatar`は既にcalibrationとsemantic座標変換が済んだyaw／pitch／rollを`BodyTrackingPoseInput`へ渡し、bone Transformへの適用、rest-pose変換、animation base検出は`bevy_vrm1`の`BodyTracking`へ限定される。eye gazeは独立したGazeControl経路を維持する。
+tracking coreはBevy／VRM座標を知らない。`vtuber-avatar`は既にcalibrationとsemantic座標変換が済んだyaw／pitch／rollを`BodyTrackingPoseInput`へ渡し、bone Transformへの適用、rest-pose変換、animation base検出は`bevy_vrm1`の`BodyTracking`へ限定される。gazeは入力チャネルとして分離し、適用時はADR-010のhead-relative直接LookAtへ渡す。

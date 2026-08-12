@@ -39,7 +39,7 @@ f9593fd78136fb9e0507bcae111e09291ec9b82a
 - `VrmSystemSets`
 - model replacement時のdetach API
 
-product pathでは顔姿勢用の`LookAt`を使用しない。固定revisionではExpression方式LookAtにreachableな未実装経路があり、顔の向きと眼球視線も別入力だからである。
+product pathでは顔姿勢用の`LookAt`を使用しない。`Q2-06-002`は固定revisionの未実装Expression経路を埋め、webcamのeye-in-head信号だけをhead-relative直接LookAtへ渡す。cursor／target entityは生成しない。
 
 `Q2-06-001`では、固定revision由来の最小vendored patchに直接yaw／pitch／roll入力を追加した`BodyTracking`を使用する。app側adapterは入力componentだけを更新し、head、neck、upperChest、chest、spineへ直接書き込まない。直接入力がない場合のupstream `LookAt + BodyTracking`挙動は維持する。
 
@@ -49,7 +49,7 @@ product pathでは顔姿勢用の`LookAt`を使用しない。固定revisionで�
 - target modelで再現しない問題のためにforkしない。ただし`Q2-06-001`の直接姿勢入力は、stock公開APIだけでは表現できない承認済み機能拡張として扱う。
 - valid target modelでbugを再現した場合、minimal fixture、spec根拠、regression test、upstream issueを先に作る。
 - forkが必要ならGit commit SHAへ固定し、app repositoryへsource断片をcopyしない。
-- `Q2-06-001`ではbase revision、license、差分を記録したvendored patchを許可する。変更範囲はbody trackingと必要な公開export／system登録に限定する。
+- `Q2-06-001`と`Q2-06-002`ではbase revision、license、差分を記録したvendored patchを許可する。変更範囲はdirect BodyTracking、direct LookAt、range map再利用、選択backend出力、VRM順序、cleanup、必要な公開export／system登録と関連testに限定する。
 
 ## G0-08 findings
 

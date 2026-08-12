@@ -50,7 +50,7 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 10. 頭部姿勢はMediaPipeのface transformation matrixから、初期自動neutralまたは即時`Recenter`で保存した中立transformに対する相対剛体変換として求める。Euler角の差分や30フレーム静止ゲートは使用しない。
 11. 頭部姿勢は、`Q2-06-001`で追加する`bevy_vrm1::BodyTracking`の直接yaw／pitch／roll入力へ渡す。`BodyTracking`をhead、neck、upperChest、chest、spineへの唯一の追跡姿勢writerとし、アプリ側adapterは入力更新だけを担当する。
 12. 表情は`bevy_vrm1::ModifyExpressions`を利用する。`isBinary`、`overrideBlink`、`overrideMouth`、`overrideLookAt`の解決は`bevy_vrm1`へ委譲する。
-13. `bevy_vrm1::LookAt`はMVPでは使用しない。現行revisionでは`lookAt.type = expression`が`todo!()`へ到達するためである。視線はlook-direction Expressionまたは眼球boneの独自適用で行う。
+13. head poseとeye gazeは推定／filter入力として分離するが、適用時のgazeは現在のhead姿勢へhead-relativeなeye-in-head deltaとして合成する。`Q2-06-002`のdirect LookAtはworld targetを作らず、モデル作者のBone／Expression種別とVRM range mapを尊重する。
 14. MToon、SpringBone、Node Constraintをアプリ側で再実装しない。互換性問題が発生した場合は対象モデルの回帰テストを追加し、必要最小限のupstream patchまたは一時forkで対処する。
 15. Windowsを最初の縦断MVPとし、その後macOSで同一機能を完成させる。macOSは後付け移植ではなく、初期workspaceとCIからcompile対象に含める。
 
@@ -274,11 +274,11 @@ bevy_vrm1 = {
 
 #### Expression LookAt
 
-`bevy_vrm1`の現行`look_at.rs`は`LookAtType::Expression`で`todo!()`へ到達する。したがってMVPではrootへ`LookAt` componentを挿入しない。
+upstream固定revisionの`look_at.rs`は`LookAtType::Expression`で`todo!()`へ到達する。`Q2-06-002`はtarget model reproducer、spec根拠、ADR-010、regression testを伴う最小vendored patchとしてdirect head-relative inputとExpression weight出力を追加する。webcam pathへCursor／Target componentやsynthetic world entityは挿入しない。
 
 #### BodyTracking
 
-stock `BodyTracking`の`LookAt`入力は、顔の向きと眼球視線を混同し、roll、upperChest、軸別配分、骨別応答速度を表現できないため、Webカメラ姿勢には使用しない。`Q2-06-001`では固定revision由来の最小patchへ直接yaw／pitch／roll入力を追加し、head、neck、upperChest、chest、spineへの追跡姿勢適用を`BodyTracking`へ統合する。直接入力がないrootでは従来の`LookAt + BodyTracking`挙動を維持する。顔姿勢用のsynthetic `LookAt` targetは作らず、eye gazeは既存のExpression／eye-bone経路に残す。
+stock `BodyTracking`の`LookAt`入力は、顔の向きと眼球視線を混同し、roll、upperChest、軸別配分、骨別応答速度を表現できないため、Webカメラ姿勢には使用しない。`Q2-06-001`では固定revision由来の最小patchへ直接yaw／pitch／roll入力を追加し、head、neck、upperChest、chest、spineへの追跡姿勢適用を`BodyTracking`へ統合する。直接入力がないrootでは従来の`LookAt + BodyTracking`挙動を維持する。顔姿勢用のsynthetic `LookAt` targetは作らず、eye gazeは別の正規化入力から`Q2-06-002`のhead-relative direct LookAtへ渡す。
 
 #### strict deserialization
 
@@ -402,7 +402,7 @@ Bevyに依存しないdomain型を持つ。
 - VideoFrame
 - RawFaceObservation
 - HeadPose
-- GazePose
+- GazeSignal / GazeTrackingState
 - ExpressionCoefficients
 - AvatarControlFrame
 - TrackingState
@@ -699,9 +699,11 @@ pub struct HeadPose {
     pub roll_rad: f32,
 }
 
-pub struct GazePose {
-    pub yaw_rad: f32,
-    pub pitch_rad: f32,
+pub struct GazeSignal {
+    pub horizontal: f32,
+    pub vertical: f32,
+    pub confidence: f32,
+    pub state: GazeTrackingState,
 }
 ```
 
@@ -711,6 +713,7 @@ pub struct GazePose {
 - unmirrored input画像で顔が画像右へ向くと`yaw > 0`。
 - 顎が上がると`pitch > 0`。
 - 観察者から見て時計回りに傾くと`roll > 0`。
+- eye-in-head horizontalはunmirrored input画像の右が正、verticalは上が正。これは正規化値であり物理radianではない。
 
 この規約をsynthetic testで固定する。Bevyへの符号変換はadapterだけで行う。
 
@@ -760,12 +763,27 @@ pub struct AvatarControlFrame {
     pub confidence: f32,
     pub state: TrackingState,
     pub head: HeadPose,
-    pub gaze: Option<GazePose>,
+    pub gaze: GazeSignal,
     pub expressions: ExpressionCoefficients,
 }
 ```
 
 この型にBevyの`Entity`、`Transform`、`Quat`、`VrmExpression`を含めない。
+
+`GazeSignal`は物理角度ではなくeye-in-headの正規化観測である。
+
+```rust
+pub enum GazeTrackingState { Tracked, Degraded, Unavailable }
+
+pub struct GazeSignal {
+    pub horizontal: f32, // [-1, 1], unmirrored image right is positive
+    pub vertical: f32,   // [-1, 1], up is positive
+    pub confidence: f32, // [0, 1]
+    pub state: GazeTrackingState,
+}
+```
+
+正面視線は`Tracked`かつhorizontal／verticalが0であり、計測不能は`Unavailable`である。finiteでない値を公開せず、任意係数をradianと呼ばない。
 
 ---
 
@@ -1118,7 +1136,7 @@ geometry fallback例:
 - blink: eye aspect ratioのneutral差
 - mouth open: lip vertical distance / face scale
 - smile: mouth corner distanceとcorner elevation
-- gaze: iris centerとeye contour中心の差
+- gaze: MediaPipeの左右eye-look係数を正本とし、landmark fallbackを使う場合も左右別のeye-in-head正規化値として扱う
 
 MVPではblinkとmouth openを必須とし、5母音と感情は後続taskとする。
 
@@ -1241,11 +1259,10 @@ VRM更新順に合わせ、tracking applyを次へ配置する。
 PostUpdate:
   Bevy AnimationSystems
   -> direct-pose bevy_vrm1 BodyTracking
+  -> direct head-relative LookAt / GazeControl
+  -> expression update and apply
   -> bevy_vrm1 VrmSystemSets::Constraints
-  -> PropagateAfterConstraints
-  -> ApplyTrackedGaze in VrmSystemSets::GazeControl
-  -> bevy_vrm1 Expressions
-  -> PropagateAfterExpressions
+  -> transform propagation
   -> bevy_vrm1 SpringBone
 ```
 
@@ -1261,9 +1278,10 @@ app.add_systems(
 
 app.add_systems(
     PostUpdate,
-    apply_tracked_gaze
+    update_direct_look_at_input
         .in_set(VrmSystemSets::GazeControl)
-        .after(VrmSystemSets::PropagateAfterConstraints),
+        .after(apply_direct_body_tracking_pose)
+        .before(VrmSystemSets::Expressions),
 );
 ```
 
@@ -1347,26 +1365,42 @@ gaze expression:
 
 1アバター・1フレームにつき一つの`ModifyExpressions::from_iter` eventを発行し、supported expressionだけを含める。値0も発行して前frameのoverrideを解除方向へ更新する。
 
-### 16.9 gaze strategy
+### 16.9 head-relative gaze strategy
 
-優先順:
-
-1. 4方向look Expressionが存在する場合、`ModifyExpressions`で制御する。
-2. 左右eye boneと`RestTransform`が存在する場合、`VrmSystemSets::GazeControl`内で直接rotationを適用する。
-3. どちらもない場合はgazeを無効にする。
-
-`bevy_vrm1::LookAt` componentはMVPで挿入しない。
-
-look Expression weight:
+head poseとeye gazeは推定／filter入力として分離する。アバター適用時は次の階層合成と等価にする。
 
 ```text
-left  = clamp(-yaw / yaw_max, 0, 1)
-right = clamp( yaw / yaw_max, 0, 1)
-up    = clamp( pitch / pitch_up_max, 0, 1)
-down  = clamp(-pitch / pitch_down_max, 0, 1)
+eye_world = current_head_world
+          * eye_socket_chain
+          * animated_eye_base_local
+          * eye_in_head_delta_local
 ```
 
-左右と上下を独立に出し、同時blendを許容する。
+頭部と眼球へ同じ回転を固定せず、頭を横へ向けながらcameraを見る場合の反対向きeye local rotationを正常なcounter-rotationとして許容する。eye systemはhead／body、eye translation／scale、eye `GlobalTransform`を書き換えない。
+
+MediaPipeの初期左右観測は次とする。
+
+```text
+left_horizontal  = eyeLookOutLeft - eyeLookInLeft
+right_horizontal = eyeLookInRight - eyeLookOutRight
+left_vertical    = eyeLookUpLeft - eyeLookDownLeft
+right_vertical   = eyeLookUpRight - eyeLookDownRight
+```
+
+eye opennessと入力信頼度でweighted meanを取り、左右差が大きいほどagreement confidenceを下げる。片目blinkは開いた目を低confidenceで使用できるが、両目blink中の新規gazeは信用しない。neutral取得時は左右horizontal／vertical baselineを保存し、差し引き後にfinite検査と`[-1,1]` clampを行う。UIはneutral／Recenter時に正面かつcamera付近を見るよう案内する。
+
+眼球専用filterはフレームレート非依存指数平滑化を使い、初期値をtracked half-life 0.055秒、neutral return half-life 0.150秒、unavailable hold 0.080秒とする。Searchingは明示的neutral、lossは短いhold後neutral return、reacquisitionは現在値から連続補間する。reset／recalibration／avatar replacementでstateを破棄する。
+
+`vtuber-avatar`でengine-neutral符号からVRM LookAt degreeへ変換する。
+
+```text
+vrm yaw   = -horizontal * reference_input_max_degrees
+vrm pitch = -vertical   * reference_input_max_degrees
+```
+
+能力集合（eye bones、look expressions、declared LookAtType）と選択backend（Bone／Expression／None）を分ける。宣言backendが利用可能なら優先し、壊れている場合だけdiagnostic付きalternate fallbackを使う。metadataなしは完全4方向Expression、両eye bone、partial Expression、Noneの順とする。同一frameでBoneとExpressionを動かさない。
+
+Bone backendは`LookAtProperties`の左眼／右眼inner／outerとup／down range map、rest local／global変換を使う。`inputMaxValue == 0`は仕様の推奨どおり0出力として0除算を避ける。animation baseからlast gaze deltaを除去して新deltaを加え、累積を防ぐ。Expression backendは同じrange mapから4方向weightを生成し、blink／mouth／emotionと1frame 1回の`ModifyExpressions`へcoalesceして、neutral時も明示的0を送る。metadataなしfallbackはadapter所有のnamed profile（bone水平／垂直10°、expression 1.0）としdiagnosticsへ出す。
 
 ### 16.10 delegated functionality
 

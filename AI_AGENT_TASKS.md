@@ -9876,15 +9876,15 @@ cargo test --workspace --release
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-## Q2-06: BodyTracking上半身追従
+## Q2-06: BodyTracking上半身追従とhead-relative gaze
 
-状態: `DONE`
-実行単位: `Q2-06-001`
-重点参照: DESIGN.md §7.3、§16.5〜§16.7、ADR-002、ADR-004
+状態: `IN_PROGRESS`
+実行単位: `Q2-06-001`、`Q2-06-002`
+重点参照: DESIGN.md §7.3、§11.8、§15.4、§16.5〜§16.9、ADR-002、ADR-004、ADR-010
 
 ### 目的
 
-calibrationとsemantic座標変換済みのface yaw／pitch／rollを、direct-pose入力を追加した`bevy_vrm1::BodyTracking`へ渡し、head、neck、upperChest、chest、spineへ自然な遅延を伴って加算適用する。顔姿勢writerを`BodyTracking`へ一本化し、eye gazeは独立経路として維持する。
+calibrationとsemantic座標変換済みのface yaw／pitch／rollをdirect-pose `BodyTracking`へ渡し、webcam eye gazeは別入力として推定／filterした後、現在のhead姿勢へhead-relative LookAt deltaとして階層合成する。head writerとeye writerを競合させず、VRM作者のLookAt backendとrange mapを尊重する。
 
 ### 実行subtask
 
@@ -9955,6 +9955,49 @@ cargo deny check
 - `vendor/bevy_vrm1`で`cargo fmt --all -- --check`、`cargo check --all-targets`、`cargo clippy --all-targets -- -D warnings`、`cargo test`を実行し、67 unit testsと10 doctestsを含めて成功した。
 - Windows実機での新しい上半身追従確認、macOS実機確認、VRMA playback確認は`NOT RUN`。既存M1のhead tracking実機証拠を本変更の上半身受入証拠として再利用しない。
 - commits: `docs(avatar): approve direct body tracking path`、`feat(vrm): extend body tracking for direct pose`、`refactor(avatar): route pose through body tracking`、`test(avatar): close body tracking compatibility gaps`。
+
+#### Q2-06-002: head-relative gaze coordinationとVRM LookAt統合
+
+状態: `IN_PROGRESS`
+依存: `Q2-06-001`
+親参照: DESIGN.md §7.3、§11.8、§15.4、§16.5〜§16.9、ADR-002、ADR-004、ADR-010
+
+**実装指示**
+
+- valid centered gazeとUnavailableを区別する正規化`GazeSignal`契約をcoreへ追加し、MediaPipe typed 52係数から左右眼観測、blink weight、agreement confidence、共通eye-in-head gazeを直接生成する。
+- neutralへ左右眼horizontal／vertical baselineを追加し、専用指数filter（tracked 0.055秒、return 0.150秒、hold 0.080秒）とloss／reacquisition連続化を実装する。
+- `bevy_vrm1`へworld target不要のdirect head-relative LookAt入力を追加し、`LookAtProperties`、左右inner／outer、up／down、non-identity rest、additive animation baseを再利用する。
+- モデル作者の`LookAtType`を尊重してBone／Expressionを排他的に選択し、Expression weightは既存の1frame 1回`ModifyExpressions`経路へcoalesceする。
+- Animation、BodyTracking、LookAt、Expression、Constraint、SpringBoneのVRM 1.0意味順序を実行testで固定し、legacy cursor／target pathを維持する。
+- reset、recalibration、avatar replacement、despawnでgaze stateを消去し、eye translation／scale／GlobalTransformとhead／body bonesをgaze systemから変更しない。
+
+**完了条件**
+
+- centerとUnavailable、左右符号／融合／blink、baseline、30／60／120fps、hold／neutral return／reacquisitionが自動testされる。
+- head-only、gaze-only、head＋counter-rotation、non-identity rest、range map、backend fallback／排他、animation base／非累積、state cleanupが自動testされる。
+- synthetic coefficient round-trip、旧`Option<GazePose>`正本、旧独自eye writer、`ExpressionAndEyeBones`実行modeが残らない。
+- workspaceとvendored dependencyのfmt、check、clippy、test、`cargo deny check`が成功する。
+- Windows visual acceptanceとmacOS確認はPASS／FAIL／NOT RUNを正直に記録する。
+
+**検証**
+
+```powershell
+cargo fmt --all -- --check
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
+cargo deny check
+cargo fmt --manifest-path vendor/bevy_vrm1/Cargo.toml -- --check
+cargo check --manifest-path vendor/bevy_vrm1/Cargo.toml --all-targets
+cargo clippy --manifest-path vendor/bevy_vrm1/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
+```
+
+**このsubtaskで行わないこと**
+
+- webcam gaze用world target、gaze由来の追加head rotation、独立eye world transform、Eye translation変更を追加しない。
+- BoneとExpressionを同時適用せず、Bevy／MediaPipe／無関係なdependencyを更新しない。
+- random saccade、IK、未実施hardware acceptanceを対応済みと表現しない。
 
 ---
 
