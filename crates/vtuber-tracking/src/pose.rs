@@ -9,6 +9,8 @@ use thiserror::Error;
 
 use vtuber_core::types::HeadPose;
 
+/// MediaPipe face-transform pose adapter.
+pub mod mediapipe;
 /// Image-space landmark pose adapter.
 pub mod planar;
 

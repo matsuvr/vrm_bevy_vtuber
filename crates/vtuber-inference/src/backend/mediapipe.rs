@@ -216,10 +216,20 @@ fn matrix_transform(result: &FaceLandmarkerResult) -> Result<(CameraFaceTransfor
         .transformation_matrixes
         .first()
         .ok_or_else(|| contract_error("missing transformation matrix"))?;
+    let mut column_major = [0.0; 16];
+    for column in 0..4 {
+        for row in 0..4 {
+            column_major[column * 4 + row] = matrix.get(row, column);
+        }
+    }
+    matrix_from_column_major(column_major)
+}
+
+fn matrix_from_column_major(column_major: [f32; 16]) -> Result<(CameraFaceTransform, f32, f32)> {
     let mut values = [[0.0; 4]; 4];
-    for (row, values_row) in values.iter_mut().enumerate() {
-        for (column, value) in values_row.iter_mut().enumerate() {
-            *value = matrix.get(row, column);
+    for (column, column_values) in column_major.chunks_exact(4).enumerate() {
+        for (row, value) in column_values.iter().copied().enumerate() {
+            values[row][column] = value;
         }
     }
     if !values.iter().flatten().all(|value| value.is_finite()) {
@@ -242,7 +252,8 @@ fn matrix_transform(result: &FaceLandmarkerResult) -> Result<(CameraFaceTransfor
             "transformation matrix determinant must be positive, got {determinant}"
         )));
     }
-    let rotation_xyzw = rotation_to_quaternion(values)?;
+    let orthonormalized = orthonormalize_rotation(values)?;
+    let rotation_xyzw = rotation_to_quaternion(orthonormalized)?;
     let transform = CameraFaceTransform {
         rotation_xyzw,
         translation_xyz: [values[0][3], values[1][3], values[2][3]],
@@ -253,6 +264,55 @@ fn matrix_transform(result: &FaceLandmarkerResult) -> Result<(CameraFaceTransfor
         ));
     }
     Ok((transform, orthogonality_error, determinant))
+}
+
+fn orthonormalize_rotation(values: [[f32; 4]; 4]) -> Result<[[f32; 4]; 4]> {
+    let x = normalize([values[0][0], values[1][0], values[2][0]])?;
+    let y_raw = [values[0][1], values[1][1], values[2][1]];
+    let y = normalize(subtract(y_raw, scale(x, dot(x, y_raw))))?;
+    let z = cross(x, y);
+    let z_raw = [values[0][2], values[1][2], values[2][2]];
+    if dot(z, z_raw) <= f32::EPSILON {
+        return Err(contract_error(
+            "transformation rotation is degenerate or reflected",
+        ));
+    }
+    Ok([
+        [x[0], y[0], z[0], 0.0],
+        [x[1], y[1], z[1], 0.0],
+        [x[2], y[2], z[2], 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+}
+
+fn dot(left: [f32; 3], right: [f32; 3]) -> f32 {
+    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+}
+
+fn scale(value: [f32; 3], factor: f32) -> [f32; 3] {
+    [value[0] * factor, value[1] * factor, value[2] * factor]
+}
+
+fn subtract(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
+}
+
+fn cross(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
+}
+
+fn normalize(value: [f32; 3]) -> Result<[f32; 3]> {
+    let norm = dot(value, value).sqrt();
+    if !norm.is_finite() || norm <= f32::EPSILON {
+        return Err(contract_error(
+            "transformation rotation contains a zero-length axis",
+        ));
+    }
+    Ok([value[0] / norm, value[1] / norm, value[2] / norm])
 }
 
 fn rotation_to_quaternion(values: [[f32; 4]; 4]) -> Result<[f32; 4]> {
@@ -455,7 +515,7 @@ fn contract_error(message: impl Into<String>) -> InferenceError {
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_rgb, video_timestamp_ms};
+    use super::{frame_rgb, matrix_from_column_major, video_timestamp_ms};
     use std::sync::Arc;
     use vtuber_core::{FrameSeq, MonoTimeNs, PixelFormat, VideoFrame};
 
@@ -509,5 +569,61 @@ mod tests {
         let source = frame(PixelFormat::Rgb8, 2, 1, 5, &[0; 5]);
         let mut staging = Vec::new();
         assert!(frame_rgb(&source, &mut staging).is_err());
+    }
+
+    #[test]
+    fn column_major_identity_and_translation_are_decoded_without_transpose() {
+        let mut matrix = [0.0; 16];
+        matrix[0] = 1.0;
+        matrix[5] = 1.0;
+        matrix[10] = 1.0;
+        matrix[15] = 1.0;
+        matrix[12] = 1.0;
+        matrix[13] = 2.0;
+        matrix[14] = 3.0;
+        let (transform, error, determinant) =
+            matrix_from_column_major(matrix).expect("affine identity should decode");
+        assert_eq!(transform.rotation_xyzw, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(transform.translation_xyz, [1.0, 2.0, 3.0]);
+        assert_eq!(error, 0.0);
+        assert_eq!(determinant, 1.0);
+    }
+
+    #[test]
+    fn known_yaw_matrix_extracts_a_proper_rotation() {
+        let mut matrix = [0.0; 16];
+        matrix[5] = 1.0;
+        matrix[2] = -1.0;
+        matrix[8] = 1.0;
+        matrix[15] = 1.0;
+        let (transform, _, determinant) =
+            matrix_from_column_major(matrix).expect("known rotation should decode");
+        assert!((transform.rotation_xyzw[1] - 2.0_f32.sqrt() / 2.0).abs() < 1.0e-5);
+        assert!((transform.rotation_xyzw[3] - 2.0_f32.sqrt() / 2.0).abs() < 1.0e-5);
+        assert!((determinant - 1.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn scaled_rotation_is_orthonormalized_before_quaternion_extraction() {
+        let mut matrix = [0.0; 16];
+        matrix[0] = 2.0;
+        matrix[5] = 2.0;
+        matrix[10] = 2.0;
+        matrix[15] = 1.0;
+        let (transform, error, determinant) =
+            matrix_from_column_major(matrix).expect("positive scaled rotation should decode");
+        assert_eq!(transform.rotation_xyzw, [0.0, 0.0, 0.0, 1.0]);
+        assert!(error > 0.0);
+        assert!((determinant - 8.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn reflection_matrix_is_rejected() {
+        let mut matrix = [0.0; 16];
+        matrix[0] = -1.0;
+        matrix[5] = 1.0;
+        matrix[10] = 1.0;
+        matrix[15] = 1.0;
+        assert!(matrix_from_column_major(matrix).is_err());
     }
 }

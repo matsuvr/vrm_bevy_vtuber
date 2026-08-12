@@ -7296,7 +7296,17 @@ Commit: `feat(mocap): replace production worker with MediaPipe Face Landmarker`
 
 #### M1-08-015-005: Implement matrix conversion and guided sign proof
 
-column-major matrix validation、proper rotation extraction、relative transform、basis mapping、synthetic fixtures、`mediapipe-pose-probe`を実装する。Windows実cameraでright/left/up/down/rollのsignを証明するまで先へ進めない。
+状態: `DONE`
+
+column-major matrix validation、proper rotation extraction、relative transform、basis mapping、synthetic fixtures、`mediapipe-pose-probe`を実装した。MediaPipeのyawはimage-rightを維持し、pitchとrollはアプリケーションのchin-up／image-clockwise規約へ符号変換する。neutralはworker起動直後から収集し、camera frame未到達とNoFaceを診断値で分離した。
+
+2026-08-12 Windows C922 guided physical proof passed with:
+
+```powershell
+cargo run -p xtask -- mediapipe-pose-probe --camera 0 --guided --json 2>&1
+```
+
+MediaPipe 0.10.35、native library `verified cache`、`signs_pass=true`。neutral 96 samples、image_right 90、image_left 89、chin_up 90、chin_down 89、image_clockwise 89、image_counter_clockwise 89。Observed semantic signs: yaw `+0.600952/-0.752999`, pitch `+0.237842/-0.299808`, roll `+0.572944/-0.560954` for the tested positive/negative directions. This proves matrix/relative-pose sign behavior only; GUI, VRM application, latency, soak, and macOS acceptance remain pending.
 
 Commit: `feat(mocap): derive neutral-relative pose from MediaPipe transforms`
 

@@ -45,6 +45,10 @@ pub use pipeline::{
     HeadPoseFailure, HeadPoseFrame, PipelineConfig, PipelineConfigError, PipelineUpdate,
     PoseFailureReason, TrackingPipeline, compute_neutral_relative_pose,
 };
+pub use pose::mediapipe::{
+    MediaPipePoseError, RelativeFaceTransform, mediapipe_to_application_basis, relative_pose,
+    relative_transform,
+};
 pub use pose::planar::{
     CANONICAL_FACE_TEMPLATE, CanonicalFacePoint, PlanarCorrespondence, PlanarLandmark,
     PlanarPoseAlignment, PlanarPoseError, solve_planar_pose,

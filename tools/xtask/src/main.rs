@@ -11,6 +11,7 @@ mod acceptance;
 mod face_image_probe;
 mod face_pipeline_smoke;
 mod mediapipe_face_smoke;
+mod mediapipe_pose_probe;
 mod vrm_compatibility;
 mod vrm_managed_compatibility;
 
@@ -27,6 +28,7 @@ fn main() {
         println!("  face-image-probe <path>  Run UltraFace on one still image");
         println!("  face-pipeline-smoke       Windows MSMF detector/crop/landmark probe");
         println!("  mediapipe-face-smoke      Windows MSMF MediaPipe Face Landmarker gate");
+        println!("  mediapipe-pose-probe      Guided MediaPipe neutral-relative pose proof");
         return;
     }
 
@@ -90,6 +92,13 @@ fn main() {
             Err(error) => {
                 eprintln!("mediapipe-face-smoke failed: {error}");
                 process::exit(1);
+            }
+        },
+        "mediapipe-pose-probe" => match mediapipe_pose_probe::run(&args[1..]) {
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!("mediapipe-pose-probe failed: {error}");
+                std::process::exit(1);
             }
         },
         other => {
