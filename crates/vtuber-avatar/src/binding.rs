@@ -16,7 +16,6 @@ use crate::capabilities::{AvatarCapabilities, BonePresence, ExpressionCapabiliti
 use crate::lifecycle::{
     ActiveAvatar, AvatarGeneration, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
 };
-use crate::pose::{RestOrientationError, build_rest_orientation_cache};
 
 /// Maximum time to wait for transient bone components after entering `Binding`.
 const BIND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -94,11 +93,11 @@ pub enum AvatarBindError {
         /// Entity that is missing the component.
         entity: Entity,
     },
-    /// A bone has not received its propagated global transform yet.
+    /// A bone has not received its canonical rest-global transform yet.
     MissingGlobalTransform {
         /// Bone name.
         bone: &'static str,
-        /// Entity missing the component.
+        /// Entity missing [`RestGlobalTransform`].
         entity: Entity,
     },
     /// A bone rest transform cannot define a stable orientation.
@@ -152,7 +151,7 @@ impl std::fmt::Display for AvatarBindError {
             Self::MissingGlobalTransform { bone, entity } => {
                 write!(
                     f,
-                    "humanoid bone `{bone}` entity {entity:?} has no GlobalTransform"
+                    "humanoid bone `{bone}` entity {entity:?} has no RestGlobalTransform"
                 )
             }
             Self::InvalidRestOrientation { bone, entity } => {
@@ -196,12 +195,10 @@ pub fn bind_humanoid_bones(
         ),
         (With<ActiveAvatar>, With<BindTriggered>),
     >,
-    bone_query: Query<(Option<&Transform>, Option<&RestTransform>)>,
-    root_rest_query: Query<Option<&RestTransform>>,
-    bone_rest_query: Query<(
+    bone_query: Query<(
         Option<&Transform>,
-        Option<&GlobalTransform>,
         Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
     )>,
     deadlines: Query<&BindingDeadline>,
     expression_maps: Query<Option<&ExpressionEntityMap>>,
@@ -263,23 +260,6 @@ pub fn bind_humanoid_bones(
             // rejected as stale.
             binding.generation = lifecycle.current_generation();
 
-            let rest_cache = match build_rest_orientation_cache(
-                binding.generation,
-                &binding,
-                &root_rest_query,
-                &bone_rest_query,
-            ) {
-                Ok(cache) => cache,
-                Err(error) => {
-                    let error = rest_orientation_bind_error(error);
-                    warn!("avatar rest-orientation binding is not ready: {error}");
-                    if error.is_permanent() || Instant::now() >= deadline {
-                        fail_binding(&mut commands, &mut lifecycle, root_entity, error);
-                    }
-                    return;
-                }
-            };
-
             let expression_map = expression_maps.get(root_entity).ok().flatten();
             let expression_caps = ExpressionCapabilities::from_map(expression_map);
             let has_spring_bone = spring_roots
@@ -300,9 +280,13 @@ pub fn bind_humanoid_bones(
                 has_spring_bone,
             );
 
-            commands
-                .entity(root_entity)
-                .insert((binding, rest_cache, Visibility::Inherited));
+            commands.entity(root_entity).insert((
+                binding,
+                BodyTracking::default(),
+                BodyTrackingPoseInput::default(),
+                BodyTrackingProfile::default(),
+                Visibility::Inherited,
+            ));
             commands.entity(root_entity).remove::<BindingDeadline>();
             lifecycle.set_capabilities(Some(capabilities));
             lifecycle.finish_ready();
@@ -356,21 +340,6 @@ impl AvatarBindError {
     }
 }
 
-fn rest_orientation_bind_error(error: RestOrientationError) -> AvatarBindError {
-    match error {
-        RestOrientationError::MissingGlobalTransform { bone, entity } => {
-            AvatarBindError::MissingGlobalTransform { bone, entity }
-        }
-        RestOrientationError::MissingRestTransform { bone, entity } => {
-            AvatarBindError::MissingRestTransform { bone, entity }
-        }
-        RestOrientationError::NonUniformScale { bone, entity }
-        | RestOrientationError::InvalidRotation { bone, entity } => {
-            AvatarBindError::InvalidRestOrientation { bone, entity }
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn resolve_binding(
     root: Entity,
@@ -381,7 +350,11 @@ fn resolve_binding(
     spine: Option<&SpineBoneEntity>,
     left_eye: Option<&LeftEyeBoneEntity>,
     right_eye: Option<&RightEyeBoneEntity>,
-    bone_query: &Query<(Option<&Transform>, Option<&RestTransform>)>,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
 ) -> Result<AvatarBinding, AvatarBindError> {
     let head = resolve_required_bone("head", head.map(|h| **h), bone_query)?;
     let neck = resolve_optional_bone("neck", neck.map(|n| **n), bone_query);
@@ -408,10 +381,14 @@ fn resolve_binding(
 fn resolve_required_bone(
     name: &'static str,
     entity: Option<Entity>,
-    bone_query: &Query<(Option<&Transform>, Option<&RestTransform>)>,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
 ) -> Result<Entity, AvatarBindError> {
     let entity = entity.ok_or(AvatarBindError::MissingRequiredBone { bone: name })?;
-    let (transform, rest) = bone_query
+    let (transform, rest, rest_global) = bone_query
         .get(entity)
         .map_err(|_| AvatarBindError::BoneEntityDespawned { bone: name, entity })?;
 
@@ -421,6 +398,9 @@ fn resolve_required_bone(
     if rest.is_none() {
         return Err(AvatarBindError::MissingRestTransform { bone: name, entity });
     }
+    if rest_global.is_none() {
+        return Err(AvatarBindError::MissingGlobalTransform { bone: name, entity });
+    }
 
     Ok(entity)
 }
@@ -428,14 +408,18 @@ fn resolve_required_bone(
 fn resolve_optional_bone(
     name: &'static str,
     entity: Option<Entity>,
-    bone_query: &Query<(Option<&Transform>, Option<&RestTransform>)>,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
 ) -> Option<Entity> {
     let entity = entity?;
-    let (transform, rest) = bone_query.get(entity).ok()?;
+    let (transform, rest, rest_global) = bone_query.get(entity).ok()?;
 
-    if transform.is_none() || rest.is_none() {
+    if transform.is_none() || rest.is_none() || rest_global.is_none() {
         warn!(
-            "optional humanoid bone `{name}` entity {entity:?} is missing Transform or RestTransform; treating as absent"
+            "optional humanoid bone `{name}` entity {entity:?} is missing Transform, RestTransform, or RestGlobalTransform; treating as absent"
         );
         return None;
     }
@@ -463,7 +447,11 @@ mod tests {
 
     fn bone_entity(world: &mut World) -> Entity {
         world
-            .spawn((Transform::IDENTITY, RestTransform(Transform::IDENTITY)))
+            .spawn((
+                Transform::IDENTITY,
+                RestTransform(Transform::IDENTITY),
+                RestGlobalTransform(GlobalTransform::IDENTITY),
+            ))
             .id()
     }
 

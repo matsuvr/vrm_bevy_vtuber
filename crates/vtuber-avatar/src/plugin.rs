@@ -7,6 +7,7 @@
 use bevy::app::AnimationSystems;
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
+use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
 
 use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
@@ -21,8 +22,7 @@ use crate::load::{
     LoadImportedAvatarRequest, LoadImportedAvatarResult, handle_load_imported_avatar_requests,
 };
 use crate::pose::{
-    PoseApplyMetrics, PoseDistributionSettings, apply_tracked_head_pose,
-    reset_pose_metrics_on_lifecycle_change,
+    PoseApplyMetrics, reset_pose_metrics_on_lifecycle_change, update_body_tracking_pose_input,
 };
 use crate::unload::{
     ActiveControlFrame, clear_control_cache_on_lifecycle_change, despawn_unloading_avatar,
@@ -38,7 +38,6 @@ impl Plugin for VtuberAvatarPlugin {
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
             .init_resource::<ActiveControlFrame>()
-            .init_resource::<PoseDistributionSettings>()
             .init_resource::<PoseApplyMetrics>()
             .add_message::<LoadAvatarRequest>()
             .add_message::<LoadAvatarResult>()
@@ -69,8 +68,9 @@ impl Plugin for VtuberAvatarPlugin {
             )
             .add_systems(
                 PostUpdate,
-                apply_tracked_head_pose
+                update_body_tracking_pose_input
                     .after(AnimationSystems)
+                    .before(apply_direct_body_tracking)
                     .before(VrmSystemSets::Constraints),
             )
             .add_systems(

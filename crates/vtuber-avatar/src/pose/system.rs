@@ -1,16 +1,17 @@
-//! Tracked pose apply system.
+//! Direct-pose body-tracking input bridge.
 //!
-//! Reads the latest [`ActiveControlFrame`] and applies head/neck rotations
-//! to the active avatar's bone entities. The system runs in `PostUpdate`,
-//! after Bevy `AnimationSystems`, and recomputes from rest each frame to
-//! prevent drift.
+//! Reads the latest [`ActiveControlFrame`] and updates
+//! [`BodyTrackingPoseInput`](bevy_vrm1::prelude::BodyTrackingPoseInput) on the
+//! active avatar root. Bone transforms are owned exclusively by
+//! `bevy_vrm1::BodyTracking`.
 
 use bevy::prelude::*;
 use vtuber_core::metrics::FixedStats;
 use vtuber_core::monotonic_now;
+use vtuber_core::types::{AvatarControlFrame, TrackingState};
 
-use super::binding::RestOrientationCache;
-use super::distribution::{PoseDistributionSettings, apply_distributed_pose, distribute_pose};
+use bevy_vrm1::prelude::BodyTrackingPoseInput;
+
 use crate::binding::AvatarBinding;
 use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
 use crate::unload::ActiveControlFrame;
@@ -101,36 +102,29 @@ impl PoseApplyMetrics {
     }
 }
 
-/// System that applies tracked head pose to the active avatar's bones.
+/// System that updates the direct pose consumed by `bevy_vrm1::BodyTracking`.
 ///
 /// # Schedule
 ///
-/// Runs in `PostUpdate`, after `AnimationSystems`. Recomputes from rest
-/// each frame to prevent cumulative drift.
+/// Runs in `PostUpdate`, after `AnimationSystems`. It does not write any bone
+/// `Transform`; the dependency-owned direct body-tracking system is the sole
+/// humanoid pose writer.
 ///
 /// # Skip conditions
 ///
 /// - Lifecycle is not `Ready`
 /// - No active control frame
 /// - Generation mismatch between frame and binding
-/// - Head bone entity no longer exists
-#[allow(clippy::too_many_arguments)]
-pub fn apply_tracked_head_pose(
+/// - Direct input component is missing from the active root
+pub fn update_body_tracking_pose_input(
     lifecycle: Res<AvatarLifecycle>,
     control_frame: Res<ActiveControlFrame>,
-    settings: Res<PoseDistributionSettings>,
     mut metrics: ResMut<PoseApplyMetrics>,
-    mut bone_query: Query<(
-        &mut Transform,
-        &GlobalTransform,
-        Option<&bevy_vrm1::prelude::RestTransform>,
-    )>,
-    _root_query: Query<(&GlobalTransform, Option<&bevy_vrm1::prelude::RestTransform>)>,
-    cache_query: Query<&RestOrientationCache>,
     binding_query: Query<&AvatarBinding>,
+    mut inputs: Query<&mut BodyTrackingPoseInput>,
 ) {
-    // Check lifecycle is Ready.
     if lifecycle.state() != AvatarLifecycleState::Ready {
+        deactivate_inputs(&mut inputs);
         metrics.skipped_not_ready += 1;
         return;
     }
@@ -138,76 +132,68 @@ pub fn apply_tracked_head_pose(
     let active_root = match lifecycle.active_root() {
         Some(root) => root,
         None => {
+            deactivate_inputs(&mut inputs);
             metrics.skipped_not_ready += 1;
             return;
         }
     };
 
-    // Check we have a control frame.
+    let mut input = match inputs.get_mut(active_root) {
+        Ok(input) => input,
+        Err(_) => {
+            metrics.skipped_stale_entity += 1;
+            return;
+        }
+    };
+
     let frame = match &control_frame.frame {
         Some(f) => f,
         None => {
+            *input = BodyTrackingPoseInput::default();
             metrics.skipped_no_frame += 1;
             return;
         }
     };
 
-    // Check generation matches.
     let binding = match binding_query.get(active_root) {
         Ok(b) => b,
         Err(_) => {
+            *input = BodyTrackingPoseInput::default();
             metrics.skipped_stale_entity += 1;
             return;
         }
     };
 
     if control_frame.generation != binding.generation {
+        *input = BodyTrackingPoseInput::default();
         metrics.skipped_generation_mismatch += 1;
         return;
     }
 
-    // Get rest orientation cache.
-    let cache = match cache_query.get(active_root) {
-        Ok(c) => c,
-        Err(_) => {
-            metrics.skipped_stale_entity += 1;
-            return;
-        }
-    };
-
-    // Check head bone exists.
-    if bone_query.get_mut(binding.head).is_err() {
-        metrics.skipped_stale_entity += 1;
-        return;
-    }
-
-    // Distribute the pose.
-    let has_neck = binding.neck.is_some();
-    let distributed = distribute_pose(
-        frame.head.yaw_rad,
-        frame.head.pitch_rad,
-        frame.head.roll_rad,
-        has_neck,
-        &settings,
-    );
-
-    // Apply to bones.
-    let (head_rot, neck_rot) = apply_distributed_pose(&distributed, cache);
-
-    // Write head rotation.
-    if let Ok((mut head_transform, _, _)) = bone_query.get_mut(binding.head) {
-        head_transform.rotation = head_rot;
-    }
-
-    // Write neck rotation if present.
-    if let (Some(neck_entity), Some(neck_rotation)) = (binding.neck, neck_rot)
-        && let Ok((mut neck_transform, _, _)) = bone_query.get_mut(neck_entity)
-    {
-        neck_transform.rotation = neck_rotation;
-    }
+    *input = body_tracking_input(frame);
 
     let applied_at = monotonic_now();
     metrics.record_apply(frame.source_seq, frame.captured_at, applied_at);
+}
+
+fn body_tracking_input(frame: &AvatarControlFrame) -> BodyTrackingPoseInput {
+    let active = matches!(
+        frame.state,
+        TrackingState::Tracking | TrackingState::Degraded
+    );
+    BodyTrackingPoseInput {
+        yaw_radians: frame.head.yaw_rad,
+        pitch_radians: frame.head.pitch_rad,
+        roll_radians: frame.head.roll_rad,
+        weight: frame.confidence,
+        active,
+    }
+}
+
+fn deactivate_inputs(inputs: &mut Query<&mut BodyTrackingPoseInput>) {
+    for mut input in inputs.iter_mut() {
+        *input = BodyTrackingPoseInput::default();
+    }
 }
 
 /// System that resets pose metrics when the avatar lifecycle changes.
@@ -229,6 +215,24 @@ pub fn reset_pose_metrics_on_lifecycle_change(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vtuber_core::types::{ExpressionCoefficients, FrameSeq, HeadPose, MonoTimeNs};
+
+    fn frame(state: TrackingState) -> AvatarControlFrame {
+        AvatarControlFrame {
+            source_seq: FrameSeq(1),
+            captured_at: MonoTimeNs(2),
+            produced_at: MonoTimeNs(3),
+            confidence: 0.75,
+            state,
+            head: HeadPose {
+                yaw_rad: 0.3,
+                pitch_rad: 0.2,
+                roll_rad: 0.1,
+            },
+            gaze: None,
+            expressions: ExpressionCoefficients::default(),
+        }
+    }
 
     #[test]
     fn tracked_pose_system_skips_when_not_ready() {
@@ -245,6 +249,33 @@ mod tests {
         assert_eq!(metrics.skipped_generation_mismatch, 0);
         assert_eq!(metrics.skipped_no_frame, 0);
         assert_eq!(metrics.skipped_stale_entity, 0);
+    }
+
+    #[test]
+    fn tracking_frame_maps_directly_without_coordinate_reinterpretation() {
+        let input = body_tracking_input(&frame(TrackingState::Tracking));
+        assert_eq!(input.yaw_radians, 0.3);
+        assert_eq!(input.pitch_radians, 0.2);
+        assert_eq!(input.roll_radians, 0.1);
+        assert_eq!(input.weight, 0.75);
+        assert!(input.active);
+    }
+
+    #[test]
+    fn degraded_tracking_remains_weighted_and_loss_targets_neutral() {
+        assert!(body_tracking_input(&frame(TrackingState::Degraded)).active);
+        for state in [
+            TrackingState::Starting,
+            TrackingState::Searching,
+            TrackingState::Acquiring,
+            TrackingState::LostHold,
+            TrackingState::ReturningNeutral,
+        ] {
+            assert!(
+                !body_tracking_input(&frame(state)).active,
+                "state={state:?}"
+            );
+        }
     }
 
     #[test]

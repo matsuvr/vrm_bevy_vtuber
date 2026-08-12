@@ -367,7 +367,8 @@ fn sanitize_input(input: &BodyTrackingPoseInput) -> Vec3 {
 }
 
 #[derive(Debug, Clone)]
-struct DirectBoneState {
+#[doc(hidden)]
+pub struct DirectBoneState {
     base: Quat,
     last_delta: Quat,
     smoothed_angles: Vec3,
@@ -458,7 +459,12 @@ fn refresh_parent_global(
     Some(parent_global)
 }
 
-fn apply_direct_body_tracking(
+/// Applies direct pose input to the humanoid upper-body chain.
+///
+/// Applications normally use [`crate::prelude::VrmPlugin`], which registers
+/// this system after Bevy animation and before VRM constraints. The function
+/// is public so integration tests and custom schedules can verify that path.
+pub fn apply_direct_body_tracking(
     vrms: Query<
         (
             Entity,

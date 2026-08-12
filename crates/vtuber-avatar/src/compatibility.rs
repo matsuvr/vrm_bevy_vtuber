@@ -61,8 +61,10 @@ impl VrmCompatibilityReport {
     /// Returns `true` if the model is usable for the VTuber MVP.
     ///
     /// MVP requires at least a head bone and either per-eye blink or a
-    /// combined blink expression. It does **not** require `LookAt` or
-    /// `BodyTracking`, which are intentionally avoided per ADR-002.
+    /// combined blink expression. It does **not** require `LookAt` or an
+    /// already-present `BodyTracking` component during raw runtime
+    /// initialization; the application adds direct-pose body tracking after
+    /// humanoid binding succeeds.
     #[must_use]
     pub fn is_mvp_capable(&self) -> bool {
         self.vrm_loaded && self.has_head && self.has_any_blink()

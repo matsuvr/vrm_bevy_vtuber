@@ -1,4 +1,6 @@
-use crate::vrm::body_tracking::{BodyTracking, SmoothedGaze};
+use crate::vrm::body_tracking::{
+    BodyTracking, BodyTrackingPoseInput, BodyTrackingProfile, SmoothedGaze,
+};
 use crate::vrm::expressions::{ExpressionEntityMap, VrmExpressionRegistry};
 use crate::vrm::first_person::FirstPersonRegistry;
 use crate::vrm::gltf::extensions::vrmc_vrm::LookAtProperties;
@@ -90,6 +92,8 @@ fn remove_vrm_components(
         .try_remove::<LookAtProperties>()
         .try_remove::<LookAt>()
         .try_remove::<BodyTracking>()
+        .try_remove::<BodyTrackingPoseInput>()
+        .try_remove::<BodyTrackingProfile>()
         .try_remove::<SmoothedGaze>();
 
     remove_bone_entities(commands, entity);
@@ -204,7 +208,14 @@ mod tests {
 
         let vrm_entity = app
             .world_mut()
-            .spawn((Vrm, Initialized, ExpressionEntityMap(HashMap::default())))
+            .spawn((
+                Vrm,
+                Initialized,
+                ExpressionEntityMap(HashMap::default()),
+                BodyTracking::default(),
+                BodyTrackingPoseInput::default(),
+                BodyTrackingProfile::default(),
+            ))
             .id();
 
         app.world_mut()
@@ -217,6 +228,9 @@ mod tests {
         assert!(!world.entity(vrm_entity).contains::<Vrm>());
         assert!(!world.entity(vrm_entity).contains::<Initialized>());
         assert!(!world.entity(vrm_entity).contains::<ExpressionEntityMap>());
+        assert!(!world.entity(vrm_entity).contains::<BodyTracking>());
+        assert!(!world.entity(vrm_entity).contains::<BodyTrackingPoseInput>());
+        assert!(!world.entity(vrm_entity).contains::<BodyTrackingProfile>());
         // Entity itself survives
         assert!(world.get_entity(vrm_entity).is_ok());
     }

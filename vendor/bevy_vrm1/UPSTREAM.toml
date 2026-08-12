@@ -9,6 +9,8 @@ vendored_for = "Q2-06-001 direct-pose BodyTracking extension"
 files = [
   "Cargo.toml",
   "src/vrm/body_tracking.rs",
+  "src/vrm/body_tracking/direct.rs",
+  "src/vrm/detach.rs",
   "src/vrm.rs",
 ]
 notes = "Adds direct yaw/pitch/roll input, upperChest participation, per-axis weights, per-bone half-life, and an early direct-pose system while preserving the legacy LookAt path. The dev-only bevy_test_helper dependency is pinned to the v0.18 branch revision observed when vendored."

@@ -32,11 +32,7 @@ pub use load::{
     LoadImportedAvatarRequest, LoadImportedAvatarResult, PendingAvatarLoad, UserAssetPath,
 };
 pub use plugin::{StartupModelPath, VtuberAvatarPlugin};
-pub use pose::{
-    ClampedHeadPose, DistributedPose, DistributionDiagnostic, HeadNeckWeights, ModelSpaceDelta,
-    NonFiniteInputError, PoseApplyMetrics, PoseClampSettings, PoseDistributionSettings,
-    RawAxisDeltas, RestOrientationCache, RestOrientationError,
-};
+pub use pose::PoseApplyMetrics;
 pub use unload::{
     ActiveControlFrame, ControlFrameError, set_active_control_frame, tag_control_frame,
 };

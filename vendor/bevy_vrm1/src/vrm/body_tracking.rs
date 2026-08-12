@@ -11,7 +11,7 @@ mod direct;
 
 pub use direct::{
     BodyBoneHalfLives, BodyBoneRotationLimits, BodyBoneWeights, BodyTrackingPoseInput,
-    BodyTrackingProfile, BoneRotationLimit,
+    BodyTrackingProfile, BoneRotationLimit, apply_direct_body_tracking,
 };
 
 /// Optional body tracking for the humanoid upper-body chain.

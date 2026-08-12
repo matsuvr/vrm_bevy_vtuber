@@ -59,6 +59,7 @@ fn spawn_bone(app: &mut App) -> Entity {
             Transform::IDENTITY,
             GlobalTransform::IDENTITY,
             RestTransform(Transform::IDENTITY),
+            RestGlobalTransform(GlobalTransform::IDENTITY),
         ))
         .id()
 }

@@ -6,7 +6,6 @@ use bevy_vrm1::prelude::*;
 use vtuber_avatar::bind::BindTriggered;
 use vtuber_avatar::binding::{AvatarBinding, bind_humanoid_bones};
 use vtuber_avatar::lifecycle::{ActiveAvatar, AvatarLifecycle, AvatarLifecycleState};
-use vtuber_avatar::pose::RestOrientationCache;
 
 fn test_app() -> App {
     let mut app = App::new();
@@ -22,6 +21,7 @@ fn spawn_bone(app: &mut App) -> Entity {
             Transform::IDENTITY,
             GlobalTransform::IDENTITY,
             RestTransform(Transform::IDENTITY),
+            RestGlobalTransform(GlobalTransform::IDENTITY),
         ))
         .id()
 }
@@ -64,11 +64,9 @@ fn humanoid_binding_head_only_ready() {
     assert!(binding.spine.is_none());
     assert!(binding.left_eye.is_none());
     assert!(binding.right_eye.is_none());
-    let cache = app
-        .world()
-        .get::<RestOrientationCache>(root)
-        .expect("rest orientations should be cached before Ready");
-    assert_eq!(cache.generation, binding.generation);
+    assert!(app.world().get::<BodyTracking>(root).is_some());
+    assert!(app.world().get::<BodyTrackingPoseInput>(root).is_some());
+    assert!(app.world().get::<BodyTrackingProfile>(root).is_some());
 
     assert_eq!(
         app.world().get::<Visibility>(root),
@@ -84,7 +82,7 @@ fn humanoid_binding_head_only_ready() {
 }
 
 #[test]
-fn humanoid_binding_waits_for_global_transform_then_caches() {
+fn humanoid_binding_waits_for_rest_global_transform() {
     let mut app = test_app();
     let head = app
         .world_mut()
@@ -106,14 +104,14 @@ fn humanoid_binding_waits_for_global_transform_then_caches() {
 
     app.world_mut()
         .entity_mut(head)
-        .insert(GlobalTransform::IDENTITY);
+        .insert(RestGlobalTransform(GlobalTransform::IDENTITY));
     app.update();
 
     assert_eq!(
         app.world().resource::<AvatarLifecycle>().state(),
         AvatarLifecycleState::Ready
     );
-    assert!(app.world().get::<RestOrientationCache>(root).is_some());
+    assert!(app.world().get::<BodyTrackingPoseInput>(root).is_some());
 }
 
 #[test]
