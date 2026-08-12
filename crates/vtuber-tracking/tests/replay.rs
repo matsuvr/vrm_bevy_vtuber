@@ -45,6 +45,7 @@ fn config() -> PipelineConfig {
             return_duration: Duration::from_millis(200),
         },
         head_filter: HeadFilterParams::with_time_constant(0.05),
+        gaze_filter: Default::default(),
         expression_filter: ExpressionFilterParams::with_time_constants(0.03, 0.10),
         loss_recovery: LossRecoveryParams {
             hold_duration: Duration::from_millis(100),
@@ -85,10 +86,11 @@ fn rotate_landmarks(landmarks: &[Landmark3], pose: HeadPose) -> Vec<Landmark3> {
 
 fn neutral_profile() -> NeutralProfile {
     NeutralProfile {
-        version: 1,
+        version: 2,
         schema: SCHEMA,
         landmarks: synthetic_landmarks(),
         head_pose: HeadPose::default(),
+        gaze_baseline: vtuber_tracking::GazeNeutralBaseline::default(),
         blink_left_baseline: 0.05,
         blink_right_baseline: 0.05,
         mouth_open_baseline: 0.05,

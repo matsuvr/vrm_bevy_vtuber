@@ -136,6 +136,15 @@ pub fn observe_mediapipe_gaze(values: &FaceBlendshapeSet) -> BinocularGazeObserv
         .clamp(-1.0, 1.0),
         weight: (1.0 - value(values, MediaPipeBlendshape::EyeBlinkRight)).clamp(0.0, 1.0),
     };
+    fuse_binocular_gaze(left, right)
+}
+
+/// Fuses two baseline-adjusted per-eye observations into one common gaze.
+#[must_use]
+pub fn fuse_binocular_gaze(
+    left: PerEyeGazeObservation,
+    right: PerEyeGazeObservation,
+) -> BinocularGazeObservation {
     let disagreement = ((left.horizontal - right.horizontal).abs()
         + (left.vertical - right.vertical).abs())
         * 0.25;

@@ -27,8 +27,8 @@ pub mod state_machine;
 pub use calibration::{
     AUTO_NEUTRAL_MIN_SAMPLES, AUTO_NEUTRAL_WINDOW, AutoNeutralCollector, AutoNeutralError,
     AutoNeutralState, AutoNeutralUpdate, CalibrationCollector, CalibrationInput,
-    CalibrationSession, CollectorMetrics, NeutralContext, NeutralProfile, NeutralReference,
-    NeutralValidationSettings, RejectionReason, SampleDecision,
+    CalibrationSession, CollectorMetrics, GazeNeutralBaseline, NeutralContext, NeutralProfile,
+    NeutralReference, NeutralValidationSettings, RejectionReason, SampleDecision,
 };
 pub use confidence::{
     ConfidenceAssessment, ConfidenceConfigError, ConfidenceError, ConfidenceGate,
@@ -36,13 +36,14 @@ pub use confidence::{
     MissingSourcePolicy, synthesize,
 };
 pub use expressions::{
+    BinocularGazeObservation, PerEyeGazeObservation, fuse_binocular_gaze,
     map_mediapipe_expressions, map_mediapipe_gaze, map_mediapipe_raw_expressions,
-    parse_mediapipe_blendshapes,
+    observe_mediapipe_gaze, parse_mediapipe_blendshapes,
 };
 pub use filter::{
     ExpressionCalibration, ExpressionCalibrationError, ExpressionChannel, ExpressionFilter,
-    ExpressionFilterParams, ExpressionRange, HeadFilterParams, HeadRotationFilter,
-    MissingChannelFallback, MissingChannelPolicy,
+    ExpressionFilterParams, ExpressionRange, GazeFilter, GazeFilterParams, HeadFilterParams,
+    HeadRotationFilter, MissingChannelFallback, MissingChannelPolicy,
 };
 pub use loss_recovery::{
     LossRecovery, LossRecoveryConfigError, LossRecoveryParams, MAX_DECAY_DURATION,

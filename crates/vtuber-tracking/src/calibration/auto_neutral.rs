@@ -13,10 +13,36 @@ use nalgebra::{Quaternion, UnitQuaternion};
 use thiserror::Error;
 use vtuber_core::{CameraFaceTransform, FaceTrackingSample, MonoTimeNs};
 
+use crate::expressions::{BinocularGazeObservation, observe_mediapipe_gaze};
+
 /// Duration of the robust recent auto-neutral window.
 pub const AUTO_NEUTRAL_WINDOW: Duration = Duration::from_millis(300);
 /// Minimum number of valid samples required for robust window aggregation.
 pub const AUTO_NEUTRAL_MIN_SAMPLES: usize = 15;
+
+/// Per-eye neutral gaze baselines captured while looking near the camera.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GazeNeutralBaseline {
+    /// Left eye horizontal baseline.
+    pub left_horizontal: f32,
+    /// Right eye horizontal baseline.
+    pub right_horizontal: f32,
+    /// Left eye vertical baseline.
+    pub left_vertical: f32,
+    /// Right eye vertical baseline.
+    pub right_vertical: f32,
+}
+
+impl GazeNeutralBaseline {
+    fn from_observation(observation: BinocularGazeObservation) -> Self {
+        Self {
+            left_horizontal: observation.left.horizontal,
+            right_horizontal: observation.right.horizontal,
+            left_vertical: observation.left.vertical,
+            right_vertical: observation.right.vertical,
+        }
+    }
+}
 
 /// Lifecycle of the automatic neutral reference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,6 +69,8 @@ pub struct AutoNeutralUpdate {
     pub state: AutoNeutralState,
     /// Neutral transform to use for the current tracking generation.
     pub reference: CameraFaceTransform,
+    /// Neutral per-eye gaze baselines.
+    pub gaze_baseline: GazeNeutralBaseline,
     /// Number of samples retained in the recent window.
     pub recent_sample_count: usize,
     /// Whether the robust window replaced the first-valid fallback.
@@ -55,6 +83,7 @@ pub struct AutoNeutralUpdate {
 struct Candidate {
     captured_at: MonoTimeNs,
     transform: CameraFaceTransform,
+    gaze_baseline: GazeNeutralBaseline,
 }
 
 /// Selects an immediately usable and then robustly aggregated neutral pose.
@@ -63,6 +92,7 @@ pub struct AutoNeutralCollector {
     state: AutoNeutralState,
     first_valid: Option<Candidate>,
     reference: Option<CameraFaceTransform>,
+    gaze_baseline: Option<GazeNeutralBaseline>,
     recent: VecDeque<Candidate>,
     robust_window_active: bool,
 }
@@ -84,6 +114,12 @@ impl AutoNeutralCollector {
     #[must_use]
     pub fn reference(&self) -> Option<CameraFaceTransform> {
         self.reference
+    }
+
+    /// Returns the current per-eye neutral gaze baseline.
+    #[must_use]
+    pub fn gaze_baseline(&self) -> Option<GazeNeutralBaseline> {
+        self.gaze_baseline
     }
 
     /// Returns the number of retained recent candidates.
@@ -111,12 +147,16 @@ impl AutoNeutralCollector {
         let candidate = Candidate {
             captured_at: sample.inference_finished_at,
             transform: sample.camera_to_face,
+            gaze_baseline: GazeNeutralBaseline::from_observation(observe_mediapipe_gaze(
+                &sample.blendshapes,
+            )),
         };
         let reference_was = self.reference;
 
         if self.first_valid.is_none() {
             self.first_valid = Some(candidate);
             self.reference = Some(candidate.transform);
+            self.gaze_baseline = Some(candidate.gaze_baseline);
             self.state = AutoNeutralState::Ready;
         }
 
@@ -130,6 +170,7 @@ impl AutoNeutralCollector {
             let aggregate =
                 aggregate_candidates(&self.recent).ok_or(AutoNeutralError::InvalidTransform)?;
             self.reference = Some(aggregate);
+            self.gaze_baseline = Some(aggregate_gaze_baseline(&self.recent));
             self.robust_window_active = true;
         }
 
@@ -137,9 +178,11 @@ impl AutoNeutralCollector {
             .reference
             .or_else(|| self.first_valid.map(|candidate| candidate.transform))
             .ok_or(AutoNeutralError::InvalidTransform)?;
+        let gaze_baseline = self.gaze_baseline.unwrap_or(candidate.gaze_baseline);
         Ok(AutoNeutralUpdate {
             state: self.state,
             reference,
+            gaze_baseline,
             recent_sample_count: self.recent.len(),
             used_robust_window: self.robust_window_active,
             reference_changed: reference_was != Some(reference),
@@ -162,16 +205,21 @@ impl AutoNeutralCollector {
         let candidate = Candidate {
             captured_at: sample.inference_finished_at,
             transform: sample.camera_to_face,
+            gaze_baseline: GazeNeutralBaseline::from_observation(observe_mediapipe_gaze(
+                &sample.blendshapes,
+            )),
         };
         self.state = AutoNeutralState::Ready;
         self.first_valid = Some(candidate);
         self.reference = Some(candidate.transform);
+        self.gaze_baseline = Some(candidate.gaze_baseline);
         self.recent.clear();
         self.recent.push_back(candidate);
         self.robust_window_active = false;
         Ok(AutoNeutralUpdate {
             state: self.state,
             reference: candidate.transform,
+            gaze_baseline: candidate.gaze_baseline,
             recent_sample_count: 1,
             used_robust_window: false,
             reference_changed: true,
@@ -250,6 +298,31 @@ fn aggregate_candidates(candidates: &VecDeque<Candidate>) -> Option<CameraFaceTr
     })
 }
 
+fn aggregate_gaze_baseline(candidates: &VecDeque<Candidate>) -> GazeNeutralBaseline {
+    GazeNeutralBaseline {
+        left_horizontal: median(
+            candidates
+                .iter()
+                .map(|candidate| candidate.gaze_baseline.left_horizontal),
+        ),
+        right_horizontal: median(
+            candidates
+                .iter()
+                .map(|candidate| candidate.gaze_baseline.right_horizontal),
+        ),
+        left_vertical: median(
+            candidates
+                .iter()
+                .map(|candidate| candidate.gaze_baseline.left_vertical),
+        ),
+        right_vertical: median(
+            candidates
+                .iter()
+                .map(|candidate| candidate.gaze_baseline.right_vertical),
+        ),
+    }
+}
+
 fn to_quaternion(transform: CameraFaceTransform) -> Option<UnitQuaternion<f32>> {
     if !transform.is_valid() {
         return None;
@@ -285,7 +358,9 @@ fn median(values: impl Iterator<Item = f32>) -> f32 {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use vtuber_core::{FaceBlendshapeSet, FaceLandmark, FaceTrackingQuality, FrameSeq};
+    use vtuber_core::{
+        FaceBlendshapeSet, FaceLandmark, FaceTrackingQuality, FrameSeq, MediaPipeBlendshape,
+    };
 
     fn sample(seq: u64, time_ns: u64, translation_x: f32) -> FaceTrackingSample {
         FaceTrackingSample {
@@ -307,6 +382,22 @@ mod tests {
         }
     }
 
+    fn sample_with_gaze(values: &[(MediaPipeBlendshape, f32)]) -> FaceTrackingSample {
+        let mut sample = sample(1, 1, 0.0);
+        let pairs: Vec<_> = MediaPipeBlendshape::ALL
+            .into_iter()
+            .map(|category| {
+                let value = values
+                    .iter()
+                    .find(|(candidate, _)| *candidate == category)
+                    .map_or(0.0, |(_, value)| *value);
+                (category.as_str(), value)
+            })
+            .collect();
+        sample.blendshapes = FaceBlendshapeSet::from_pairs(&pairs).expect("complete typed set");
+        sample
+    }
+
     #[test]
     fn first_valid_sample_is_available_without_blocking() {
         let mut collector = AutoNeutralCollector::new();
@@ -315,6 +406,22 @@ mod tests {
         assert_eq!(update.recent_sample_count, 1);
         assert!(!update.used_robust_window);
         assert_eq!(update.reference.translation_xyz[0], 2.0);
+    }
+
+    #[test]
+    fn neutral_records_all_four_per_eye_gaze_baselines() {
+        let sample = sample_with_gaze(&[
+            (MediaPipeBlendshape::EyeLookOutLeft, 0.4),
+            (MediaPipeBlendshape::EyeLookInRight, 0.3),
+            (MediaPipeBlendshape::EyeLookUpLeft, 0.2),
+            (MediaPipeBlendshape::EyeLookDownRight, 0.1),
+        ]);
+        let mut collector = AutoNeutralCollector::new();
+        let update = collector.observe(&sample).unwrap();
+        assert_eq!(update.gaze_baseline.left_horizontal, 0.4);
+        assert_eq!(update.gaze_baseline.right_horizontal, 0.3);
+        assert_eq!(update.gaze_baseline.left_vertical, 0.2);
+        assert_eq!(update.gaze_baseline.right_vertical, -0.1);
     }
 
     #[test]

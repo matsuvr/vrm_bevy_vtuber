@@ -212,10 +212,11 @@ impl NeutralReference {
         let confidence_baseline = median_confidence(samples);
 
         Ok(NeutralProfile {
-            version: 1,
+            version: 2,
             schema,
             landmarks,
             head_pose,
+            gaze_baseline: crate::calibration::GazeNeutralBaseline::default(),
             blink_left_baseline: expressions.blink_left,
             blink_right_baseline: expressions.blink_right,
             mouth_open_baseline: expressions.mouth_open,
@@ -714,7 +715,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(profile.version, 1);
+        assert_eq!(profile.version, 2);
         assert_eq!(profile.schema, LandmarkSchemaId("neutral-test"));
         assert_eq!(profile.collected_at, MonoTimeNs(42));
         assert_eq!(profile.model_hash, Some("hash".into()));

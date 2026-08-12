@@ -9,6 +9,8 @@ use vtuber_core::types::{
     FrameSeq, HeadPose, Landmark3, LandmarkSchemaId, MonoTimeNs, RawExpressionObservation,
 };
 
+use crate::calibration::GazeNeutralBaseline;
+
 /// A single neutral candidate frame supplied to the calibration collector.
 ///
 /// `CalibrationInput` is deliberately separate from [`NeutralProfile`]: the
@@ -45,6 +47,8 @@ pub struct NeutralProfile {
     pub landmarks: Vec<Landmark3>,
     /// Baseline head pose at calibration time.
     pub head_pose: HeadPose,
+    /// Per-eye forward-looking gaze baseline. Version-1 profiles migrate as zero.
+    pub gaze_baseline: GazeNeutralBaseline,
     /// Left eye blink baseline in `[0, 1]`.
     pub blink_left_baseline: f32,
     /// Right eye blink baseline in `[0, 1]`.
@@ -227,7 +231,7 @@ mod calibration_types {
 
     fn dummy_profile() -> NeutralProfile {
         NeutralProfile {
-            version: 1,
+            version: 2,
             schema: LandmarkSchemaId("test"),
             landmarks: vec![
                 Landmark3 {
@@ -250,6 +254,7 @@ mod calibration_types {
                 },
             ],
             head_pose: HeadPose::default(),
+            gaze_baseline: GazeNeutralBaseline::default(),
             blink_left_baseline: 0.1,
             blink_right_baseline: 0.1,
             mouth_open_baseline: 0.05,

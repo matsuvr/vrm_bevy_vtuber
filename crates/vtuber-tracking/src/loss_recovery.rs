@@ -17,7 +17,8 @@ use nalgebra::{Quaternion, UnitQuaternion};
 use thiserror::Error;
 
 use vtuber_core::types::{
-    AvatarControlFrame, ExpressionCoefficients, GazeSignal, HeadPose, MonoTimeNs, TrackingState,
+    AvatarControlFrame, ExpressionCoefficients, GazeSignal, GazeTrackingState, HeadPose,
+    MonoTimeNs, TrackingState,
 };
 
 use crate::pose::{quaternion_to_semantic_pose, semantic_pose_to_quaternion};
@@ -475,7 +476,7 @@ fn blend_frames(
         confidence: lerp(from.confidence, to.confidence, t),
         state,
         head: quaternion_to_semantic_pose(q),
-        gaze: to.gaze,
+        gaze: blend_gaze(from.gaze, to.gaze, t),
         expressions: blend_expressions(&from.expressions, &to.expressions, t),
     }
 }
@@ -499,8 +500,29 @@ fn blend_to_neutral(
         confidence: lerp(from.confidence, 0.0, t),
         state,
         head: quaternion_to_semantic_pose(q),
-        gaze: GazeSignal::degraded(0.0, 0.0, 0.0),
+        gaze: blend_gaze(from.gaze, GazeSignal::degraded(0.0, 0.0, 0.0), t),
         expressions: blend_expressions(&from.expressions, &ExpressionCoefficients::default(), t),
+    }
+}
+
+fn blend_gaze(from: GazeSignal, to: GazeSignal, t: f32) -> GazeSignal {
+    let t = t.clamp(0.0, 1.0);
+    let horizontal = lerp(from.horizontal, to.horizontal, t);
+    let vertical = lerp(from.vertical, to.vertical, t);
+    let confidence = lerp(from.confidence, to.confidence, t);
+    let state = if t >= 1.0 {
+        to.state
+    } else if matches!(from.state, GazeTrackingState::Tracked)
+        && matches!(to.state, GazeTrackingState::Tracked)
+    {
+        GazeTrackingState::Tracked
+    } else {
+        GazeTrackingState::Degraded
+    };
+    match state {
+        GazeTrackingState::Tracked => GazeSignal::tracked(horizontal, vertical, confidence),
+        GazeTrackingState::Degraded => GazeSignal::degraded(horizontal, vertical, confidence),
+        GazeTrackingState::Unavailable => GazeSignal::UNAVAILABLE,
     }
 }
 
@@ -799,5 +821,53 @@ mod tests {
             before_reacquire.head.yaw_rad
         );
         assert!(lr.is_recovering());
+    }
+
+    #[test]
+    fn gaze_holds_returns_neutral_and_reacquires_without_snap() {
+        let mut lr = LossRecovery::new(test_params()).unwrap();
+        let mut tracked = frame(1, 0.2, 0.0, 0.0, 0.0);
+        tracked.gaze = GazeSignal::tracked(0.8, -0.4, 0.9);
+        let first = lr
+            .update(
+                TrackingState::Tracking,
+                Duration::from_millis(16),
+                Some(tracked.clone()),
+                MonoTimeNs(16_000_000),
+            )
+            .unwrap();
+        let held = lr
+            .update(
+                TrackingState::LostHold,
+                Duration::from_millis(50),
+                None,
+                MonoTimeNs(66_000_000),
+            )
+            .unwrap();
+        assert_eq!(held.gaze.horizontal, first.gaze.horizontal);
+
+        let returning = lr
+            .update(
+                TrackingState::ReturningNeutral,
+                Duration::from_millis(150),
+                None,
+                MonoTimeNs(216_000_000),
+            )
+            .unwrap();
+        assert!(returning.gaze.horizontal.abs() < held.gaze.horizontal.abs());
+
+        let mut target = frame(2, -0.2, 0.0, 0.0, 0.0);
+        target.gaze = GazeSignal::tracked(-0.8, 0.2, 0.9);
+        let recovering = lr
+            .update(
+                TrackingState::Tracking,
+                Duration::from_millis(50),
+                Some(target),
+                MonoTimeNs(266_000_000),
+            )
+            .unwrap();
+        assert!(recovering.gaze.horizontal > -0.8);
+        assert!(recovering.gaze.horizontal < returning.gaze.horizontal);
+        assert_eq!(recovering.gaze.state, GazeTrackingState::Degraded);
     }
 }

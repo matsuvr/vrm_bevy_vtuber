@@ -12,7 +12,7 @@ pub mod types;
 
 pub use auto_neutral::{
     AUTO_NEUTRAL_MIN_SAMPLES, AUTO_NEUTRAL_WINDOW, AutoNeutralCollector, AutoNeutralError,
-    AutoNeutralState, AutoNeutralUpdate,
+    AutoNeutralState, AutoNeutralUpdate, GazeNeutralBaseline,
 };
 pub use collector::{CalibrationCollector, CollectorMetrics, RejectionReason, SampleDecision};
 pub use neutral::{NeutralContext, NeutralReference, NeutralValidationSettings};

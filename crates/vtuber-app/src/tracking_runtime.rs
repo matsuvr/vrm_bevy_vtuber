@@ -227,9 +227,11 @@ pub fn tracking_bridge_system(
     }
 
     let neutral = tracking.auto_neutral.reference();
-    let update = tracking
-        .pipeline
-        .update_mediapipe(sample.as_ref(), neutral, now, dt);
+    let gaze_baseline = tracking.auto_neutral.gaze_baseline();
+    let update =
+        tracking
+            .pipeline
+            .update_mediapipe(sample.as_ref(), neutral, gaze_baseline, now, dt);
     if let Some(frame) = update.frame {
         let _ = tracking.control_slot.publish(frame.clone());
         tracking.latest_control = Some(frame);

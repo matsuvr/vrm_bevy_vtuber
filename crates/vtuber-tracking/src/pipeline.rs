@@ -27,15 +27,17 @@ use vtuber_core::types::{
 };
 use vtuber_core::{CameraFaceTransform, FaceTrackingSample, NormalizedRect};
 
-use crate::calibration::{NeutralProfile, NeutralValidationSettings};
+use crate::calibration::{GazeNeutralBaseline, NeutralProfile, NeutralValidationSettings};
 use crate::confidence::{
     ConfidenceAssessment, ConfidenceGate, ConfidenceGateParams, ConfidenceInputs,
     ConfidencePolicies, synthesize,
 };
-use crate::expressions::{map_mediapipe_gaze, map_mediapipe_raw_expressions};
+use crate::expressions::{
+    fuse_binocular_gaze, map_mediapipe_raw_expressions, observe_mediapipe_gaze,
+};
 use crate::filter::{
     ExpressionCalibration, ExpressionCalibrationError, ExpressionFilter, ExpressionFilterParams,
-    ExpressionRange, HeadFilterParams, HeadRotationFilter,
+    ExpressionRange, GazeFilter, GazeFilterParams, HeadFilterParams, HeadRotationFilter,
 };
 use crate::loss_recovery::{LossRecovery, LossRecoveryParams};
 use crate::pose::planar::{
@@ -365,6 +367,8 @@ pub struct PipelineConfig {
     pub state_machine: StateMachineParams,
     /// Head rotation filter parameters.
     pub head_filter: HeadFilterParams,
+    /// Eye-in-head gaze filter parameters.
+    pub gaze_filter: GazeFilterParams,
     /// Expression normalization and smoothing parameters.
     pub expression_filter: ExpressionFilterParams,
     /// Loss hold / decay / recovery timing.
@@ -379,6 +383,7 @@ impl Default for PipelineConfig {
             confidence_gate: ConfidenceGateParams::default(),
             state_machine: StateMachineParams::default(),
             head_filter: HeadFilterParams::default(),
+            gaze_filter: GazeFilterParams::default(),
             expression_filter: ExpressionFilterParams::default(),
             loss_recovery: LossRecoveryParams::default(),
         }
@@ -421,6 +426,7 @@ pub struct TrackingPipeline {
     profile: Option<NeutralProfile>,
     expression_filter: ExpressionFilter,
     head_filter: HeadRotationFilter,
+    gaze_filter: GazeFilter,
     confidence_gate: ConfidenceGate,
     state_machine: TrackingStateMachine,
     loss_recovery: LossRecovery,
@@ -436,6 +442,7 @@ impl TrackingPipeline {
         let expression_filter =
             ExpressionFilter::new(default_expression_calibration(), config.expression_filter);
         let head_filter = HeadRotationFilter::new(config.head_filter);
+        let gaze_filter = GazeFilter::new(config.gaze_filter);
         let confidence_gate = ConfidenceGate::new(config.confidence_gate)
             .map_err(|_| PipelineConfigError::ConfidenceGate)?;
         let state_machine = TrackingStateMachine::new(config.state_machine)
@@ -448,6 +455,7 @@ impl TrackingPipeline {
             profile: None,
             expression_filter,
             head_filter,
+            gaze_filter,
             confidence_gate,
             state_machine,
             loss_recovery,
@@ -481,6 +489,7 @@ impl TrackingPipeline {
             .map_err(|_| PipelineConfigError::ExpressionCalibration)?;
         self.expression_filter = ExpressionFilter::new(calibration, self.config.expression_filter);
         self.head_filter.reset();
+        self.gaze_filter.reset();
         self.profile = Some(profile);
         Ok(())
     }
@@ -489,6 +498,7 @@ impl TrackingPipeline {
     pub fn reset_calibration(&mut self) {
         self.profile = None;
         self.head_filter.reset();
+        self.gaze_filter.reset();
         self.expression_filter = ExpressionFilter::new(
             default_expression_calibration(),
             self.config.expression_filter,
@@ -498,6 +508,7 @@ impl TrackingPipeline {
     /// Resets filters and tracking state without changing calibration.
     pub fn reset(&mut self) {
         self.head_filter.reset();
+        self.gaze_filter.reset();
         self.expression_filter.reset();
         self.confidence_gate.reset();
         self.state_machine = TrackingStateMachine::new(self.config.state_machine)
@@ -552,11 +563,12 @@ impl TrackingPipeline {
         &mut self,
         sample: Option<&FaceTrackingSample>,
         neutral: Option<CameraFaceTransform>,
+        gaze_baseline: Option<GazeNeutralBaseline>,
         now: MonoTimeNs,
         dt: Duration,
     ) -> PipelineUpdate {
         let observation = sample.map(media_pipe_sample_to_observation);
-        let gaze = sample.map(|sample| map_mediapipe_gaze(&sample.blendshapes));
+        let gaze = sample.map(|sample| calibrated_mediapipe_gaze(sample, gaze_baseline));
         let pose_result = match (sample, neutral) {
             (Some(sample), Some(neutral)) => Some(media_pipe_pose_frame(sample, neutral, now)),
             _ => None,
@@ -600,6 +612,7 @@ impl TrackingPipeline {
                 crate::state_machine::TrackingAction::ResetFilters => {
                     self.head_filter.reset();
                     self.expression_filter.reset();
+                    self.gaze_filter.reset();
                 }
                 crate::state_machine::TrackingAction::StartHold
                 | crate::state_machine::TrackingAction::StartReturnToNeutral => {}
@@ -607,10 +620,13 @@ impl TrackingPipeline {
         }
 
         // 6. Update filters and build a tracked frame when a face is present.
+        let raw_gaze = direct_gaze
+            .or_else(|| observation.map(extract_gaze))
+            .unwrap_or(GazeSignal::UNAVAILABLE);
+        let filtered_gaze = self.gaze_filter.update(raw_gaze, dt);
         let tracked = observation.map(|obs| {
             let head = self.update_head_filter(&pose_result, now);
             let expressions = self.expression_filter.update(&obs.expressions, now);
-            let gaze = direct_gaze.unwrap_or_else(|| extract_gaze(obs));
 
             AvatarControlFrame {
                 source_seq: obs.source_seq,
@@ -619,7 +635,7 @@ impl TrackingPipeline {
                 confidence: frame_confidence,
                 state: transition.current,
                 head,
-                gaze,
+                gaze: filtered_gaze,
                 expressions,
             }
         });
@@ -686,6 +702,25 @@ impl TrackingPipeline {
                 .unwrap_or_default()
         }
     }
+}
+
+fn calibrated_mediapipe_gaze(
+    sample: &FaceTrackingSample,
+    baseline: Option<GazeNeutralBaseline>,
+) -> GazeSignal {
+    let mut observation = observe_mediapipe_gaze(&sample.blendshapes);
+    let Some(baseline) = baseline else {
+        return observation.common;
+    };
+    observation.left.horizontal =
+        (observation.left.horizontal - baseline.left_horizontal).clamp(-1.0, 1.0);
+    observation.right.horizontal =
+        (observation.right.horizontal - baseline.right_horizontal).clamp(-1.0, 1.0);
+    observation.left.vertical =
+        (observation.left.vertical - baseline.left_vertical).clamp(-1.0, 1.0);
+    observation.right.vertical =
+        (observation.right.vertical - baseline.right_vertical).clamp(-1.0, 1.0);
+    fuse_binocular_gaze(observation.left, observation.right).common
 }
 
 fn media_pipe_pose_frame(
@@ -876,10 +911,11 @@ mod neutral_relative_pose {
 
     fn profile_from_landmarks(landmarks: Vec<Landmark3>) -> NeutralProfile {
         NeutralProfile {
-            version: 1,
+            version: 2,
             schema: LandmarkSchemaId("pipeline-test"),
             landmarks,
             head_pose: HeadPose::default(),
+            gaze_baseline: GazeNeutralBaseline::default(),
             blink_left_baseline: 0.1,
             blink_right_baseline: 0.1,
             mouth_open_baseline: 0.05,
@@ -1088,7 +1124,9 @@ mod neutral_relative_pose {
 mod assembly {
     use super::*;
     use approx::assert_relative_eq;
+    use std::sync::Arc;
     use vtuber_core::types::{NormalizedRect, RawExpressionObservation};
+    use vtuber_core::{FaceBlendshapeSet, FaceLandmark, FaceTrackingQuality, MediaPipeBlendshape};
 
     fn observation(
         seq: u64,
@@ -1109,9 +1147,36 @@ mod assembly {
         }
     }
 
+    fn mediapipe_sample(values: &[(MediaPipeBlendshape, f32)]) -> FaceTrackingSample {
+        let pairs: Vec<_> = MediaPipeBlendshape::ALL
+            .into_iter()
+            .map(|category| {
+                let value = values
+                    .iter()
+                    .find(|(candidate, _)| *candidate == category)
+                    .map_or(0.0, |(_, value)| *value);
+                (category.as_str(), value)
+            })
+            .collect();
+        FaceTrackingSample {
+            source_seq: FrameSeq(1),
+            captured_at: MonoTimeNs(1),
+            inference_started_at: MonoTimeNs(2),
+            inference_finished_at: MonoTimeNs(3),
+            camera_to_face: CameraFaceTransform::identity(),
+            face_center: [0.5, 0.5],
+            landmarks: Arc::from(vec![FaceLandmark::default(); 478]),
+            blendshapes: FaceBlendshapeSet::from_pairs(&pairs).expect("complete typed set"),
+            quality: FaceTrackingQuality {
+                matrix_determinant: 1.0,
+                ..FaceTrackingQuality::default()
+            },
+        }
+    }
+
     fn neutral_profile() -> NeutralProfile {
         NeutralProfile {
-            version: 1,
+            version: 2,
             schema: LandmarkSchemaId("pipeline-test"),
             landmarks: crate::pose::synthetic_face_points()
                 .into_iter()
@@ -1123,6 +1188,7 @@ mod assembly {
                 })
                 .collect(),
             head_pose: HeadPose::default(),
+            gaze_baseline: GazeNeutralBaseline::default(),
             blink_left_baseline: 0.05,
             blink_right_baseline: 0.05,
             mouth_open_baseline: 0.05,
@@ -1151,6 +1217,7 @@ mod assembly {
                 return_duration: Duration::from_millis(200),
             },
             head_filter: HeadFilterParams::with_time_constant(0.05),
+            gaze_filter: GazeFilterParams::default(),
             expression_filter: ExpressionFilterParams::with_time_constants(0.03, 0.10),
             loss_recovery: LossRecoveryParams {
                 hold_duration: Duration::from_millis(100),
@@ -1418,6 +1485,10 @@ mod assembly {
         for coefficient in center.blendshapes.as_mut().expect("four channels") {
             coefficient.value = 0.0;
         }
+        let raw_center = extract_gaze(&center);
+        assert!(raw_center.is_available());
+        assert_eq!(raw_center.horizontal, 0.0);
+        assert_eq!(raw_center.vertical, 0.0);
         let center_frame = pipeline
             .update(
                 Some(&center),
@@ -1427,7 +1498,27 @@ mod assembly {
             .frame
             .expect("center frame");
         assert!(center_frame.gaze.is_available());
-        assert_eq!(center_frame.gaze.horizontal, 0.0);
+        assert!(center_frame.gaze.horizontal < right_frame.gaze.horizontal);
         assert_eq!(center_frame.gaze.vertical, 0.0);
+    }
+
+    #[test]
+    fn per_eye_neutral_baseline_is_subtracted_before_fusion() {
+        let sample = mediapipe_sample(&[
+            (MediaPipeBlendshape::EyeLookOutLeft, 0.6),
+            (MediaPipeBlendshape::EyeLookInRight, 0.4),
+            (MediaPipeBlendshape::EyeLookUpLeft, 0.3),
+            (MediaPipeBlendshape::EyeLookUpRight, 0.2),
+        ]);
+        let baseline = GazeNeutralBaseline {
+            left_horizontal: 0.4,
+            right_horizontal: 0.2,
+            left_vertical: 0.1,
+            right_vertical: 0.0,
+        };
+        let gaze = calibrated_mediapipe_gaze(&sample, Some(baseline));
+        assert_relative_eq!(gaze.horizontal, 0.2, epsilon = 1.0e-6);
+        assert_relative_eq!(gaze.vertical, 0.2, epsilon = 1.0e-6);
+        assert!(gaze.is_available());
     }
 }
