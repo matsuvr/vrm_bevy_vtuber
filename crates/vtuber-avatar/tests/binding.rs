@@ -62,6 +62,8 @@ fn humanoid_binding_head_only_ready() {
     assert!(binding.upper_chest.is_none());
     assert!(binding.chest.is_none());
     assert!(binding.spine.is_none());
+    assert!(binding.left_upper_arm.is_none());
+    assert!(binding.right_upper_arm.is_none());
     assert!(binding.left_eye.is_none());
     assert!(binding.right_eye.is_none());
     assert!(app.world().get::<BodyTracking>(root).is_some());
@@ -174,6 +176,18 @@ fn humanoid_binding_optional_bones_cached() {
     let upper_chest = spawn_bone(&mut app);
     let chest = spawn_bone(&mut app);
     let spine = spawn_bone(&mut app);
+    let left_upper_arm = spawn_bone(&mut app);
+    let right_upper_arm = spawn_bone(&mut app);
+    let left_rest_rotation = Quat::from_rotation_x(0.13);
+    let right_rest_rotation = Quat::from_rotation_x(-0.17);
+    app.world_mut().entity_mut(left_upper_arm).insert((
+        Transform::from_rotation(Quat::from_rotation_y(0.4)),
+        RestTransform(Transform::from_rotation(left_rest_rotation)),
+    ));
+    app.world_mut().entity_mut(right_upper_arm).insert((
+        Transform::from_rotation(Quat::from_rotation_y(-0.3)),
+        RestTransform(Transform::from_rotation(right_rest_rotation)),
+    ));
     let left_eye = spawn_bone(&mut app);
     let right_eye = spawn_bone(&mut app);
 
@@ -187,6 +201,8 @@ fn humanoid_binding_optional_bones_cached() {
             UpperChestBoneEntity(upper_chest),
             ChestBoneEntity(chest),
             SpineBoneEntity(spine),
+            LeftUpperArmBoneEntity(left_upper_arm),
+            RightUpperArmBoneEntity(right_upper_arm),
             LeftEyeBoneEntity(left_eye),
             RightEyeBoneEntity(right_eye),
         ))
@@ -207,17 +223,61 @@ fn humanoid_binding_optional_bones_cached() {
     assert_eq!(binding.upper_chest, Some(upper_chest));
     assert_eq!(binding.chest, Some(chest));
     assert_eq!(binding.spine, Some(spine));
+    assert_eq!(binding.left_upper_arm, Some(left_upper_arm));
+    assert_eq!(binding.right_upper_arm, Some(right_upper_arm));
     assert_eq!(binding.left_eye, Some(left_eye));
     assert_eq!(binding.right_eye, Some(right_eye));
+
+    let left_rotation = app
+        .world()
+        .get::<Transform>(left_upper_arm)
+        .unwrap()
+        .rotation;
+    let right_rotation = app
+        .world()
+        .get::<Transform>(right_upper_arm)
+        .unwrap()
+        .rotation;
+    let left_rest = app
+        .world()
+        .get::<RestTransform>(left_upper_arm)
+        .expect("upper arm rest transform remains model-authored");
+    let right_rest = app
+        .world()
+        .get::<RestTransform>(right_upper_arm)
+        .expect("upper arm rest transform remains model-authored");
+    let relaxed_drop = 55.0_f32.to_radians();
+    let expected_left = left_rest_rotation * Quat::from_rotation_z(-relaxed_drop);
+    let expected_right = right_rest_rotation * Quat::from_rotation_z(relaxed_drop);
+    assert!(
+        left_rotation.dot(expected_left).abs() > 0.999_999,
+        "left upper arm should use the rest rotation plus the downward offset: actual={left_rotation:?}"
+    );
+    assert!(
+        right_rotation.dot(expected_right).abs() > 0.999_999,
+        "right upper arm should use the rest rotation plus the downward offset: actual={right_rotation:?}"
+    );
+    assert!((left_rotation * Vec3::X).y < 0.0);
+    assert!((right_rotation * -Vec3::X).y < 0.0);
+    assert_eq!(left_rest.0.rotation, left_rest_rotation);
+    assert_eq!(right_rest.0.rotation, right_rest_rotation);
 }
 
 #[test]
 fn humanoid_binding_no_repeated_lookup_after_ready() {
     let mut app = test_app();
     let head = spawn_bone(&mut app);
+    let left_upper_arm = spawn_bone(&mut app);
+    let right_upper_arm = spawn_bone(&mut app);
     let root = app
         .world_mut()
-        .spawn((ActiveAvatar, BindTriggered, HeadBoneEntity(head)))
+        .spawn((
+            ActiveAvatar,
+            BindTriggered,
+            HeadBoneEntity(head),
+            LeftUpperArmBoneEntity(left_upper_arm),
+            RightUpperArmBoneEntity(right_upper_arm),
+        ))
         .id();
 
     enter_binding(&mut app, root);
@@ -228,8 +288,14 @@ fn humanoid_binding_no_repeated_lookup_after_ready() {
     );
 
     let before = app.world().get::<AvatarBinding>(root).copied();
+    let replacement_rotation = Quat::from_rotation_y(0.2);
+    app.world_mut()
+        .get_mut::<Transform>(left_upper_arm)
+        .expect("bound left upper arm remains available")
+        .rotation = replacement_rotation;
 
-    // A second update must not invalidate the ready state or the cached binding.
+    // A second update must not invalidate the ready state, reapply the default
+    // arm delta, or change the cached binding.
     app.update();
 
     let lifecycle = app.world().resource::<AvatarLifecycle>();
@@ -238,5 +304,13 @@ fn humanoid_binding_no_repeated_lookup_after_ready() {
         app.world().get::<AvatarBinding>(root),
         before.as_ref(),
         "AvatarBinding should not change after the avatar is ready"
+    );
+    assert_eq!(
+        app.world()
+            .get::<Transform>(left_upper_arm)
+            .unwrap()
+            .rotation,
+        replacement_rotation,
+        "the relaxed-arm default is a one-shot binding operation"
     );
 }

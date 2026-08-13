@@ -1257,6 +1257,8 @@ pub struct AvatarBinding {
     pub head: Entity,
     pub neck: Option<Entity>,
     pub upper_chest: Option<Entity>,
+    pub left_upper_arm: Option<Entity>,
+    pub right_upper_arm: Option<Entity>,
     pub left_eye: Option<Entity>,
     pub right_eye: Option<Entity>,
     pub expressions: AvatarExpressionCapabilities,
@@ -1264,6 +1266,14 @@ pub struct AvatarBinding {
 ```
 
 `Entity`はadapter内部componentに留める。
+
+### 16.4.1 default relaxed-arm pose
+
+VRMがT-poseをrest poseとして提供しても、avatarを`Ready`へ遷移させる同じbinding transaction内で、存在する`leftUpperArm`と`rightUpperArm`の表示用local transformを左右対称に55°下げる。これは既定表示だけのone-shot操作であり、追跡入力ではない。
+
+`RestTransform`／`RestGlobalTransform`は変更しない。したがって`BodyTracking`は従来どおりhead、neck、upperChest、chest、spineの唯一の追跡姿勢writerであり、Node Constraint、SpringBone、および将来のanimation baseはモデル作者のrest poseを正本として扱う。腕がないモデルはそのまま`Ready`にし、lower armやhandへ個別writerは追加しない。
+
+glTF/VRM model軸ではleft upper armは概ね`+X`、right upper armは概ね`-X`へ伸びるため、local Z回転はleft `-55°`、right `+55°`とする。再読み込み・replacement時だけ再適用し、frameごとにdeltaを重ねない。
 
 ### 16.5 system order
 

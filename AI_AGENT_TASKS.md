@@ -10087,6 +10087,33 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 - pose、gaze、blink、default、UI actionのunit／integration testを追加・更新した。root workspaceで`cargo fmt --all -- --check`、`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`、`cargo deny check`、`git diff --check`はすべて成功した。
 - Windows実camera＋実VRMのmirror visual acceptance、macOS実機確認は`NOT RUN`。この変更はhardware PASSを主張しない。
 
+#### Q2-06-004: T-poseを避けるrelaxed-arm defaultを適用する
+
+状態: `DONE`
+依存: `Q2-06-003`
+親参照: DESIGN.md §16.4.1、ADR-004
+
+**実装指示**
+
+- binding成功時に存在する`leftUpperArm`／`rightUpperArm`を解決し、model-authored `RestTransform`から左右対称に55°下げた表示用local transformを一度だけ設定する。
+- `RestTransform`／`RestGlobalTransform`を変更せず、`BodyTracking`のhead〜spine writer所有権、eye gaze、Node Constraint、SpringBoneを変更しない。
+- upper armがないVRMを拒否せず、lower arm、hand、world transformに直接書き込まない。
+- replacementで新しいavatarだけへ再適用し、frameごとのdelta累積を導入しない。
+
+**完了条件**
+
+- left／rightの回転符号と55°のoffset、missing upper armのno-op、rest pose不変が自動testで固定される。
+- workspace fmt、check、clippy、対象test、`git diff --check`が成功する。
+- Windows／macOS実VRMでのvisual確認は、実施しなければ`NOT RUN`と明記する。
+
+**完了記録（2026-08-13）**
+
+- bindingがoptional `leftUpperArm`／`rightUpperArm`を一度だけ解決し、model-authored local rest rotationへleft `-55°`、right `+55°`のZ軸offsetを加えてからavatarを表示する。`RestTransform`／`RestGlobalTransform`は不変である。
+- head、neck、upperChest、chest、spineのdirect `BodyTracking`、head-relative gaze、Node Constraint、SpringBone、lower arm、handのwriter所有権は変更していない。上腕なしmodelは従来どおり`Ready`になる。
+- binding integration testでnon-identity rest rotationへの加算、左右が下方向を向く符号、rest pose不変、upper armなしのno-op、Ready後にoffsetを再適用しないことを固定した。
+- root workspaceで`cargo fmt --all -- --check`、`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`、`cargo deny check`、`git diff --check`が成功した。対象の`cargo test -p vtuber-avatar --test binding`と`cargo clippy -p vtuber-avatar --all-targets -- -D warnings`も成功した。
+- Windows／macOSでの実VRM visual確認は`NOT RUN`。この自動検証は実画面の見た目をPASSと主張しない。
+
 ---
 
 # Research 3 — 自由研究としての評価

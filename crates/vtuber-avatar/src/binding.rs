@@ -23,6 +23,12 @@ use crate::lifecycle::{
 
 /// Maximum time to wait for transient bone components after entering `Binding`.
 const BIND_TIMEOUT: Duration = Duration::from_secs(2);
+/// Downward rotation from a VRM T-pose to the default relaxed arm pose.
+///
+/// VRM/glTF uses +Y for up. A left upper arm along +X therefore lowers with
+/// a negative local Z rotation, while a right upper arm along -X lowers with
+/// a positive local Z rotation.
+const RELAXED_ARM_DROP_RADIANS: f32 = 55.0_f32.to_radians();
 
 /// Cached humanoid bone bindings for a single active avatar.
 ///
@@ -42,6 +48,10 @@ pub struct AvatarBinding {
     pub chest: Option<Entity>,
     /// Optional spine bone entity.
     pub spine: Option<Entity>,
+    /// Optional left upper-arm bone entity.
+    pub left_upper_arm: Option<Entity>,
+    /// Optional right upper-arm bone entity.
+    pub right_upper_arm: Option<Entity>,
     /// Optional left eye bone entity.
     pub left_eye: Option<Entity>,
     /// Optional right eye bone entity.
@@ -61,6 +71,8 @@ impl AvatarBinding {
             upper_chest: None,
             chest: None,
             spine: None,
+            left_upper_arm: None,
+            right_upper_arm: None,
             left_eye: None,
             right_eye: None,
             generation,
@@ -194,6 +206,8 @@ pub fn bind_humanoid_bones(
             Option<&UpperChestBoneEntity>,
             Option<&ChestBoneEntity>,
             Option<&SpineBoneEntity>,
+            Option<&LeftUpperArmBoneEntity>,
+            Option<&RightUpperArmBoneEntity>,
             Option<&LeftEyeBoneEntity>,
             Option<&RightEyeBoneEntity>,
             Option<&LookAtProperties>,
@@ -240,6 +254,8 @@ pub fn bind_humanoid_bones(
         upper_chest,
         chest,
         spine,
+        left_upper_arm,
+        right_upper_arm,
         left_eye,
         right_eye,
         look_at_properties,
@@ -263,6 +279,8 @@ pub fn bind_humanoid_bones(
         upper_chest,
         chest,
         spine,
+        left_upper_arm,
+        right_upper_arm,
         left_eye,
         right_eye,
         &bone_query,
@@ -274,6 +292,7 @@ pub fn bind_humanoid_bones(
             // instance was accepted. Frames targeting any other generation are
             // rejected as stale.
             binding.generation = lifecycle.current_generation();
+            apply_default_relaxed_arm_pose(&mut commands, &binding, &bone_query);
 
             let expression_map = expression_maps.get(root_entity).ok().flatten();
             let expression_caps = ExpressionCapabilities::from_map(expression_map);
@@ -412,6 +431,8 @@ fn resolve_binding(
     upper_chest: Option<&UpperChestBoneEntity>,
     chest: Option<&ChestBoneEntity>,
     spine: Option<&SpineBoneEntity>,
+    left_upper_arm: Option<&LeftUpperArmBoneEntity>,
+    right_upper_arm: Option<&RightUpperArmBoneEntity>,
     left_eye: Option<&LeftEyeBoneEntity>,
     right_eye: Option<&RightEyeBoneEntity>,
     bone_query: &Query<(
@@ -425,6 +446,10 @@ fn resolve_binding(
     let upper_chest = resolve_optional_bone("upperChest", upper_chest.map(|b| **b), bone_query);
     let chest = resolve_optional_bone("chest", chest.map(|b| **b), bone_query);
     let spine = resolve_optional_bone("spine", spine.map(|b| **b), bone_query);
+    let left_upper_arm =
+        resolve_optional_bone("leftUpperArm", left_upper_arm.map(|b| **b), bone_query);
+    let right_upper_arm =
+        resolve_optional_bone("rightUpperArm", right_upper_arm.map(|b| **b), bone_query);
     let left_eye = resolve_optional_bone("leftEye", left_eye.map(|e| **e), bone_query);
     let right_eye = resolve_optional_bone("rightEye", right_eye.map(|e| **e), bone_query);
 
@@ -435,11 +460,69 @@ fn resolve_binding(
         upper_chest,
         chest,
         spine,
+        left_upper_arm,
+        right_upper_arm,
         left_eye,
         right_eye,
         // Stamped with the lifecycle generation once binding succeeds.
         generation: AvatarGeneration::default(),
     })
+}
+
+/// Applies the one-time default relaxed-arm offset during successful binding.
+///
+/// The original `RestTransform` remains immutable: tracking, constraints, and
+/// future animation continue to use the model-authored rest pose. The current
+/// local transform is reset to its rest transform plus this display-default
+/// offset only while making the avatar visible, so it cannot accumulate over
+/// frames or survive avatar replacement.
+fn apply_default_relaxed_arm_pose(
+    commands: &mut Commands,
+    binding: &AvatarBinding,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+) {
+    set_relaxed_arm_transform(
+        commands,
+        binding.left_upper_arm,
+        -RELAXED_ARM_DROP_RADIANS,
+        bone_query,
+    );
+    set_relaxed_arm_transform(
+        commands,
+        binding.right_upper_arm,
+        RELAXED_ARM_DROP_RADIANS,
+        bone_query,
+    );
+}
+
+fn set_relaxed_arm_transform(
+    commands: &mut Commands,
+    bone: Option<Entity>,
+    drop_radians: f32,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+) {
+    let Some(bone) = bone else {
+        return;
+    };
+    let Ok((_, Some(rest), _)) = bone_query.get(bone) else {
+        return;
+    };
+
+    let mut transform = rest.0;
+    transform.rotation *= Quat::from_rotation_z(drop_radians);
+    if !transform.rotation.is_finite() {
+        warn!("skipped non-finite default relaxed-arm pose for {bone:?}");
+        return;
+    }
+    commands.entity(bone).insert(transform);
 }
 
 fn resolve_required_bone(

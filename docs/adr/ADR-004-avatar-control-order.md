@@ -69,6 +69,10 @@ R_output_local    = R_bone_rest_local * R_delta_local
 
 tracking喪失時はtarget yaw／pitch／rollを0へ戻し、bone別half-lifeでanimated baseへ復帰する。汎用Bevy Animationへの加算合成はこのADRの対象だが、VRMA playbackの製品サポートを追加するものではない。
 
+### Default relaxed-arm pose
+
+binding成功時、存在するupper armだけをmodel-authored `RestTransform`から左右対称に55°下げてからavatarを表示する。これはT-pose表示を避けるone-shot defaultであり、head、neck、upperChest、chest、spineを対象とするdirect `BodyTracking`のwriter所有権を変更しない。`RestTransform`と`RestGlobalTransform`は不変とし、lower arm、hand、world transformには直接書き込まない。モデルreplacementでは新しいbindingにだけ再適用する。
+
 ### Gaze
 
 この節の旧MVP判断はADR-010で置換された。Webcam gazeはhead poseとは別の計測／フィルタ入力だが、適用時はhead-relativeなLookAt deltaである。モデル作者の`LookAtType`を尊重してBoneまたはExpressionを排他的に選び、tracked body pose後、Expression／Constraint／SpringBone前のVRM 1.0順序で解決する。
