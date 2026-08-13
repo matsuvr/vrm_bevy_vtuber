@@ -22,15 +22,16 @@ use mediapipe::{
 #[cfg(target_os = "windows")]
 use sha2::{Digest, Sha256};
 #[cfg(any(target_os = "windows", test))]
-use vtuber_core::{FrameSeq, MonoTimeNs, PixelFormat, VideoFrame};
+use vtuber_core::FrameSeq;
 #[cfg(target_os = "windows")]
 use vtuber_core::{LatestSlot, ReadResult};
+#[cfg(any(target_os = "windows", test))]
+use vtuber_core::{MonoTimeNs, PixelFormat, VideoFrame};
 
 #[cfg(target_os = "windows")]
 const TASK_BUNDLE_FILE: &str = "face_landmarker.task";
 #[cfg(target_os = "windows")]
 const TASK_BUNDLE_SHA256: &str = "64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF";
-#[cfg(target_os = "windows")]
 const MAX_TASK_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
 #[cfg(target_os = "windows")]
 const FRAME_WAIT: Duration = Duration::from_millis(100);
