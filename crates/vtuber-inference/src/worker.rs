@@ -790,7 +790,7 @@ fn validate_observation(observation: &RawFaceObservation) -> crate::error::Resul
 mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use vtuber_core::types::{
         FrameSeq, LandmarkSchemaId, MonoTimeNs, PixelFormat, RawFaceObservation, VideoFrame,
@@ -976,13 +976,24 @@ mod tests {
 
     #[test]
     #[cfg(feature = "onnx")]
-    fn worker_model_startup_success_onnx() {
+    #[ignore = "requires the downloaded legacy Peppa Pig ONNX research artifact"]
+    /// Runs the real legacy model-loading integration after the ignored
+    /// artifact has been provisioned.
+    ///
+    /// Explicit opt-in command:
+    /// `cargo test -p vtuber-inference --features onnx worker::tests::worker_model_startup_success_onnx_with_downloaded_artifact -- --ignored --exact`
+    fn worker_model_startup_success_onnx_with_downloaded_artifact() {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.pop();
         path.pop();
         path.push("assets");
         path.push("models");
         path.push("peppapig_student_1x3x256x256.onnx");
+
+        assert!(
+            path.is_file(),
+            "expected repository-relative artifact assets/models/peppapig_student_1x3x256x256.onnx; it is intentionally not committed. Provision it before running this ignored test; its download URL and SHA-256 are recorded in assets/models/manifest.toml."
+        );
 
         let descriptor = ModelDescriptor {
             id: "peppapig-onnx".into(),
@@ -1028,6 +1039,94 @@ mod tests {
         );
 
         controller.shutdown();
+    }
+
+    #[test]
+    fn injected_runtime_worker_reaches_running_and_shuts_down_cleanly() {
+        let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
+        let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());
+        let status: SharedStatus = Arc::new(std::sync::Mutex::new(InferenceWorkerStatus::new()));
+        let params = PreprocessParams {
+            input_shape: [1, 64, 64, 3],
+            channel_order: ChannelOrder::Rgb,
+            normalization: Normalization::ZeroToOne,
+        };
+        let buffers = PreprocessBuffers::for_shape(&params.input_shape).unwrap();
+
+        struct SuccessfulRuntime {
+            schema: LandmarkSchemaId,
+        }
+
+        impl FaceInference for SuccessfulRuntime {
+            fn infer(
+                &self,
+                _tensor: &[f32],
+                _input_shape: &[usize; 4],
+            ) -> crate::error::Result<RawFaceObservation> {
+                Ok(default_observation(self.schema))
+            }
+
+            fn schema_id(&self) -> LandmarkSchemaId {
+                self.schema
+            }
+        }
+
+        let handle = WorkerHandle::spawn("inference-hermetic-startup", {
+            let frame_slot = Arc::clone(&frame_slot);
+            let output_slot = Arc::clone(&output_slot);
+            let status = Arc::clone(&status);
+            move |stop| {
+                run_inference_worker_with_runtime(
+                    stop,
+                    status,
+                    frame_slot,
+                    output_slot,
+                    Box::new(SuccessfulRuntime {
+                        schema: LandmarkSchemaId("hermetic"),
+                    }),
+                    params,
+                    buffers,
+                )
+            }
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            if status.lock().unwrap().state == InferenceWorkerState::Running {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            status.lock().unwrap().state,
+            InferenceWorkerState::Running,
+            "injected runtime worker should reach Running without a model artifact"
+        );
+
+        frame_slot.publish(dummy_video_frame(1));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            if status.lock().unwrap().frames_processed > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let status_running = status.lock().unwrap();
+        assert_eq!(status_running.state, InferenceWorkerState::Running);
+        assert_eq!(status_running.frames_processed, 1);
+        drop(status_running);
+
+        handle.stop();
+        let result = handle.join();
+        assert!(
+            matches!(result, WorkerResult::Completed(_)),
+            "injected runtime worker should shut down cleanly, got {result:?}"
+        );
+        assert_eq!(
+            status.lock().unwrap().state,
+            InferenceWorkerState::Stopping,
+            "worker should publish its clean stopping state after shutdown"
+        );
     }
 
     #[cfg(test)]

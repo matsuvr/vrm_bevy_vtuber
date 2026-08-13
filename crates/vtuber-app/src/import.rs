@@ -547,14 +547,14 @@ mod tests {
     }
 
     #[test]
-    fn fixture_tsukuyomi_is_legacy_vrm_rejected_as_not_vrm1() {
+    fn generated_legacy_glb_is_rejected_as_not_vrm1() {
         let dir = TempDir::new().unwrap();
         let err = inspect_vrm(legacy_fixture(&dir)).unwrap_err();
         assert!(matches!(err, ModelImportError::NotVrm1));
     }
 
     #[test]
-    fn fixture_tsukuyomi_import_rejected_as_not_vrm1() {
+    fn generated_legacy_glb_import_is_rejected_as_not_vrm1() {
         let dir = TempDir::new().unwrap();
         let source = legacy_fixture(&dir);
         let err = import_vrm(source, dir.path(), DEFAULT_SIZE_LIMIT).unwrap_err();
@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn inspects_real_vrm1_fixture() {
+    fn inspects_generated_minimal_vrm1_fixture() {
         let dir = TempDir::new().unwrap();
         let summary = inspect_vrm(vrm1_fixture(&dir)).expect("fixture should be valid VRM 1.0");
         assert_eq!(summary.spec_version, "1.0");
@@ -573,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_real_vrm1_fixture() {
+    fn imports_generated_minimal_vrm1_fixture() {
         let dir = TempDir::new().unwrap();
         let source = vrm1_fixture(&dir);
         let asset_root = dir.path().join("asset-root");

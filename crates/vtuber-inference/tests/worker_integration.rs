@@ -58,6 +58,7 @@ fn make_frame(seq: u64) -> VideoFrame {
 }
 
 #[test]
+#[ignore = "requires the downloaded legacy Peppa Pig ONNX research artifact"]
 fn golden_model_startup_frames_output_stop() {
     let frame_slot: Arc<LatestSlot<VideoFrame>> = Arc::new(LatestSlot::new());
     let output_slot: Arc<LatestSlot<RawFaceObservation>> = Arc::new(LatestSlot::new());

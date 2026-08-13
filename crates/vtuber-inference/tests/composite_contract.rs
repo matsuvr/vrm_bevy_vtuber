@@ -15,6 +15,7 @@ fn composite_contract_distinguishes_no_face_from_face() {
 }
 
 #[test]
+#[ignore = "requires downloaded legacy UltraFace and Peppa Pig ONNX research artifacts"]
 fn composite_contract_constructs_detector_and_landmark_owners_from_pipeline() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
