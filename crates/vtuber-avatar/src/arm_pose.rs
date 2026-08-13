@@ -8,16 +8,118 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use crate::arm::{
-    ArmChainBinding, ArmIkInput, ArmPoseProfile, FingerJointRestBinding, FingerJointRestReferences,
+    ArmChainBinding, ArmIkInput, ArmPoseProfile, ArmPoseProfileOverride,
+    ArmPoseProfileOverrideError, FingerJointRestBinding, FingerJointRestReferences,
     FingerRestReferences, default_arm_target, solve_two_bone_arm,
 };
 use crate::binding::AvatarBinding;
 use crate::lifecycle::{ActiveAvatar, AvatarGeneration};
+use crate::load::AvatarAssetId;
 
 const ROTATION_MATCH_EPSILON: f32 = 1.0e-6;
-const SHOULDER_FOLLOW_WEIGHT: f32 = 0.18;
 const SHOULDER_FOLLOW_MAX_RADIANS: f32 = 5.0_f32.to_radians();
-const FINGER_CURL_RADIANS: f32 = 10.0_f32.to_radians();
+/// Normal default-pose transition duration.
+pub const DEFAULT_ARM_TRANSITION_SECONDS: f32 = 0.25;
+/// Slower return-to-default transition duration.
+pub const DEFAULT_ARM_RETURN_SECONDS: f32 = 0.6;
+
+/// In-memory per-model override store.
+///
+/// The key is the stable imported model identity/content hash. The store is a
+/// resource so unloading and reloading an avatar does not lose its override,
+/// while a different model ID cannot inherit it.
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct ArmPoseOverrideStore {
+    overrides: HashMap<String, ArmPoseProfileOverride>,
+}
+
+impl ArmPoseOverrideStore {
+    /// Stores a bounded, versioned override for one model identity.
+    pub fn set(
+        &mut self,
+        model_id: impl Into<String>,
+        profile: ArmPoseProfileOverride,
+    ) -> Result<(), ArmPoseOverrideStoreError> {
+        let model_id = model_id.into();
+        if model_id.is_empty() {
+            return Err(ArmPoseOverrideStoreError::EmptyModelId);
+        }
+        profile
+            .into_profile()
+            .map_err(ArmPoseOverrideStoreError::InvalidProfile)?;
+        self.overrides.insert(model_id, profile);
+        Ok(())
+    }
+
+    /// Returns the validated runtime profile for a model identity.
+    #[must_use]
+    pub fn profile_for(&self, model_id: &AvatarAssetId) -> Option<ArmPoseProfile> {
+        self.overrides
+            .get(&model_id.0)
+            .and_then(|profile| profile.into_profile().ok())
+    }
+
+    /// Removes a model override so automatic geometry-derived defaults apply.
+    pub fn reset(&mut self, model_id: &AvatarAssetId) -> bool {
+        self.overrides.remove(&model_id.0).is_some()
+    }
+
+    /// Returns the number of stored model overrides.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.overrides.len()
+    }
+
+    /// Returns whether no model overrides are stored.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.overrides.is_empty()
+    }
+
+    /// Iterates over validated entries for application settings persistence.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &ArmPoseProfileOverride)> {
+        self.overrides
+            .iter()
+            .map(|(model_id, profile)| (model_id.as_str(), profile))
+    }
+
+    /// Imports entries from a persistence layer, retaining only valid entries.
+    ///
+    /// The caller can persist the returned map in its chosen application
+    /// settings format without exposing unvalidated values to the avatar.
+    pub fn import_entries<I>(&mut self, entries: I) -> usize
+    where
+        I: IntoIterator<Item = (String, ArmPoseProfileOverride)>,
+    {
+        let mut accepted = 0;
+        for (model_id, profile) in entries {
+            if self.set(model_id, profile).is_ok() {
+                accepted += 1;
+            }
+        }
+        accepted
+    }
+}
+
+/// Errors returned when a model override cannot be stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmPoseOverrideStoreError {
+    /// The stable model identity was empty.
+    EmptyModelId,
+    /// The profile version or values are invalid.
+    InvalidProfile(ArmPoseProfileOverrideError),
+}
+
+impl std::fmt::Display for ArmPoseOverrideStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyModelId => f.write_str("model identity is empty"),
+            Self::InvalidProfile(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ArmPoseOverrideStoreError {}
 
 /// A resolved default pose for one complete arm chain.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -96,12 +198,247 @@ impl DefaultArmPose {
         left: Option<ArmChainBinding>,
         right: Option<ArmChainBinding>,
     ) -> Self {
-        let profile = ArmPoseProfile::default();
+        Self::from_chains_with_profile(generation, left, right, ArmPoseProfile::default())
+    }
+
+    /// Resolves both default arm poses using an explicit bounded profile.
+    #[must_use]
+    pub fn from_chains_with_profile(
+        generation: AvatarGeneration,
+        left: Option<ArmChainBinding>,
+        right: Option<ArmChainBinding>,
+        profile: ArmPoseProfile,
+    ) -> Self {
         Self {
             generation,
             left: left.and_then(|chain| resolve_chain(chain, profile)),
             right: right.and_then(|chain| resolve_chain(chain, profile)),
         }
+    }
+}
+
+/// Independently blendable left/right arm-pose transition state.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct ArmPoseBlendState {
+    /// Avatar generation this transition belongs to.
+    pub generation: AvatarGeneration,
+    /// Left-arm source transition.
+    pub left: Option<ArmPoseBlendSide>,
+    /// Right-arm source transition.
+    pub right: Option<ArmPoseBlendSide>,
+}
+
+impl ArmPoseBlendState {
+    /// Creates a normal frame-rate-independent transition from neutral to the
+    /// resolved default pose.
+    #[must_use]
+    pub fn from_default(default_pose: &DefaultArmPose) -> Self {
+        Self {
+            generation: default_pose.generation,
+            left: default_pose.left.map(|target| {
+                ArmPoseBlendSide::new(neutral_pose(target), target, DEFAULT_ARM_TRANSITION_SECONDS)
+            }),
+            right: default_pose.right.map(|target| {
+                ArmPoseBlendSide::new(neutral_pose(target), target, DEFAULT_ARM_TRANSITION_SECONDS)
+            }),
+        }
+    }
+
+    /// Advances both sides by a finite monotonic time delta.
+    pub fn advance(&mut self, delta_seconds: f32) {
+        if !delta_seconds.is_finite() || delta_seconds < 0.0 {
+            return;
+        }
+        if let Some(left) = &mut self.left {
+            left.advance(delta_seconds);
+        }
+        if let Some(right) = &mut self.right {
+            right.advance(delta_seconds);
+        }
+    }
+
+    /// Returns the current left-arm pose.
+    #[must_use]
+    pub fn current_left(&self) -> Option<ResolvedArmPose> {
+        self.left.map(ArmPoseBlendSide::current)
+    }
+
+    /// Returns the current right-arm pose.
+    #[must_use]
+    pub fn current_right(&self) -> Option<ResolvedArmPose> {
+        self.right.map(ArmPoseBlendSide::current)
+    }
+
+    /// Starts an independently blendable left-arm transition.
+    pub fn transition_left(&mut self, target: ResolvedArmPose, duration_seconds: f32) {
+        self.left = Some(ArmPoseBlendSide::new(
+            self.current_left().unwrap_or_else(|| neutral_pose(target)),
+            target,
+            duration_seconds,
+        ));
+    }
+
+    /// Starts an independently blendable right-arm transition.
+    pub fn transition_right(&mut self, target: ResolvedArmPose, duration_seconds: f32) {
+        self.right = Some(ArmPoseBlendSide::new(
+            self.current_right().unwrap_or_else(|| neutral_pose(target)),
+            target,
+            duration_seconds,
+        ));
+    }
+
+    /// Returns the left arm toward its default target using the slower return
+    /// profile.
+    pub fn return_left_to_default(&mut self, target: ResolvedArmPose) {
+        self.transition_left(target, DEFAULT_ARM_RETURN_SECONDS);
+    }
+
+    /// Returns the right arm toward its default target using the slower return
+    /// profile.
+    pub fn return_right_to_default(&mut self, target: ResolvedArmPose) {
+        self.transition_right(target, DEFAULT_ARM_RETURN_SECONDS);
+    }
+}
+
+/// One side of an arm-pose source transition.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArmPoseBlendSide {
+    from: ResolvedArmPose,
+    target: ResolvedArmPose,
+    elapsed_seconds: f32,
+    duration_seconds: f32,
+}
+
+impl ArmPoseBlendSide {
+    /// Creates a side transition from an arbitrary resolved source pose.
+    #[must_use]
+    pub fn new(from: ResolvedArmPose, target: ResolvedArmPose, duration_seconds: f32) -> Self {
+        Self {
+            from,
+            target,
+            elapsed_seconds: 0.0,
+            duration_seconds: if duration_seconds.is_finite() {
+                duration_seconds.max(0.0)
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// Advances this side by a finite delta.
+    pub fn advance(&mut self, delta_seconds: f32) {
+        if delta_seconds.is_finite() && delta_seconds >= 0.0 {
+            self.elapsed_seconds =
+                (self.elapsed_seconds + delta_seconds).min(self.duration_seconds);
+        }
+    }
+
+    /// Returns the shortest-arc interpolated pose at the current time.
+    #[must_use]
+    pub fn current(self) -> ResolvedArmPose {
+        let amount = if self.duration_seconds <= f32::EPSILON {
+            1.0
+        } else {
+            (self.elapsed_seconds / self.duration_seconds).clamp(0.0, 1.0)
+        };
+        blend_pose(self.from, self.target, amount)
+    }
+}
+
+fn neutral_pose(pose: ResolvedArmPose) -> ResolvedArmPose {
+    ResolvedArmPose {
+        upper_arm_delta: Quat::IDENTITY,
+        lower_arm_delta: Quat::IDENTITY,
+        shoulder: pose.shoulder.map(|bone| ResolvedBoneDelta {
+            delta: Quat::IDENTITY,
+            ..bone
+        }),
+        fingers: neutral_fingers(pose.fingers),
+        ..pose
+    }
+}
+
+fn neutral_fingers(fingers: ResolvedFingerPose) -> ResolvedFingerPose {
+    ResolvedFingerPose {
+        thumb: neutral_finger_joints(fingers.thumb),
+        index: neutral_finger_joints(fingers.index),
+        middle: neutral_finger_joints(fingers.middle),
+        ring: neutral_finger_joints(fingers.ring),
+        little: neutral_finger_joints(fingers.little),
+    }
+}
+
+fn neutral_finger_joints(joints: ResolvedFingerJointPose) -> ResolvedFingerJointPose {
+    ResolvedFingerJointPose {
+        metacarpal: neutral_bone(joints.metacarpal),
+        proximal: neutral_bone(joints.proximal),
+        intermediate: neutral_bone(joints.intermediate),
+        distal: neutral_bone(joints.distal),
+    }
+}
+
+fn neutral_bone(bone: Option<ResolvedBoneDelta>) -> Option<ResolvedBoneDelta> {
+    bone.map(|bone| ResolvedBoneDelta {
+        delta: Quat::IDENTITY,
+        ..bone
+    })
+}
+
+fn blend_pose(from: ResolvedArmPose, target: ResolvedArmPose, amount: f32) -> ResolvedArmPose {
+    ResolvedArmPose {
+        upper_arm: target.upper_arm,
+        lower_arm: target.lower_arm,
+        upper_arm_delta: from
+            .upper_arm_delta
+            .slerp(target.upper_arm_delta, amount)
+            .normalize(),
+        lower_arm_delta: from
+            .lower_arm_delta
+            .slerp(target.lower_arm_delta, amount)
+            .normalize(),
+        shoulder: blend_bone(from.shoulder, target.shoulder, amount),
+        fingers: blend_fingers(from.fingers, target.fingers, amount),
+    }
+}
+
+fn blend_bone(
+    from: Option<ResolvedBoneDelta>,
+    target: Option<ResolvedBoneDelta>,
+    amount: f32,
+) -> Option<ResolvedBoneDelta> {
+    let entity = target.or(from)?.entity;
+    let from_delta = from.map_or(Quat::IDENTITY, |bone| bone.delta);
+    let target_delta = target.map_or(Quat::IDENTITY, |bone| bone.delta);
+    Some(ResolvedBoneDelta {
+        entity,
+        delta: from_delta.slerp(target_delta, amount).normalize(),
+    })
+}
+
+fn blend_fingers(
+    from: ResolvedFingerPose,
+    target: ResolvedFingerPose,
+    amount: f32,
+) -> ResolvedFingerPose {
+    ResolvedFingerPose {
+        thumb: blend_finger_joints(from.thumb, target.thumb, amount),
+        index: blend_finger_joints(from.index, target.index, amount),
+        middle: blend_finger_joints(from.middle, target.middle, amount),
+        ring: blend_finger_joints(from.ring, target.ring, amount),
+        little: blend_finger_joints(from.little, target.little, amount),
+    }
+}
+
+fn blend_finger_joints(
+    from: ResolvedFingerJointPose,
+    target: ResolvedFingerJointPose,
+    amount: f32,
+) -> ResolvedFingerJointPose {
+    ResolvedFingerJointPose {
+        metacarpal: blend_bone(from.metacarpal, target.metacarpal, amount),
+        proximal: blend_bone(from.proximal, target.proximal, amount),
+        intermediate: blend_bone(from.intermediate, target.intermediate, amount),
+        distal: blend_bone(from.distal, target.distal, amount),
     }
 }
 
@@ -127,8 +464,12 @@ fn resolve_chain(
         .shoulder
         .zip(chain.rest.shoulder)
         .and_then(|(entity, rest)| {
-            weak_follow_delta(upper_model_delta, rest.global_rotation)
-                .map(|delta| ResolvedBoneDelta { entity, delta })
+            weak_follow_delta(
+                upper_model_delta,
+                rest.global_rotation,
+                profile.shoulder_follow_weight,
+            )
+            .map(|delta| ResolvedBoneDelta { entity, delta })
         });
 
     Some(ResolvedArmPose {
@@ -137,7 +478,7 @@ fn resolve_chain(
         upper_arm_delta: solution.upper_arm_delta.normalize(),
         lower_arm_delta: solution.lower_arm_delta.normalize(),
         shoulder,
-        fingers: resolve_finger_pose(chain.finger_rest),
+        fingers: resolve_finger_pose(chain.finger_rest, profile.finger_curl_radians),
     })
 }
 
@@ -149,30 +490,43 @@ fn normalized_or_identity(value: Quat) -> Option<Quat> {
     }
 }
 
-fn weak_follow_delta(model_delta: Quat, rest_global: Quat) -> Option<Quat> {
+fn weak_follow_delta(model_delta: Quat, rest_global: Quat, weight: f32) -> Option<Quat> {
     let model_delta = normalized_or_identity(model_delta)?;
     let (axis, angle) = model_delta.to_axis_angle();
-    let angle = (angle * SHOULDER_FOLLOW_WEIGHT).min(SHOULDER_FOLLOW_MAX_RADIANS);
+    let angle = (angle * weight).min(SHOULDER_FOLLOW_MAX_RADIANS);
     let weak_model_delta = Quat::from_axis_angle(axis, angle);
     normalized_or_identity(rest_global.inverse() * weak_model_delta * rest_global)
 }
 
-fn resolve_finger_pose(fingers: FingerRestReferences) -> ResolvedFingerPose {
+fn resolve_finger_pose(fingers: FingerRestReferences, curl_radians: f32) -> ResolvedFingerPose {
     ResolvedFingerPose {
-        thumb: resolve_finger_joints(fingers.thumb),
-        index: resolve_finger_joints(fingers.index),
-        middle: resolve_finger_joints(fingers.middle),
-        ring: resolve_finger_joints(fingers.ring),
-        little: resolve_finger_joints(fingers.little),
+        thumb: resolve_finger_joints(fingers.thumb, curl_radians),
+        index: resolve_finger_joints(fingers.index, curl_radians),
+        middle: resolve_finger_joints(fingers.middle, curl_radians),
+        ring: resolve_finger_joints(fingers.ring, curl_radians),
+        little: resolve_finger_joints(fingers.little, curl_radians),
     }
 }
 
-fn resolve_finger_joints(finger: FingerJointRestReferences) -> ResolvedFingerJointPose {
+fn resolve_finger_joints(
+    finger: FingerJointRestReferences,
+    curl_radians: f32,
+) -> ResolvedFingerJointPose {
     ResolvedFingerJointPose {
-        metacarpal: resolve_finger_joint(finger.metacarpal, finger.proximal, None),
-        proximal: resolve_finger_joint(finger.proximal, finger.intermediate, finger.metacarpal),
-        intermediate: resolve_finger_joint(finger.intermediate, finger.distal, finger.proximal),
-        distal: resolve_finger_joint(finger.distal, None, finger.intermediate),
+        metacarpal: resolve_finger_joint(finger.metacarpal, finger.proximal, None, curl_radians),
+        proximal: resolve_finger_joint(
+            finger.proximal,
+            finger.intermediate,
+            finger.metacarpal,
+            curl_radians,
+        ),
+        intermediate: resolve_finger_joint(
+            finger.intermediate,
+            finger.distal,
+            finger.proximal,
+            curl_radians,
+        ),
+        distal: resolve_finger_joint(finger.distal, None, finger.intermediate, curl_radians),
     }
 }
 
@@ -180,6 +534,7 @@ fn resolve_finger_joint(
     joint: Option<FingerJointRestBinding>,
     next: Option<FingerJointRestBinding>,
     previous: Option<FingerJointRestBinding>,
+    curl_radians: f32,
 ) -> Option<ResolvedBoneDelta> {
     let joint = joint?;
     let segment = next
@@ -197,7 +552,7 @@ fn resolve_finger_joint(
     .into_iter()
     .map(|candidate| candidate - segment_direction * candidate.dot(segment_direction))
     .find_map(finite_normalized)?;
-    let model_delta = Quat::from_axis_angle(axis, FINGER_CURL_RADIANS);
+    let model_delta = Quat::from_axis_angle(axis, curl_radians);
     let delta = normalized_or_identity(
         joint.rest.global_rotation.inverse() * model_delta * joint.rest.global_rotation,
     )?;
@@ -243,20 +598,38 @@ impl Default for DefaultArmPoseBoneState {
 /// including intermediate nodes, before VRM gaze and constraints execute.
 #[allow(clippy::type_complexity)]
 pub fn apply_default_arm_pose(
-    roots: Query<(&AvatarBinding, &DefaultArmPose), With<ActiveAvatar>>,
+    mut roots: Query<
+        (
+            &AvatarBinding,
+            &DefaultArmPose,
+            Option<&mut ArmPoseBlendState>,
+        ),
+        With<ActiveAvatar>,
+    >,
     mut transforms: Query<(&mut Transform, &mut GlobalTransform)>,
     child_ofs: Query<&ChildOf>,
     children: Query<&Children>,
+    time: Res<Time>,
     mut bone_states: Local<HashMap<Entity, DefaultArmPoseBoneState>>,
 ) {
     bone_states.retain(|entity, _| transforms.contains(*entity));
 
-    for (binding, pose) in roots.iter() {
+    for (binding, pose, blend_state) in roots.iter_mut() {
         if pose.generation != binding.generation {
             continue;
         }
 
-        for resolved in [pose.left, pose.right].into_iter().flatten() {
+        let resolved_poses = if let Some(mut blend_state) = blend_state {
+            if blend_state.generation != binding.generation {
+                continue;
+            }
+            blend_state.advance(time.delta_secs());
+            [blend_state.current_left(), blend_state.current_right()]
+        } else {
+            [pose.left, pose.right]
+        };
+
+        for resolved in resolved_poses.into_iter().flatten() {
             let mut any_changed = false;
             if let Some(shoulder) = resolved.shoulder {
                 any_changed |= apply_delta(

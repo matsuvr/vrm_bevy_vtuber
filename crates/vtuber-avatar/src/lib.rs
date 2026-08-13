@@ -24,14 +24,16 @@ pub mod pose;
 pub mod unload;
 
 pub use arm::{
-    ArmChainBinding, ArmChainCapabilities, ArmChainReferences, ArmIkError, ArmIkInput,
-    ArmIkSolution, ArmIkTarget, ArmPoseProfile, ArmRestGeometry, ArmSide, FingerJointReferences,
+    ARM_POSE_PROFILE_OVERRIDE_VERSION, ArmChainBinding, ArmChainCapabilities, ArmChainReferences,
+    ArmIkError, ArmIkInput, ArmIkSolution, ArmIkTarget, ArmPoseProfile, ArmPoseProfileOverride,
+    ArmPoseProfileOverrideError, ArmRestGeometry, ArmSide, FingerJointReferences,
     FingerJointRestBinding, FingerJointRestReferences, FingerReferences, FingerRestReferences,
     RestSpaceBonePose, default_arm_target, solve_two_bone_arm,
 };
 pub use arm_pose::{
-    DefaultArmPose, ResolvedArmPose, ResolvedBoneDelta, ResolvedFingerJointPose,
-    ResolvedFingerPose, apply_default_arm_pose,
+    ArmPoseBlendSide, ArmPoseBlendState, ArmPoseOverrideStore, ArmPoseOverrideStoreError,
+    DEFAULT_ARM_RETURN_SECONDS, DEFAULT_ARM_TRANSITION_SECONDS, DefaultArmPose, ResolvedArmPose,
+    ResolvedBoneDelta, ResolvedFingerJointPose, ResolvedFingerPose, apply_default_arm_pose,
 };
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};

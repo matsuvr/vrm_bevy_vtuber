@@ -17,7 +17,7 @@ use crate::arm::{
     FingerJointRestBinding, FingerJointRestReferences, FingerReferences, FingerRestReferences,
     RestSpaceBonePose,
 };
-use crate::arm_pose::DefaultArmPose;
+use crate::arm_pose::{ArmPoseBlendState, ArmPoseOverrideStore, DefaultArmPose};
 use crate::bind::BindTriggered;
 use crate::capabilities::{
     AvatarCapabilities, BonePresence, DeclaredLookAtType, ExpressionCapabilities,
@@ -27,6 +27,7 @@ use crate::gaze::fallback_look_at_properties;
 use crate::lifecycle::{
     ActiveAvatar, AvatarGeneration, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
 };
+use crate::load::AvatarAssetId;
 
 /// Maximum time to wait for transient bone components after entering `Binding`.
 const BIND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -222,6 +223,7 @@ pub fn bind_humanoid_bones(
     expression_maps: Query<Option<&ExpressionEntityMap>>,
     spring_roots: Query<Entity, With<SpringRoot>>,
     parents: Query<&ChildOf>,
+    arm_pose_overrides: Option<Res<ArmPoseOverrideStore>>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Binding {
         return;
@@ -301,11 +303,21 @@ pub fn bind_humanoid_bones(
             // instance was accepted. Frames targeting any other generation are
             // rejected as stale.
             binding.generation = lifecycle.current_generation();
-            let default_arm_pose = DefaultArmPose::from_chains(
+            let profile = root_ref
+                .get::<AvatarAssetId>()
+                .and_then(|model_id| {
+                    arm_pose_overrides
+                        .as_deref()
+                        .and_then(|overrides| overrides.profile_for(model_id))
+                })
+                .unwrap_or_default();
+            let default_arm_pose = DefaultArmPose::from_chains_with_profile(
                 binding.generation,
                 binding.left_arm,
                 binding.right_arm,
+                profile,
             );
+            let arm_pose_blend = ArmPoseBlendState::from_default(&default_arm_pose);
 
             let expression_map = expression_maps.get(root_entity).ok().flatten();
             let expression_caps = ExpressionCapabilities::from_map(expression_map);
@@ -344,6 +356,7 @@ pub fn bind_humanoid_bones(
             commands.entity(root_entity).insert((
                 binding,
                 default_arm_pose,
+                arm_pose_blend,
                 BodyTracking::default(),
                 BodyTrackingPoseInput::default(),
                 BodyTrackingProfile::default(),

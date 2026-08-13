@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
 
+use crate::arm_pose::ArmPoseOverrideStore;
 use crate::arm_pose::apply_default_arm_pose;
 use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
@@ -40,6 +41,7 @@ impl Plugin for VtuberAvatarPlugin {
         app.add_plugins(VrmPlugin)
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
+            .init_resource::<ArmPoseOverrideStore>()
             .init_resource::<ActiveControlFrame>()
             .init_resource::<AvatarMotionMirror>()
             .init_resource::<PoseApplyMetrics>()

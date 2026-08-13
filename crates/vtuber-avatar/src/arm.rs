@@ -232,6 +232,10 @@ pub struct ArmPoseProfile {
     pub forward_hand_offset_ratio: f32,
     /// Rearward elbow-pole offset as a fraction of the total arm length.
     pub elbow_pole_offset_ratio: f32,
+    /// Weak shoulder-follow strength.
+    pub shoulder_follow_weight: f32,
+    /// Relaxed finger curl angle.
+    pub finger_curl_radians: f32,
 }
 
 impl Default for ArmPoseProfile {
@@ -241,6 +245,8 @@ impl Default for ArmPoseProfile {
             reach_ratio: 0.99,
             forward_hand_offset_ratio: 0.081,
             elbow_pole_offset_ratio: 0.05,
+            shoulder_follow_weight: 0.18,
+            finger_curl_radians: 10.0_f32.to_radians(),
         }
     }
 }
@@ -260,8 +266,100 @@ impl ArmPoseProfile {
             && self.elbow_pole_offset_ratio.is_finite()
             && self.elbow_pole_offset_ratio >= 0.0
             && self.elbow_pole_offset_ratio <= 1.0
+            && self.shoulder_follow_weight.is_finite()
+            && self.shoulder_follow_weight >= 0.0
+            && self.shoulder_follow_weight <= 1.0
+            && self.finger_curl_radians.is_finite()
+            && self.finger_curl_radians >= 0.0
+            && self.finger_curl_radians <= std::f32::consts::FRAC_PI_2
     }
 }
+
+/// Version of the persisted per-model arm-profile override format.
+pub const ARM_POSE_PROFILE_OVERRIDE_VERSION: u32 = 1;
+
+/// Typed, versioned per-model profile override.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArmPoseProfileOverride {
+    /// Persisted schema version.
+    pub schema_version: u32,
+    /// Override for [`ArmPoseProfile::arm_drop_radians`].
+    pub arm_drop_radians: f32,
+    /// Override for [`ArmPoseProfile::reach_ratio`].
+    pub reach_ratio: f32,
+    /// Override for [`ArmPoseProfile::forward_hand_offset_ratio`].
+    pub forward_hand_offset_ratio: f32,
+    /// Override for [`ArmPoseProfile::elbow_pole_offset_ratio`].
+    pub elbow_pole_offset_ratio: f32,
+    /// Override for [`ArmPoseProfile::shoulder_follow_weight`].
+    pub shoulder_follow_weight: f32,
+    /// Override for [`ArmPoseProfile::finger_curl_radians`].
+    pub finger_curl_radians: f32,
+}
+
+impl ArmPoseProfileOverride {
+    /// Creates a version-one override from a validated profile.
+    #[must_use]
+    pub fn from_profile(profile: ArmPoseProfile) -> Self {
+        Self {
+            schema_version: ARM_POSE_PROFILE_OVERRIDE_VERSION,
+            arm_drop_radians: profile.arm_drop_radians,
+            reach_ratio: profile.reach_ratio,
+            forward_hand_offset_ratio: profile.forward_hand_offset_ratio,
+            elbow_pole_offset_ratio: profile.elbow_pole_offset_ratio,
+            shoulder_follow_weight: profile.shoulder_follow_weight,
+            finger_curl_radians: profile.finger_curl_radians,
+        }
+    }
+
+    /// Validates and converts a persisted override into runtime profile data.
+    pub fn into_profile(self) -> Result<ArmPoseProfile, ArmPoseProfileOverrideError> {
+        if self.schema_version != ARM_POSE_PROFILE_OVERRIDE_VERSION {
+            return Err(ArmPoseProfileOverrideError::UnsupportedVersion {
+                version: self.schema_version,
+            });
+        }
+        let profile = ArmPoseProfile {
+            arm_drop_radians: self.arm_drop_radians,
+            reach_ratio: self.reach_ratio,
+            forward_hand_offset_ratio: self.forward_hand_offset_ratio,
+            elbow_pole_offset_ratio: self.elbow_pole_offset_ratio,
+            shoulder_follow_weight: self.shoulder_follow_weight,
+            finger_curl_radians: self.finger_curl_radians,
+        };
+        if !profile.is_valid() {
+            return Err(ArmPoseProfileOverrideError::OutOfRangeOrNonFinite);
+        }
+        Ok(profile)
+    }
+}
+
+/// Validation failures for persisted arm-profile overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmPoseProfileOverrideError {
+    /// The persisted schema is not supported.
+    UnsupportedVersion {
+        /// Encountered schema version.
+        version: u32,
+    },
+    /// One or more values are non-finite or outside the bounded profile.
+    OutOfRangeOrNonFinite,
+}
+
+impl std::fmt::Display for ArmPoseProfileOverrideError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedVersion { version } => {
+                write!(f, "unsupported arm pose profile version {version}")
+            }
+            Self::OutOfRangeOrNonFinite => {
+                f.write_str("arm pose profile override is out of range or non-finite")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ArmPoseProfileOverrideError {}
 
 /// Desired wrist and elbow-pole positions in model/rest space.
 #[derive(Debug, Clone, Copy, PartialEq)]
