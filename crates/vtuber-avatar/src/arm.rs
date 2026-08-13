@@ -1,7 +1,7 @@
 //! Rest-space arm-chain data used by the model-adaptive default pose.
 //!
-//! This module contains no pose solving or ECS writes. It only defines the
-//! immutable references and measurements produced during avatar binding so
+//! This module contains the immutable references, pure IK solver, and
+//! measurements produced during avatar binding. It performs no ECS writes, so
 //! later pose systems do not need to rediscover the hierarchy every frame.
 
 use bevy::prelude::*;
@@ -158,8 +158,8 @@ pub struct ArmChainBinding {
 ///
 /// The values are intentionally kept in one typed profile so later per-model
 /// tuning can validate and replace them without scattering pose constants
-/// through the solver. The model basis is VRM's conventional +Y-up, -Z
-/// forward basis; therefore +Z is the small rearward elbow-pole offset.
+/// through the solver. The model basis is VRM's conventional +Y-up, +Z
+/// forward basis; therefore -Z is the small rearward elbow-pole offset.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ArmPoseProfile {
     /// Angle by which the rest lateral arm direction is lowered toward -Y.
@@ -325,8 +325,9 @@ pub fn default_arm_target(
     let target = ArmIkTarget {
         wrist: chain.rest.upper_arm.position
             + dropped_direction * (total * profile.reach_ratio)
-            + Vec3::NEG_Z * (total * profile.forward_hand_offset_ratio),
-        elbow_pole: chain.rest.elbow.position + Vec3::Z * (total * profile.elbow_pole_offset_ratio),
+            + Vec3::Z * (total * profile.forward_hand_offset_ratio),
+        elbow_pole: chain.rest.elbow.position
+            + Vec3::NEG_Z * (total * profile.elbow_pole_offset_ratio),
     };
     if !target.wrist.is_finite() || !target.elbow_pole.is_finite() {
         return Err(ArmIkError::NonFiniteInput);
@@ -398,8 +399,14 @@ pub fn solve_two_bone_arm(input: ArmIkInput) -> Result<ArmIkSolution, ArmIkError
         normalized_or_identity(lower_model_delta * input.lower_arm_rest_global_rotation)?;
     let upper_delta =
         conjugated_rest_delta(upper_model_delta, input.upper_arm_rest_global_rotation)?;
-    let lower_delta =
-        conjugated_rest_delta(lower_model_delta, input.lower_arm_rest_global_rotation)?;
+    // The lower bone is a child of the upper bone. Its local delta must first
+    // cancel the model-space rotation already applied to the upper parent;
+    // otherwise applying both local deltas would rotate the forearm twice.
+    let lower_local_model_delta = upper_model_delta.inverse() * lower_model_delta;
+    let lower_delta = conjugated_rest_delta(
+        lower_local_model_delta,
+        input.lower_arm_rest_global_rotation,
+    )?;
     let upper_local = normalized_or_identity(input.upper_arm_rest_rotation * upper_delta)?;
     let lower_local = normalized_or_identity(input.lower_arm_rest_rotation * lower_delta)?;
 

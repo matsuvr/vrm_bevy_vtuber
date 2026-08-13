@@ -2,7 +2,7 @@
 
 Status: Accepted  
 Date: 2026-08-04
-Amended: 2026-08-13
+Amended: 2026-08-14
 
 ## Context
 
@@ -69,9 +69,13 @@ R_output_local    = R_bone_rest_local * R_delta_local
 
 tracking喪失時はtarget yaw／pitch／rollを0へ戻し、bone別half-lifeでanimated baseへ復帰する。汎用Bevy Animationへの加算合成はこのADRの対象だが、VRMA playbackの製品サポートを追加するものではない。
 
-### Default relaxed-arm pose
+### Model-adaptive default arm pose
 
-binding成功時、存在するupper armだけをmodel-authored `RestTransform`から左右対称に55°下げてからavatarを表示する。これはT-pose表示を避けるone-shot defaultであり、head、neck、upperChest、chest、spineを対象とするdirect `BodyTracking`のwriter所有権を変更しない。`RestTransform`と`RestGlobalTransform`は不変とし、lower arm、hand、world transformには直接書き込まない。モデルreplacementでは新しいbindingにだけ再適用する。
+binding成功時は`Transform`へ固定角度を書き込まず、completeなupper arm／lower arm／hand chainのrest-space geometryをcacheする。shoulderとfingerはoptional capabilityとして保持し、欠損または退化したchainはそのsideのenhanced poseだけを無効にする。純粋なanalytic two-bone IKでtyped `DefaultArmPose`をgeneration付きで解決し、既定値はarm drop 70°、reach 0.99、forward hand offset 0.081 total（VRM model-space `+Z`）、rearward elbow pole offset 0.05 total（`-Z`）とする。
+
+`DefaultArmPose`は`AnimationSystems`とdirect-pose `BodyTracking`の後、direct head-relative gaze／`VrmSystemSets::GazeControl`および`VrmSystemSets::Constraints`の前に毎frame適用する。animation baseへrest-relative upper／lower deltaを`base * delta`で加算し、前frameのcomposed outputを基準にして累積を防ぐ。実際の`ChildOf`経路を通じて中間nodeを含む影響subtreeの`GlobalTransform`を更新する。`RestTransform`／`RestGlobalTransform`は不変で、generation不一致、replacement、欠損geometryはno-opとする。
+
+このcompositorはhead、neck、upperChest、chest、spineを追跡するdirect `BodyTracking`のwriter所有権を変更せず、eye gaze、Node Constraint、SpringBoneのwriter競合も導入しない。
 
 ### Gaze
 

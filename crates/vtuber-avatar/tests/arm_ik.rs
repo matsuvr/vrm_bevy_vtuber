@@ -63,6 +63,11 @@ fn assert_finite_solution(solution: &vtuber_avatar::ArmIkSolution) {
 fn default_profile_is_nominally_relaxed_and_bends_the_elbow() {
     let chain = chain(ArmSide::Left, 0.7, 0.55);
     let target = default_arm_target(&chain, ArmPoseProfile::default()).unwrap();
+    assert!(
+        target.wrist.z > chain.rest.wrist.position.z,
+        "the default hand offset must follow the VRM +Z forward convention"
+    );
+    assert!(target.elbow_pole.z < chain.rest.elbow.position.z);
     let solution = solve_two_bone_arm(input_for(&chain, target)).unwrap();
     assert_finite_solution(&solution);
     assert!(solution.solved_reach < chain.rest.total_arm_length);

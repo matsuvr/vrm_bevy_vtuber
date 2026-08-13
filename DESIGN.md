@@ -1273,13 +1273,15 @@ pub struct AvatarBinding {
 
 `Entity`はadapter内部componentに留める。
 
-### 16.4.1 default relaxed-arm pose
+### 16.4.1 model-adaptive default arm pose
 
-VRMがT-poseをrest poseとして提供しても、avatarを`Ready`へ遷移させる同じbinding transaction内で、存在する`leftUpperArm`と`rightUpperArm`の表示用local transformを左右対称に55°下げる。これは既定表示だけのone-shot操作であり、追跡入力ではない。
+VRMがT-poseをrest poseとして提供しても、binding transactionでは`Transform`へ既定姿勢を書き込まない。Issue #14で各sideの`upperArm`／`lowerArm`／`hand`の完全chainを解決し、`RestTransform`／`RestGlobalTransform`からimmutableなrest-space位置、global／local回転、骨長をcacheする。shoulderとfingerはoptional capabilityとして保持し、完全chainがないsideのenhanced default poseだけを無効にする。avatar自体は`Ready`へ進める。
 
-`RestTransform`／`RestGlobalTransform`は変更しない。したがって`BodyTracking`は従来どおりhead、neck、upperChest、chest、spineの唯一の追跡姿勢writerであり、Node Constraint、SpringBone、および将来のanimation baseはモデル作者のrest poseを正本として扱う。腕がないモデルはそのまま`Ready`にし、lower armやhandへ個別writerは追加しない。
+Issue #15のpure analytic two-bone IKが、モデルごとのrest geometryからtyped `DefaultArmPose`を一度だけ解決する。既定profileはarm drop 70°、reach 0.99、forward hand offset 0.081 total（VRM model-space `+Z`）、rearward elbow pole offset 0.05 total（`-Z`）であり、unreachable target、near-zero pole、finite quaternionを安全に処理する。
 
-glTF/VRM model軸ではleft upper armは概ね`+X`、right upper armは概ね`-X`へ伸びるため、local Z回転はleft `-55°`、right `+55°`とする。再読み込み・replacement時だけ再適用し、frameごとにdeltaを重ねない。
+Issue #16のcompositorは`AnimationSystems`とdirect-pose `BodyTracking`の後、direct head-relative gaze／`VrmSystemSets::GazeControl`および`VrmSystemSets::Constraints`の前に毎frame実行する。保存したupper／lowerのrest-relative deltaをanimation baseへ`base * delta`で加算し、前frameのcomposed outputと比較してdeltaを累積させない。実際の`ChildOf`経路を上位から再計算し、非Humanoid中間nodeを含む影響subtreeの`GlobalTransform`を更新する。
+
+`RestTransform`／`RestGlobalTransform`は変更しない。`BodyTracking`はhead、neck、upperChest、chest、spineの唯一の追跡姿勢writerであり、default arm poseはupper／lower armのlocal Transformだけを対象とする。generation不一致、avatar replacement、欠損／退化geometryは安全なno-opとし、lower armやhandへworld transformを直接書き込まない。
 
 ### 16.5 system order
 
@@ -1289,6 +1291,7 @@ VRM更新順に合わせ、tracking applyを次へ配置する。
 PostUpdate:
   Bevy AnimationSystems
   -> direct-pose bevy_vrm1 BodyTracking
+  -> model-adaptive DefaultArmPose
   -> direct head-relative LookAt / GazeControl
   -> expression update and apply
   -> bevy_vrm1 VrmSystemSets::Constraints

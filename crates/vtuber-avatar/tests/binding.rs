@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 
+use vtuber_avatar::DefaultArmPose;
 use vtuber_avatar::arm::ArmSide;
 use vtuber_avatar::bind::BindTriggered;
 use vtuber_avatar::binding::{AvatarBinding, bind_humanoid_bones};
@@ -265,6 +266,12 @@ fn humanoid_binding_caches_normal_symmetric_arm_chains() {
     let right = binding
         .right_arm
         .expect("right symmetric chain should bind");
+    let default_pose = app
+        .world()
+        .get::<DefaultArmPose>(root)
+        .expect("complete chains should resolve a typed default pose");
+    assert!(default_pose.left.is_some());
+    assert!(default_pose.right.is_some());
     assert!((left.rest.upper_arm_length - right.rest.upper_arm_length).abs() < 1.0e-6);
     assert!((left.rest.forearm_length - right.rest.forearm_length).abs() < 1.0e-6);
     assert!((left.rest.total_arm_length - right.rest.total_arm_length).abs() < 1.0e-6);
@@ -657,19 +664,16 @@ fn humanoid_binding_optional_bones_cached() {
         .world()
         .get::<RestTransform>(right_upper_arm)
         .expect("upper arm rest transform remains model-authored");
-    let relaxed_drop = 55.0_f32.to_radians();
-    let expected_left = left_rest_rotation * Quat::from_rotation_z(-relaxed_drop);
-    let expected_right = right_rest_rotation * Quat::from_rotation_z(relaxed_drop);
     assert!(
-        left_rotation.dot(expected_left).abs() > 0.999_999,
-        "left upper arm should use the rest rotation plus the downward offset: actual={left_rotation:?}"
+        left_rotation.dot(Quat::from_rotation_y(0.4)).abs() > 0.999_999,
+        "binding must not write a default pose into the animated transform: actual={left_rotation:?}"
     );
     assert!(
-        right_rotation.dot(expected_right).abs() > 0.999_999,
-        "right upper arm should use the rest rotation plus the downward offset: actual={right_rotation:?}"
+        right_rotation.dot(Quat::from_rotation_y(-0.3)).abs() > 0.999_999,
+        "binding must not write a default pose into the animated transform: actual={right_rotation:?}"
     );
-    assert!((left_rotation * Vec3::X).y < 0.0);
-    assert!((right_rotation * -Vec3::X).y < 0.0);
+    assert!(binding.left_arm.is_none());
+    assert!(binding.right_arm.is_none());
     assert_eq!(left_rest.0.rotation, left_rest_rotation);
     assert_eq!(right_rest.0.rotation, right_rest_rotation);
 }
@@ -705,8 +709,8 @@ fn humanoid_binding_no_repeated_lookup_after_ready() {
         .expect("bound left upper arm remains available")
         .rotation = replacement_rotation;
 
-    // A second update must not invalidate the ready state, reapply the default
-    // arm delta, or change the cached binding.
+    // A second update must not invalidate the ready state, run binding again,
+    // or change the cached binding.
     app.update();
 
     let lifecycle = app.world().resource::<AvatarLifecycle>();
@@ -722,6 +726,6 @@ fn humanoid_binding_no_repeated_lookup_after_ready() {
             .unwrap()
             .rotation,
         replacement_rotation,
-        "the relaxed-arm default is a one-shot binding operation"
+        "binding must not rewrite a ready avatar's transform"
     );
 }

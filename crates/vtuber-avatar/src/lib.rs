@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 
 pub mod arm;
+pub mod arm_pose;
 pub mod bind;
 pub mod binding;
 pub mod capabilities;
@@ -27,6 +28,7 @@ pub use arm::{
     ArmIkSolution, ArmIkTarget, ArmPoseProfile, ArmRestGeometry, ArmSide, FingerJointReferences,
     FingerReferences, RestSpaceBonePose, default_arm_target, solve_two_bone_arm,
 };
+pub use arm_pose::{DefaultArmPose, ResolvedArmPose, apply_default_arm_pose};
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};
 pub use capabilities::{

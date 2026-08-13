@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
 
+use crate::arm_pose::apply_default_arm_pose;
 use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
 use crate::expression::apply_tracked_expressions;
@@ -78,8 +79,17 @@ impl Plugin for VtuberAvatarPlugin {
             )
             .add_systems(
                 PostUpdate,
+                apply_default_arm_pose
+                    .after(apply_direct_body_tracking)
+                    .before(update_direct_look_at_input)
+                    .before(VrmSystemSets::GazeControl)
+                    .before(VrmSystemSets::Constraints),
+            )
+            .add_systems(
+                PostUpdate,
                 update_direct_look_at_input
                     .after(apply_direct_body_tracking)
+                    .after(apply_default_arm_pose)
                     .before(VrmSystemSets::GazeControl),
             )
             .add_systems(
