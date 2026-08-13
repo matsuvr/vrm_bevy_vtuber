@@ -22,6 +22,7 @@ use crate::inference_runtime::{
 use crate::metrics_export::{MetricsExportState, export_diagnostics_system};
 use crate::orchestrator::{Orchestrator, process_ui_actions_system, sync_avatar_lifecycle_system};
 use crate::preview::PreviewState;
+use crate::preview_landmarks::{PreviewLandmarkState, sync_preview_landmark_system};
 use crate::tracking_runtime::{TrackingRuntime, tracking_bridge_system};
 use crate::ui_model::{Screen, UiViewModel};
 use vtuber_avatar::AvatarMotionMirror;
@@ -47,6 +48,7 @@ impl Plugin for UiShellPlugin {
             .init_resource::<UiViewModel>()
             .init_resource::<Orchestrator>()
             .init_resource::<PreviewState>()
+            .init_resource::<PreviewLandmarkState>()
             .init_resource::<AvatarMotionMirror>()
             .init_resource::<DiagnosticsSnapshot>()
             .init_resource::<MetricsExportState>()
@@ -91,6 +93,7 @@ impl Plugin for UiShellPlugin {
                     // visible, but is stopped only after inference has joined.
                     .before(capture_bridge_system),
             )
+            .add_systems(Update, sync_preview_landmark_system.after(read_inference_output_system))
             .add_systems(Update, tracking_bridge_system.after(read_inference_output_system))
             .add_systems(
                 Last,

@@ -44,6 +44,9 @@ pub mod preview;
 /// Pure low-resolution conversion for the privacy camera preview.
 pub mod privacy_preview;
 
+/// Display-only latest snapshot of canonical face landmarks.
+pub mod preview_landmarks;
+
 /// Dev-only synthetic tracking source (feature-gated).
 #[cfg(feature = "dev-synthetic-input")]
 pub mod synthetic_tracking;
