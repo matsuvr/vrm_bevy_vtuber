@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
 use vtuber_camera::capture::{CaptureController, CaptureServiceState};
@@ -14,6 +15,7 @@ use vtuber_core::{FrameSeq, LatestSlot, VideoFrame, monotonic_now};
 
 use crate::diagnostics::DiagnosticsSnapshot;
 use crate::preview::PreviewState;
+use crate::privacy_preview::build_privacy_preview;
 
 /// Resource wrapping the production [`CaptureController`].
 ///
@@ -265,54 +267,23 @@ pub fn register_preview_texture_system(
 }
 
 fn preview_image(frame: &VideoFrame) -> Option<Image> {
-    let rgba = frame_to_rgba(frame)?;
+    let privacy = build_privacy_preview(frame).ok()?;
     let size = bevy::render::render_resource::Extent3d {
-        width: frame.width,
-        height: frame.height,
+        width: privacy.width,
+        height: privacy.height,
         depth_or_array_layers: 1,
     };
-    Some(Image::new_fill(
+    let mut image = Image::new(
         size,
         bevy::render::render_resource::TextureDimension::D2,
-        &rgba,
+        privacy.rgba,
         bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
         // Preview pixels change every frame, so the CPU-side asset must stay
         // in the main world while also being extracted for rendering.
         bevy::asset::RenderAssetUsages::default(),
-    ))
-}
-
-fn frame_to_rgba(frame: &VideoFrame) -> Option<Vec<u8>> {
-    let channels = match frame.format {
-        vtuber_core::PixelFormat::Gray8 => 1,
-        vtuber_core::PixelFormat::Rgb8 | vtuber_core::PixelFormat::Bgr8 => 3,
-        vtuber_core::PixelFormat::Rgba8 => 4,
-    };
-    let row_bytes = frame.width as usize * channels;
-    if frame.stride_bytes < row_bytes
-        || frame.data.len() < frame.stride_bytes.saturating_mul(frame.height as usize)
-    {
-        return None;
-    }
-    let mut rgba = Vec::with_capacity(frame.width as usize * frame.height as usize * 4);
-    for y in 0..frame.height as usize {
-        let row = &frame.data[y * frame.stride_bytes..y * frame.stride_bytes + row_bytes];
-        for pixel in row.chunks_exact(channels) {
-            match frame.format {
-                vtuber_core::PixelFormat::Gray8 => {
-                    rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], 255])
-                }
-                vtuber_core::PixelFormat::Rgb8 => {
-                    rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255])
-                }
-                vtuber_core::PixelFormat::Bgr8 => {
-                    rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255])
-                }
-                vtuber_core::PixelFormat::Rgba8 => rgba.extend_from_slice(pixel),
-            }
-        }
-    }
-    Some(rgba)
+    );
+    image.sampler = ImageSampler::linear();
+    Some(image)
 }
 
 /// Bridge system that connects the orchestrator's capture intent to the
@@ -435,6 +406,34 @@ mod preview_tests {
         }
     }
 
+    fn solid_rgb_frame(width: u32, height: u32, pixel: [u8; 3]) -> VideoFrame {
+        let mut data = Vec::with_capacity(width as usize * height as usize * 3);
+        for _ in 0..(width as usize * height as usize) {
+            data.extend_from_slice(&pixel);
+        }
+        VideoFrame {
+            seq: FrameSeq(2),
+            captured_at: MonoTimeNs(2),
+            width,
+            height,
+            stride_bytes: width as usize * 3,
+            format: PixelFormat::Rgb8,
+            data: Arc::from(data),
+        }
+    }
+
+    fn invalid_frame() -> VideoFrame {
+        VideoFrame {
+            seq: FrameSeq(3),
+            captured_at: MonoTimeNs(3),
+            width: 2,
+            height: 1,
+            stride_bytes: 1,
+            format: PixelFormat::Rgb8,
+            data: Arc::from([0]),
+        }
+    }
+
     #[test]
     fn preview_image_remains_mutable_in_main_world() {
         let image = preview_image(&rgb_frame()).expect("valid RGB frame should produce an image");
@@ -448,6 +447,115 @@ mod preview_tests {
                 .asset_usage
                 .contains(bevy::asset::RenderAssetUsages::RENDER_WORLD)
         );
+    }
+
+    #[test]
+    fn preview_image_uses_privacy_dimensions_data_limit_and_linear_magnification() {
+        let image = preview_image(&solid_rgb_frame(1280, 720, [10, 20, 30]))
+            .expect("valid RGB frame should produce a privacy image");
+
+        assert_eq!(image.texture_descriptor.size.width, 48);
+        assert_eq!(image.texture_descriptor.size.height, 27);
+        assert_eq!(image.data.as_ref().expect("image data").len(), 48 * 27 * 4);
+        assert_eq!(image.sampler, ImageSampler::linear());
+    }
+
+    #[test]
+    fn conversion_error_keeps_the_existing_image_unchanged() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<PreviewState>()
+            .init_resource::<LatestVideoFrame>()
+            .add_systems(Update, update_preview_texture_system);
+        let original = preview_image(&rgb_frame()).expect("valid preview image");
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(original);
+        app.world_mut().resource_mut::<PreviewState>().image_handle = Some(handle.clone());
+        app.world_mut().resource_mut::<LatestVideoFrame>().frame = Some(invalid_frame());
+
+        app.update();
+
+        let image = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(handle.id())
+            .expect("existing image remains registered");
+        assert_eq!(image.texture_descriptor.size.width, 1);
+        assert_eq!(image.texture_descriptor.size.height, 1);
+        assert_eq!(image.data.as_ref().expect("image data"), &[10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn hidden_preview_does_not_upload_and_visible_updates_reuse_the_handle() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<PreviewState>()
+            .init_resource::<LatestVideoFrame>()
+            .add_systems(Update, update_preview_texture_system);
+        let initial = preview_image(&rgb_frame()).expect("valid preview image");
+        let handle = app.world_mut().resource_mut::<Assets<Image>>().add(initial);
+        {
+            let world = app.world_mut();
+            world.resource_mut::<PreviewState>().image_handle = Some(handle.clone());
+            world.resource_mut::<PreviewState>().visible = false;
+            world.resource_mut::<LatestVideoFrame>().frame =
+                Some(solid_rgb_frame(1280, 720, [1, 2, 3]));
+        }
+
+        app.update();
+        let image = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(handle.id())
+            .expect("hidden preview keeps image");
+        assert_eq!(image.texture_descriptor.size.width, 1);
+
+        app.world_mut().resource_mut::<PreviewState>().visible = true;
+        app.update();
+        let preview = app.world().resource::<PreviewState>();
+        assert_eq!(
+            preview.image_handle.as_ref().map(Handle::id),
+            Some(handle.id())
+        );
+        let image = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(handle.id())
+            .expect("reused image handle remains registered");
+        assert_eq!(image.texture_descriptor.size.width, 48);
+        assert_eq!(image.data.as_ref().expect("image data")[..3], [1, 2, 3]);
+    }
+
+    #[test]
+    fn preview_upload_keeps_the_existing_target_fps_throttle() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<PreviewState>()
+            .init_resource::<LatestVideoFrame>()
+            .add_systems(Update, update_preview_texture_system);
+        app.world_mut().resource_mut::<PreviewState>().target_fps = 1;
+        app.world_mut().resource_mut::<LatestVideoFrame>().frame = Some(rgb_frame());
+        app.update();
+
+        app.world_mut().resource_mut::<LatestVideoFrame>().frame =
+            Some(solid_rgb_frame(1, 1, [1, 2, 3]));
+        app.update();
+
+        let handle = app
+            .world()
+            .resource::<PreviewState>()
+            .image_handle
+            .as_ref()
+            .expect("first upload created a handle")
+            .clone();
+        let image = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(handle.id())
+            .expect("throttled image remains registered");
+        assert_eq!(image.data.as_ref().expect("image data"), &[10, 20, 30, 255]);
     }
 
     #[test]
