@@ -153,3 +153,361 @@ pub struct ArmChainBinding {
     /// Optional shoulder/finger capability flags.
     pub capabilities: ArmChainCapabilities,
 }
+
+/// Initial geometry-derived parameters for the default relaxed arm pose.
+///
+/// The values are intentionally kept in one typed profile so later per-model
+/// tuning can validate and replace them without scattering pose constants
+/// through the solver. The model basis is VRM's conventional +Y-up, -Z
+/// forward basis; therefore +Z is the small rearward elbow-pole offset.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArmPoseProfile {
+    /// Angle by which the rest lateral arm direction is lowered toward -Y.
+    pub arm_drop_radians: f32,
+    /// Desired wrist reach as a fraction of the total arm length.
+    pub reach_ratio: f32,
+    /// Forward hand offset as a fraction of the total arm length.
+    pub forward_hand_offset_ratio: f32,
+    /// Rearward elbow-pole offset as a fraction of the total arm length.
+    pub elbow_pole_offset_ratio: f32,
+}
+
+impl Default for ArmPoseProfile {
+    fn default() -> Self {
+        Self {
+            arm_drop_radians: 70.0_f32.to_radians(),
+            reach_ratio: 0.99,
+            forward_hand_offset_ratio: 0.081,
+            elbow_pole_offset_ratio: 0.05,
+        }
+    }
+}
+
+impl ArmPoseProfile {
+    /// Validates profile values before they are used to construct a target.
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.arm_drop_radians.is_finite()
+            && self.arm_drop_radians >= 0.0
+            && self.arm_drop_radians <= std::f32::consts::FRAC_PI_2
+            && self.reach_ratio.is_finite()
+            && self.reach_ratio > 0.0
+            && self.reach_ratio <= 1.0
+            && self.forward_hand_offset_ratio.is_finite()
+            && self.forward_hand_offset_ratio.abs() <= 1.0
+            && self.elbow_pole_offset_ratio.is_finite()
+            && self.elbow_pole_offset_ratio >= 0.0
+            && self.elbow_pole_offset_ratio <= 1.0
+    }
+}
+
+/// Desired wrist and elbow-pole positions in model/rest space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArmIkTarget {
+    /// Desired wrist origin in model/rest space.
+    pub wrist: Vec3,
+    /// A model-space point that determines the elbow bend side.
+    pub elbow_pole: Vec3,
+}
+
+/// Inputs for the pure analytic two-bone solve.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArmIkInput {
+    /// Upper-arm origin in model/rest space.
+    pub shoulder: Vec3,
+    /// Rest elbow origin in model/rest space.
+    pub rest_elbow: Vec3,
+    /// Rest wrist origin in model/rest space.
+    pub rest_wrist: Vec3,
+    /// Rest upper-arm length.
+    pub upper_arm_length: f32,
+    /// Rest forearm length.
+    pub forearm_length: f32,
+    /// Desired wrist and elbow-pole positions.
+    pub target: ArmIkTarget,
+    /// Authored upper-arm local rest orientation.
+    pub upper_arm_rest_rotation: Quat,
+    /// Authored lower-arm local rest orientation.
+    pub lower_arm_rest_rotation: Quat,
+    /// Authored upper-arm model/rest global orientation.
+    pub upper_arm_rest_global_rotation: Quat,
+    /// Authored lower-arm model/rest global orientation.
+    pub lower_arm_rest_global_rotation: Quat,
+}
+
+impl ArmIkInput {
+    /// Creates solver input from cached immutable arm geometry.
+    #[must_use]
+    pub fn from_geometry(geometry: ArmRestGeometry, target: ArmIkTarget) -> Self {
+        Self {
+            shoulder: geometry.upper_arm.position,
+            rest_elbow: geometry.elbow.position,
+            rest_wrist: geometry.wrist.position,
+            upper_arm_length: geometry.upper_arm_length,
+            forearm_length: geometry.forearm_length,
+            target,
+            upper_arm_rest_rotation: geometry.upper_arm.local_rotation,
+            lower_arm_rest_rotation: geometry.elbow.local_rotation,
+            upper_arm_rest_global_rotation: geometry.upper_arm.global_rotation,
+            lower_arm_rest_global_rotation: geometry.elbow.global_rotation,
+        }
+    }
+}
+
+/// Pure solver output for a two-bone arm.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArmIkSolution {
+    /// The target distance after valid two-bone reach clamping.
+    pub solved_reach: f32,
+    /// Solved elbow origin in model/rest space.
+    pub elbow: Vec3,
+    /// Solved wrist origin in model/rest space.
+    pub wrist: Vec3,
+    /// Solved upper-arm model/rest global orientation.
+    pub upper_arm_global_rotation: Quat,
+    /// Solved lower-arm model/rest global orientation.
+    pub lower_arm_global_rotation: Quat,
+    /// Solved upper-arm local orientation after applying the rest-relative delta.
+    pub upper_arm_local_rotation: Quat,
+    /// Solved lower-arm local orientation after applying the rest-relative delta.
+    pub lower_arm_local_rotation: Quat,
+    /// Upper-arm rest-relative local rotation delta.
+    pub upper_arm_delta: Quat,
+    /// Lower-arm rest-relative local rotation delta.
+    pub lower_arm_delta: Quat,
+}
+
+/// Input errors for the analytic arm solver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmIkError {
+    /// At least one position, length, or orientation was non-finite.
+    NonFiniteInput,
+    /// A bone length or orientation was too close to zero to solve safely.
+    DegenerateGeometry,
+    /// The default profile contains an invalid parameter.
+    InvalidProfile,
+}
+
+impl std::fmt::Display for ArmIkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonFiniteInput => f.write_str("arm IK input contains a non-finite value"),
+            Self::DegenerateGeometry => f.write_str("arm IK geometry is degenerate"),
+            Self::InvalidProfile => f.write_str("arm pose profile is invalid"),
+        }
+    }
+}
+
+impl std::error::Error for ArmIkError {}
+
+/// Builds the default hand-down target from one side's rest geometry.
+pub fn default_arm_target(
+    chain: &ArmChainBinding,
+    profile: ArmPoseProfile,
+) -> Result<ArmIkTarget, ArmIkError> {
+    if !profile.is_valid() {
+        return Err(ArmIkError::InvalidProfile);
+    }
+    let rest_direction =
+        finite_normalized(chain.rest.elbow.position - chain.rest.upper_arm.position)
+            .ok_or(ArmIkError::DegenerateGeometry)?;
+    let down = -Vec3::Y;
+    let angle_to_down = rest_direction.dot(down).clamp(-1.0, 1.0).acos();
+    let drop = profile.arm_drop_radians.min(angle_to_down);
+    let drop_axis =
+        stable_perpendicular(rest_direction, down).ok_or(ArmIkError::DegenerateGeometry)?;
+    let dropped_direction = Quat::from_axis_angle(drop_axis, drop) * rest_direction;
+    let total = chain.rest.total_arm_length;
+    if !total.is_finite() || total <= ARM_IK_EPSILON {
+        return Err(ArmIkError::DegenerateGeometry);
+    }
+
+    let target = ArmIkTarget {
+        wrist: chain.rest.upper_arm.position
+            + dropped_direction * (total * profile.reach_ratio)
+            + Vec3::NEG_Z * (total * profile.forward_hand_offset_ratio),
+        elbow_pole: chain.rest.elbow.position + Vec3::Z * (total * profile.elbow_pole_offset_ratio),
+    };
+    if !target.wrist.is_finite() || !target.elbow_pole.is_finite() {
+        return Err(ArmIkError::NonFiniteInput);
+    }
+    Ok(target)
+}
+
+/// Solves a deterministic constant-time analytic two-bone arm IK problem.
+///
+/// The target is clamped into the valid annulus with an epsilon margin. A
+/// pole that is near-zero or collinear with the target falls back first to
+/// the authored rest-elbow plane and then to a stable world axis. The output
+/// rotations are rest-relative local deltas obtained by conjugating the
+/// model-space direction changes with each bone's authored rest-global
+/// orientation.
+pub fn solve_two_bone_arm(input: ArmIkInput) -> Result<ArmIkSolution, ArmIkError> {
+    validate_input(input)?;
+
+    let upper_length = input.upper_arm_length;
+    let forearm_length = input.forearm_length;
+    let rest_wrist_direction = finite_normalized(input.rest_wrist - input.shoulder)
+        .ok_or(ArmIkError::DegenerateGeometry)?;
+    let target_vector = input.target.wrist - input.shoulder;
+    let target_direction = finite_normalized(target_vector).unwrap_or(rest_wrist_direction);
+    let target_distance = target_vector.length();
+    if !target_distance.is_finite() {
+        return Err(ArmIkError::NonFiniteInput);
+    }
+
+    let min_reach = (upper_length - forearm_length).abs() + ARM_IK_EPSILON;
+    let max_reach = (upper_length + forearm_length) - ARM_IK_EPSILON;
+    if min_reach >= max_reach {
+        return Err(ArmIkError::DegenerateGeometry);
+    }
+    let solved_reach = target_distance.clamp(min_reach, max_reach);
+    let wrist = input.shoulder + target_direction * solved_reach;
+
+    let target_pole_vector = input.target.elbow_pole - input.shoulder;
+    let pole_direction = project_to_plane(target_pole_vector, target_direction)
+        .and_then(finite_normalized)
+        .or_else(|| {
+            project_to_plane(input.rest_elbow - input.shoulder, target_direction)
+                .and_then(finite_normalized)
+        })
+        .or_else(|| stable_perpendicular(target_direction, Vec3::Y))
+        .ok_or(ArmIkError::DegenerateGeometry)?;
+
+    let cosine = ((upper_length * upper_length) + (solved_reach * solved_reach)
+        - (forearm_length * forearm_length))
+        / (2.0 * upper_length * solved_reach);
+    let cosine = cosine.clamp(-1.0, 1.0);
+    let sine = (1.0 - cosine * cosine).max(0.0).sqrt();
+    let elbow = input.shoulder
+        + target_direction * (cosine * upper_length)
+        + pole_direction * (sine * upper_length);
+    let upper_direction =
+        finite_normalized(elbow - input.shoulder).ok_or(ArmIkError::DegenerateGeometry)?;
+    let lower_direction = finite_normalized(wrist - elbow).ok_or(ArmIkError::DegenerateGeometry)?;
+    let rest_upper_direction = finite_normalized(input.rest_elbow - input.shoulder)
+        .ok_or(ArmIkError::DegenerateGeometry)?;
+    let rest_lower_direction = finite_normalized(input.rest_wrist - input.rest_elbow)
+        .ok_or(ArmIkError::DegenerateGeometry)?;
+
+    let upper_model_delta = rotation_arc(rest_upper_direction, upper_direction);
+    let lower_model_delta = rotation_arc(rest_lower_direction, lower_direction);
+    let upper_global =
+        normalized_or_identity(upper_model_delta * input.upper_arm_rest_global_rotation)?;
+    let lower_global =
+        normalized_or_identity(lower_model_delta * input.lower_arm_rest_global_rotation)?;
+    let upper_delta =
+        conjugated_rest_delta(upper_model_delta, input.upper_arm_rest_global_rotation)?;
+    let lower_delta =
+        conjugated_rest_delta(lower_model_delta, input.lower_arm_rest_global_rotation)?;
+    let upper_local = normalized_or_identity(input.upper_arm_rest_rotation * upper_delta)?;
+    let lower_local = normalized_or_identity(input.lower_arm_rest_rotation * lower_delta)?;
+
+    Ok(ArmIkSolution {
+        solved_reach,
+        elbow,
+        wrist,
+        upper_arm_global_rotation: upper_global,
+        lower_arm_global_rotation: lower_global,
+        upper_arm_local_rotation: upper_local,
+        lower_arm_local_rotation: lower_local,
+        upper_arm_delta: upper_delta,
+        lower_arm_delta: lower_delta,
+    })
+}
+
+const ARM_IK_EPSILON: f32 = 1.0e-4;
+
+fn validate_input(input: ArmIkInput) -> Result<(), ArmIkError> {
+    let vectors = [
+        input.shoulder,
+        input.rest_elbow,
+        input.rest_wrist,
+        input.target.wrist,
+        input.target.elbow_pole,
+    ];
+    if vectors.iter().any(|value| !value.is_finite()) {
+        return Err(ArmIkError::NonFiniteInput);
+    }
+    let rotations = [
+        input.upper_arm_rest_rotation,
+        input.lower_arm_rest_rotation,
+        input.upper_arm_rest_global_rotation,
+        input.lower_arm_rest_global_rotation,
+    ];
+    if rotations.iter().any(|value| !value.is_finite()) {
+        return Err(ArmIkError::NonFiniteInput);
+    }
+    if input.upper_arm_length <= ARM_IK_EPSILON
+        || input.forearm_length <= ARM_IK_EPSILON
+        || !input.upper_arm_length.is_finite()
+        || !input.forearm_length.is_finite()
+        || rotations
+            .iter()
+            .any(|value| value.length_squared() <= ARM_IK_EPSILON)
+    {
+        return Err(ArmIkError::DegenerateGeometry);
+    }
+    Ok(())
+}
+
+fn finite_normalized(value: Vec3) -> Option<Vec3> {
+    let length_squared = value.length_squared();
+    if value.is_finite() && length_squared.is_finite() && length_squared > ARM_IK_EPSILON {
+        Some(value.normalize())
+    } else {
+        None
+    }
+}
+
+fn normalized_or_identity(value: Quat) -> Result<Quat, ArmIkError> {
+    if !value.is_finite() || value.length_squared() <= ARM_IK_EPSILON {
+        return Err(ArmIkError::DegenerateGeometry);
+    }
+    Ok(value.normalize())
+}
+
+fn project_to_plane(value: Vec3, plane_normal: Vec3) -> Option<Vec3> {
+    if !value.is_finite() || !plane_normal.is_finite() {
+        return None;
+    }
+    Some(value - plane_normal * value.dot(plane_normal))
+}
+
+fn stable_perpendicular(first: Vec3, second: Vec3) -> Option<Vec3> {
+    let cross = first.cross(second);
+    if let Some(normalized) = finite_normalized(cross) {
+        return Some(normalized);
+    }
+    let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+    axes.into_iter()
+        .filter(|axis| first.dot(*axis).abs() < 0.9)
+        .find_map(|axis| finite_normalized(first.cross(axis)))
+}
+
+fn rotation_arc(from: Vec3, to: Vec3) -> Quat {
+    let dot = from.dot(to).clamp(-1.0, 1.0);
+    if dot > 1.0 - ARM_IK_EPSILON {
+        return Quat::IDENTITY;
+    }
+    if dot < -1.0 + ARM_IK_EPSILON {
+        let axis = stable_perpendicular(from, Vec3::Y)
+            .or_else(|| stable_perpendicular(from, Vec3::X))
+            .unwrap_or(Vec3::Z);
+        return Quat::from_axis_angle(axis, std::f32::consts::PI);
+    }
+    let cross = from.cross(to);
+    let scale = (2.0 * (1.0 + dot)).sqrt();
+    let inverse_scale = 1.0 / scale;
+    Quat::from_xyzw(
+        cross.x * inverse_scale,
+        cross.y * inverse_scale,
+        cross.z * inverse_scale,
+        scale * 0.5,
+    )
+    .normalize()
+}
+
+fn conjugated_rest_delta(model_delta: Quat, rest_global: Quat) -> Result<Quat, ArmIkError> {
+    normalized_or_identity(rest_global.inverse() * model_delta * rest_global)
+}
