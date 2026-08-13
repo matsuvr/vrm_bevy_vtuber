@@ -4,25 +4,40 @@
 //! The probe uses the same worker-owned `MediaPipeRuntime` as the production
 //! inference boundary and records bounded per-phase transform samples.
 
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(target_os = "windows")]
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "windows")]
 use std::time::Duration;
 
+#[cfg(target_os = "windows")]
 use vtuber_core::{
     CameraFaceTransform, FaceTrackingOutcome, HeadPose, LatestSlot, ReadResult, StopToken,
     VideoFrame,
 };
+#[cfg(target_os = "windows")]
 use vtuber_inference::FaceTrackingInference;
+#[cfg(target_os = "windows")]
 use vtuber_inference::backend::mediapipe::{MediaPipeRuntime, TASK_BUNDLE_FILE};
+#[cfg(target_os = "windows")]
 use vtuber_tracking::relative_pose;
 
+#[cfg(target_os = "windows")]
 const PHASE_COUNT: usize = 7;
+#[cfg(target_os = "windows")]
 const MAX_PHASE_SAMPLES: usize = 96;
+#[cfg(target_os = "windows")]
 const COUNTDOWN: Duration = Duration::from_secs(3);
+#[cfg(target_os = "windows")]
 const COLLECTION: Duration = Duration::from_secs(3);
+#[cfg(target_os = "windows")]
 const FRAME_WAIT: Duration = Duration::from_millis(100);
+#[cfg(target_os = "windows")]
 const SIGN_THRESHOLD_RAD: f32 = 0.05;
 
+#[cfg(target_os = "windows")]
 const PHASES: [PhaseDefinition; PHASE_COUNT] = [
     PhaseDefinition {
         name: "neutral",
@@ -140,12 +155,14 @@ fn required_value(args: &[String], index: usize, option: &str) -> Result<String,
         .ok_or_else(|| format!("{option} requires a value"))
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug)]
 struct PhaseDefinition {
     name: &'static str,
     instruction: &'static str,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Default)]
 struct PhaseSamples {
     frames_seen: u64,
@@ -153,11 +170,13 @@ struct PhaseSamples {
     no_face_count: u64,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Debug)]
 struct ProbeData {
     phases: [PhaseSamples; PHASE_COUNT],
 }
 
+#[cfg(target_os = "windows")]
 impl Default for ProbeData {
     fn default() -> Self {
         Self {
@@ -166,6 +185,7 @@ impl Default for ProbeData {
     }
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Debug)]
 struct ProbeWorkerOutput {
     data: ProbeData,
@@ -350,6 +370,7 @@ fn run_worker(
     }
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Debug)]
 struct PhaseReport {
     name: &'static str,
@@ -361,6 +382,7 @@ struct PhaseReport {
     sign_pass: bool,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Debug)]
 struct ProbeReport {
     library_source: String,
@@ -368,6 +390,7 @@ struct ProbeReport {
     signs_pass: bool,
 }
 
+#[cfg(target_os = "windows")]
 fn build_report(data: ProbeData, library_source: String) -> Result<ProbeReport, String> {
     let neutral = median_transform(&data.phases[0]).ok_or_else(|| {
         format!(
@@ -400,6 +423,7 @@ fn build_report(data: ProbeData, library_source: String) -> Result<ProbeReport, 
     })
 }
 
+#[cfg(target_os = "windows")]
 fn phase_diagnostics(data: &ProbeData) -> String {
     PHASES
         .iter()
@@ -417,6 +441,7 @@ fn phase_diagnostics(data: &ProbeData) -> String {
         .join("; ")
 }
 
+#[cfg(target_os = "windows")]
 fn median_transform(phase: &PhaseSamples) -> Option<CameraFaceTransform> {
     let first = *phase.transforms.first()?;
     let mut quaternion = [0.0; 4];
@@ -458,10 +483,12 @@ fn median_transform(phase: &PhaseSamples) -> Option<CameraFaceTransform> {
     })
 }
 
+#[cfg(target_os = "windows")]
 fn dot4(left: [f32; 4], right: [f32; 4]) -> f32 {
     left[0] * right[0] + left[1] * right[1] + left[2] * right[2] + left[3] * right[3]
 }
 
+#[cfg(target_os = "windows")]
 fn expected_sign(index: usize, pose: HeadPose) -> bool {
     match index {
         0 => {
@@ -479,6 +506,7 @@ fn expected_sign(index: usize, pose: HeadPose) -> bool {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn prompt_phase(phase: PhaseDefinition) {
     eprintln!("\n[{}] {}", phase.name, phase.instruction);
     if phase.name != "neutral" {
@@ -492,6 +520,7 @@ fn prompt_phase(phase: PhaseDefinition) {
     eprintln!("  recording for {} seconds", COLLECTION.as_secs());
 }
 
+#[cfg(target_os = "windows")]
 fn print_report(report: &ProbeReport, json: bool) {
     if json {
         let phases = report

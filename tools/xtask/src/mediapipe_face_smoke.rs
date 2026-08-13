@@ -5,21 +5,36 @@
 //! The task is built and dropped in a supervised inference worker, while
 //! camera frames cross only the capacity-one [`vtuber_core::LatestSlot`].
 
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(target_os = "windows")]
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 
+#[cfg(target_os = "windows")]
 use mediapipe::{
     Confidence, Delegate, FaceLandmarker, FaceLandmarkerResult, Image, IouThreshold,
     MEDIAPIPE_VERSION, ModelSource, Size, Timestamp,
 };
+#[cfg(target_os = "windows")]
 use sha2::{Digest, Sha256};
-use vtuber_core::{FrameSeq, LatestSlot, MonoTimeNs, PixelFormat, ReadResult, VideoFrame};
+#[cfg(any(target_os = "windows", test))]
+use vtuber_core::{FrameSeq, MonoTimeNs, PixelFormat, VideoFrame};
+#[cfg(target_os = "windows")]
+use vtuber_core::{LatestSlot, ReadResult};
 
+#[cfg(target_os = "windows")]
 const TASK_BUNDLE_FILE: &str = "face_landmarker.task";
+#[cfg(target_os = "windows")]
 const TASK_BUNDLE_SHA256: &str = "64184E229B263107BC2B804C6625DB1341FF2BB731874B0BCC2FE6544E0BC9FF";
+#[cfg(target_os = "windows")]
 const MAX_TASK_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
+#[cfg(target_os = "windows")]
 const FRAME_WAIT: Duration = Duration::from_millis(100);
+#[cfg(target_os = "windows")]
 const MATRIX_AFFINE_EPSILON: f32 = 0.1;
 
 /// Runs the standalone MediaPipe face gate.
@@ -115,6 +130,7 @@ fn required_value(args: &[String], index: usize, option: &str) -> Result<String,
         .ok_or_else(|| format!("{option} requires a value"))
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Default)]
 struct SmokeStats {
     face_count: u64,
@@ -135,6 +151,7 @@ struct SmokeStats {
     failure: Option<String>,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Debug)]
 struct WorkerOutput {
     stats: SmokeStats,
@@ -331,6 +348,7 @@ fn run_worker(
     WorkerOutput { stats }
 }
 
+#[cfg(target_os = "windows")]
 fn record_result(stats: &mut SmokeStats, result: FaceLandmarkerResult) {
     let face_count = result.landmarks.len();
     if face_count == 0 {
@@ -382,6 +400,7 @@ fn record_result(stats: &mut SmokeStats, result: FaceLandmarkerResult) {
     stats.face_count += 1;
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug)]
 struct MatrixQuality {
     determinant: f32,
@@ -389,6 +408,7 @@ struct MatrixQuality {
     is_valid: bool,
 }
 
+#[cfg(target_os = "windows")]
 fn matrix_quality(result: &FaceLandmarkerResult) -> Option<MatrixQuality> {
     let matrix = result.transformation_matrixes.first()?;
     let mut values = [[0.0; 4]; 4];
@@ -423,12 +443,14 @@ fn matrix_quality(result: &FaceLandmarkerResult) -> Option<MatrixQuality> {
     })
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn determinant3(matrix: [[f32; 4]; 4]) -> f32 {
     matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
         - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
         + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn video_timestamp_ms(
     captured_at: MonoTimeNs,
     last_timestamp_ms: &mut Option<i64>,
@@ -441,6 +463,7 @@ fn video_timestamp_ms(
     Ok(timestamp_ms)
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn frame_rgb<'a>(frame: &'a VideoFrame, staging: &'a mut Vec<u8>) -> Result<&'a [u8], String> {
     let width = usize::try_from(frame.width).map_err(|_| "frame width is too large".to_string())?;
     let height =
@@ -666,6 +689,7 @@ fn print_summary(stats: &SmokeStats, capture: &vtuber_camera::CaptureMetrics, js
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn percentile_ms(values: &[Duration], percentile: f64) -> f64 {
     if values.is_empty() {
         return 0.0;

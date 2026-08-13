@@ -1,10 +1,17 @@
 //! Windows-only camera to composite-inference diagnostic command.
 
+#[cfg(any(target_os = "windows", test))]
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+#[cfg(target_os = "windows")]
+use std::path::Path;
+use std::path::PathBuf;
+use std::time::Duration;
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 
+#[cfg(target_os = "windows")]
 use image::{DynamicImage, ImageBuffer, ImageFormat, Luma, Rgb, Rgba};
+#[cfg(target_os = "windows")]
 use vtuber_core::types::{PixelFormat, VideoFrame};
 
 #[cfg(target_os = "windows")]
@@ -129,6 +136,7 @@ fn required_value(args: &[String], index: usize, option: &str) -> Result<String,
         .ok_or_else(|| format!("{option} requires a value"))
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug)]
 enum GuidedAction {
     None,
@@ -136,6 +144,7 @@ enum GuidedAction {
     StartCapture,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug)]
 struct GuidedPhase {
     label: &'static str,
@@ -143,6 +152,7 @@ struct GuidedPhase {
     action: GuidedAction,
 }
 
+#[cfg(any(target_os = "windows", test))]
 struct GuidedProtocol {
     phases: Vec<GuidedPhase>,
     phase_index: usize,
@@ -152,6 +162,7 @@ struct GuidedProtocol {
     completed: bool,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl GuidedProtocol {
     fn new() -> Self {
         let mut phases = vec![GuidedPhase {
@@ -278,26 +289,9 @@ impl GuidedProtocol {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn flush_stdout() {
     let _ = std::io::stdout().flush();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::GuidedProtocol;
-    use std::time::Duration;
-
-    #[test]
-    fn guided_protocol_marks_the_exact_deadline_complete() {
-        let mut protocol = GuidedProtocol::new();
-        let total = protocol.total_duration();
-
-        protocol.tick(Duration::ZERO);
-        assert!(!protocol.is_complete());
-        protocol.tick(total);
-
-        assert!(protocol.is_complete());
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -510,6 +504,7 @@ fn run_windows(options: Options) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 fn save_snapshot(frame: &VideoFrame, path: &Path) -> Result<(), String> {
     let extension = path
         .extension()
@@ -810,4 +805,22 @@ fn json_escape(value: &str) -> String {
             other => vec![other],
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GuidedProtocol;
+    use std::time::Duration;
+
+    #[test]
+    fn guided_protocol_marks_the_exact_deadline_complete() {
+        let mut protocol = GuidedProtocol::new();
+        let total = protocol.total_duration();
+
+        protocol.tick(Duration::ZERO);
+        assert!(!protocol.is_complete());
+        protocol.tick(total);
+
+        assert!(protocol.is_complete());
+    }
 }
