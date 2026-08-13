@@ -53,8 +53,12 @@ blink left/right -> swap
 ```text
 AnimationSystems
  -> DirectPoseBodyTracking
+ -> ModelAdaptiveDefaultArmPose
+ -> DirectHeadRelativeLookAt / GazeControl
+ -> Expressions
  -> VrmSystemSets::Constraints
  -> PropagateAfterConstraints
+ -> SpringBone
 ```
 
 VRM 1.0はbone local rotationがidentityとは限らない。model-space deltaを各boneのrest orientationへ共役変換する。
@@ -82,6 +86,26 @@ Issue #17の二次補正は、解決upper displacementの18%を肩へ追従さ�
 Issue #18のmodel-specific tuningは、import content hashを`AvatarAssetId`としてversion 1のbounded `ArmPoseProfileOverride`へ対応付ける。bindingは`ArmPoseOverrideStore`から検証済み値だけを読み、未知version、非finite値、範囲外値は既定profileへfallbackする。storeの`entries`／`import_entries`がアプリ設定層との保存境界であり、同一session内のmodel unload／reloadではresourceが値を保持する。明示的なresetはgeometry-derived defaultへ戻す。
 
 初回default適用は0.25秒、defaultへ戻す操作は0.6秒の左右独立blendとする。blendはdelta quaternionをshortest arcでslerpし、経過時間を`Time::delta_secs`で進めるため固定FPS依存にならない。invalid timeは状態を進めず、generationごとに新規stateを作ることでreplacement間のpose transition漏れを防ぐ。
+
+### Final control-order contract (Issue #19)
+
+Issue #19で、実装が所有するwriterと制御順を次のように確定する。
+
+| 順序 | writer / system | 所有する値 | 禁止事項 |
+|---|---|---|---|
+| 1 | Bevy `AnimationSystems` | animation base `Transform` | — |
+| 2 | `bevy_vrm1` direct-pose `BodyTracking` | spine〜headのtracked body rotation | arm、eye、world targetの書き込み |
+| 3 | `apply_default_arm_pose` | upper/lower arm、optional shoulder/fingerのrest-relative local delta | handの直接world transform、head〜spineの上書き |
+| 4 | direct head-relative LookAt / `VrmSystemSets::GazeControl` | eye-in-head gaze delta | synthetic world-space cursor/target |
+| 5 | `ModifyExpressions` / `VrmSystemSets::Expressions` | supported expression weights | unsupported presetへの書き込み |
+| 6 | `VrmSystemSets::Constraints` → propagation → SpringBone | VRM runtime constraints and physics | constraints／SpringBoneの無効化 |
+
+Default-arm pose is a resolved generation-scoped state. It reads immutable
+`RestTransform`／`RestGlobalTransform`, composes onto the current animation base,
+and refreshes only the affected `ChildOf` subtrees. A missing or degenerate arm
+side is a safe no-op; the avatar remains eligible for required head binding.
+The local automated and manual-validation status for this contract is recorded
+in `docs/DEFAULT_ARM_POSE_VALIDATION_2026-08-14.md`.
 
 ### Gaze
 

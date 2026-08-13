@@ -10153,6 +10153,13 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 - root workspaceで`cargo fmt --all -- --check`、`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`、`cargo deny check`、`git diff --check`が成功した。対象の`cargo test -p vtuber-avatar --test binding`と`cargo clippy -p vtuber-avatar --all-targets -- -D warnings`も成功した。
 - Windows／macOSでの実VRM visual確認は`NOT RUN`。この自動検証は実画面の見た目をPASSと主張しない。
 
+**Issue #19 完了記録（2026-08-14）**
+
+- `docs/DEFAULT_ARM_POSE_VALIDATION_2026-08-14.md`へ、固定Bevy／`bevy_vrm1` revision、Windowsローカル自動検証、制御順、fallback、未実施の実VRM目視項目を記録した。
+- 非identity rest／非対称arm length／optional bone欠損／中間`ChildOf`／animation base preservation／no accumulation／replacement cleanup／finite degenerate input／30・60・120 FPS blendを既存testとIssue #18専用testでカバーした。
+- ADR-004の最終制御順を`AnimationSystems → BodyTracking → DefaultArmPose → head-relative GazeControl → Expressions → Constraints → propagation → SpringBone`へ確定し、arm compositorがhead〜spine、eye world target、hand world transformのwriterにならないことを明文化した。
+- 公式sample、VRoid export、実利用modelのfront／45°／side実VRM visual確認は、実操作を要するため`NOT RUN`。Windows／macOSのvisual PASS、MToon、SpringBone、camera結果は主張しない。GitHub Actionsは使用していない。
+
 ---
 
 # Research 3 — 自由研究としての評価

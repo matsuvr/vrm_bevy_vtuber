@@ -1317,9 +1317,17 @@ app.add_systems(
 
 app.add_systems(
     PostUpdate,
+    apply_default_arm_pose
+        .after(apply_direct_body_tracking_pose)
+        .before(update_direct_look_at_input)
+        .before(VrmSystemSets::Constraints),
+);
+
+app.add_systems(
+    PostUpdate,
     update_direct_look_at_input
         .in_set(VrmSystemSets::GazeControl)
-        .after(apply_direct_body_tracking_pose)
+        .after(apply_default_arm_pose)
         .before(VrmSystemSets::Expressions),
 );
 ```
