@@ -222,12 +222,14 @@ fn sync_error_presenter(
 /// System that renders the UI using egui.
 ///
 /// Reads [`UiViewModel`] and emits [`UiAction`] via [`UiState`].
+#[allow(clippy::too_many_arguments)]
 fn ui_render_system(
     mut contexts: EguiContexts,
     view_model: Res<UiViewModel>,
     mut ui_state: ResMut<UiState>,
     diagnostics: Res<DiagnosticsSnapshot>,
     preview: Res<PreviewState>,
+    landmarks: Res<PreviewLandmarkState>,
     avatar_motion_mirror: Res<AvatarMotionMirror>,
     mut file_dialog: ResMut<super::file_dialog::FileDialogState>,
 ) -> Result {
@@ -299,6 +301,7 @@ fn ui_render_system(
                         &view_model,
                         &mut ui_state,
                         &preview,
+                        &landmarks,
                         *avatar_motion_mirror,
                         preview_texture,
                     ),
