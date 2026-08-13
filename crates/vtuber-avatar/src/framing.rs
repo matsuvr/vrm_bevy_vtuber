@@ -1,5 +1,10 @@
 //! Avatar-aware viewport camera framing.
 
+// This foundation is intentionally added before the camera integration in
+// Issue #4, so its public(crate) API is unused until that follow-up lands.
+#[allow(dead_code)]
+pub(crate) mod head_subtree_bounds;
+
 use bevy::prelude::*;
 use bevy_vrm1::prelude::{HeadBoneEntity, HipsBoneEntity};
 
