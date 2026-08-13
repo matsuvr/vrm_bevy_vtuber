@@ -21,6 +21,20 @@ pub const AUTO_NEUTRAL_WINDOW: Duration = Duration::from_millis(1_200);
 pub const AUTO_NEUTRAL_MIN_SAMPLES: usize = 15;
 /// Minimum per-eye openness weight accepted for a neutral gaze candidate.
 const GAZE_NEUTRAL_MIN_WEIGHT: f32 = 0.6;
+/// One sample-slot tolerance for nanosecond timestamp quantization.
+///
+/// The configured window is 1.2 seconds and the minimum sample count is 15.
+/// At 15 Hz, integer nanosecond timestamps can leave a freshly trimmed window
+/// a few nanoseconds short of the exact duration.  This bounded tolerance is
+/// one configured sample slot; it does not retain or aggregate samples older
+/// than the trimmed window.
+const AUTO_NEUTRAL_CADENCE_TOLERANCE_NS: u64 =
+    (AUTO_NEUTRAL_WINDOW.as_nanos() / AUTO_NEUTRAL_MIN_SAMPLES as u128) as u64;
+/// Maximum retained candidates, derived from the required 30 Hz production
+/// rate plus two boundary samples.  The time trim remains authoritative for
+/// the temporal window; this cap also bounds bursts with identical timestamps.
+const AUTO_NEUTRAL_MAX_RECENT_SAMPLES: usize =
+    (AUTO_NEUTRAL_WINDOW.as_millis() as usize * 30 / 1_000) + 2;
 
 /// Per-eye neutral gaze baselines captured while looking near the camera.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -198,6 +212,7 @@ impl AutoNeutralCollector {
         }
 
         self.recent.push_back(candidate);
+        self.trim_window(candidate.captured_at);
 
         if !self.robust_window_active
             && self.recent.len() >= AUTO_NEUTRAL_MIN_SAMPLES
@@ -209,7 +224,6 @@ impl AutoNeutralCollector {
             self.gaze_baseline = aggregate_gaze_baseline(&self.recent, self.gaze_baseline);
             self.robust_window_active = true;
         }
-        self.trim_window(candidate.captured_at);
 
         let reference = self
             .reference
@@ -278,13 +292,20 @@ impl AutoNeutralCollector {
         }) {
             let _ = self.recent.pop_front();
         }
+        while self.recent.len() > AUTO_NEUTRAL_MAX_RECENT_SAMPLES {
+            let _ = self.recent.pop_front();
+        }
     }
 }
 
 fn spans_window(candidates: &VecDeque<Candidate>, window: Duration) -> bool {
     match (candidates.front(), candidates.back()) {
         (Some(first), Some(last)) => {
-            last.captured_at.0.saturating_sub(first.captured_at.0) >= window.as_nanos() as u64
+            last.captured_at
+                .0
+                .saturating_sub(first.captured_at.0)
+                .saturating_add(AUTO_NEUTRAL_CADENCE_TOLERANCE_NS)
+                >= window.as_nanos() as u64
         }
         _ => false,
     }
@@ -343,6 +364,7 @@ fn aggregate_gaze_baseline(
     candidates: &VecDeque<Candidate>,
     fallback: Option<GazeNeutralBaseline>,
 ) -> Option<GazeNeutralBaseline> {
+    let has_fallback = fallback.is_some();
     let fallback = fallback.unwrap_or_default();
     let left_horizontal = median_nonempty(
         candidates
@@ -368,7 +390,7 @@ fn aggregate_gaze_baseline(
         || left_vertical.is_some()
         || right_horizontal.is_some()
         || right_vertical.is_some();
-    has_any.then(|| GazeNeutralBaseline {
+    (has_fallback || has_any).then(|| GazeNeutralBaseline {
         left_horizontal: left_horizontal.unwrap_or(fallback.left_horizontal),
         right_horizontal: right_horizontal.unwrap_or(fallback.right_horizontal),
         left_vertical: left_vertical.unwrap_or(fallback.left_vertical),
@@ -528,6 +550,60 @@ mod tests {
     }
 
     #[test]
+    fn tracking_gap_discards_stale_samples_before_robust_activation() {
+        let mut collector = AutoNeutralCollector::new();
+        let interval = 1_000_000_000 / 15;
+        for seq in 0..14 {
+            let _ = collector.observe(&sample(seq + 1, seq * interval, 1.0));
+        }
+
+        let update = collector.observe(&sample(15, 3_000_000_000, 99.0)).unwrap();
+        assert!(!update.used_robust_window);
+        assert_eq!(update.recent_sample_count, 1);
+        assert_eq!(update.reference.translation_xyz[0], 1.0);
+    }
+
+    #[test]
+    fn fresh_samples_after_tracking_gap_eventually_form_the_robust_reference() {
+        let mut collector = AutoNeutralCollector::new();
+        let interval = 1_000_000_000 / 15;
+        for seq in 0..14 {
+            let _ = collector.observe(&sample(seq + 1, seq * interval, 1.0));
+        }
+
+        let mut activated = None;
+        for seq in 0..20 {
+            let update = collector
+                .observe(&sample(
+                    100 + seq,
+                    3_000_000_000 + seq * interval,
+                    10.0 + seq as f32,
+                ))
+                .unwrap();
+            if update.used_robust_window {
+                activated = Some(update);
+                break;
+            }
+        }
+
+        let update = activated.expect("fresh post-gap samples should activate robust neutral");
+        assert!(update.reference.translation_xyz[0] > 9.0);
+        assert!(update.recent_sample_count <= AUTO_NEUTRAL_MAX_RECENT_SAMPLES);
+    }
+
+    #[test]
+    fn recent_sample_count_stays_bounded_for_long_running_input() {
+        let mut collector = AutoNeutralCollector::new();
+        let interval = 1_000_000_000 / 30;
+        for seq in 0..5_000 {
+            let update = collector
+                .observe(&sample(seq + 1, seq * interval, 0.0))
+                .unwrap();
+            assert!(update.recent_sample_count <= AUTO_NEUTRAL_MAX_RECENT_SAMPLES);
+        }
+    }
+
+    #[test]
     fn robust_gaze_median_rejects_outlier_and_remains_active() {
         let mut collector = AutoNeutralCollector::new();
         let interval = 1_000_000_000 / 15;
@@ -590,6 +666,112 @@ mod tests {
         assert!(update.gaze_baseline_changed);
         assert_eq!(update.gaze_baseline.left_horizontal, 0.2);
         assert_eq!(update.gaze_baseline.right_horizontal, 0.3);
+    }
+
+    #[test]
+    fn robust_gaze_keeps_a_valid_fallback_when_all_candidates_are_excluded() {
+        let mut collector = AutoNeutralCollector::new();
+        let interval = 1_000_000_000 / 15;
+        let fallback_sample = sample_with_gaze(
+            1,
+            0,
+            &[
+                (MediaPipeBlendshape::EyeLookOutLeft, 0.2),
+                (MediaPipeBlendshape::EyeLookUpLeft, 0.1),
+                (MediaPipeBlendshape::EyeLookInRight, 0.3),
+                (MediaPipeBlendshape::EyeLookUpRight, 0.4),
+            ],
+        );
+        let fallback = collector.observe(&fallback_sample).unwrap().gaze_baseline;
+
+        let mut activated = None;
+        for seq in 1..=20 {
+            let sample = sample_with_gaze(
+                seq + 1,
+                seq * interval,
+                &[
+                    (MediaPipeBlendshape::EyeBlinkLeft, 1.0),
+                    (MediaPipeBlendshape::EyeBlinkRight, 1.0),
+                ],
+            );
+            let update = collector.observe(&sample).unwrap();
+            if update.used_robust_window {
+                activated = Some(update);
+                break;
+            }
+        }
+
+        let update = activated.expect("excluded gaze candidates should not block robust pose");
+        assert_eq!(update.gaze_baseline, fallback);
+        assert!(!update.gaze_baseline_changed);
+    }
+
+    #[test]
+    fn robust_gaze_updates_one_eye_and_retains_the_other_fallback() {
+        let mut collector = AutoNeutralCollector::new();
+        let interval = 1_000_000_000 / 15;
+        let fallback_sample = sample_with_gaze(
+            1,
+            0,
+            &[
+                (MediaPipeBlendshape::EyeLookOutLeft, 0.2),
+                (MediaPipeBlendshape::EyeLookUpLeft, 0.1),
+                (MediaPipeBlendshape::EyeLookInRight, 0.3),
+                (MediaPipeBlendshape::EyeLookUpRight, 0.4),
+            ],
+        );
+        let fallback = collector.observe(&fallback_sample).unwrap().gaze_baseline;
+
+        let mut activated = None;
+        for seq in 1..=20 {
+            let sample = sample_with_gaze(
+                seq + 1,
+                seq * interval,
+                &[
+                    (MediaPipeBlendshape::EyeLookOutLeft, 0.8),
+                    (MediaPipeBlendshape::EyeLookUpLeft, 0.6),
+                    (MediaPipeBlendshape::EyeBlinkRight, 1.0),
+                ],
+            );
+            let update = collector.observe(&sample).unwrap();
+            if update.used_robust_window {
+                activated = Some(update);
+                break;
+            }
+        }
+
+        let update = activated.expect("left-eye candidates should still activate robust pose");
+        assert_eq!(update.gaze_baseline.left_horizontal, 0.8);
+        assert_eq!(update.gaze_baseline.left_vertical, 0.6);
+        assert_eq!(
+            update.gaze_baseline.right_horizontal,
+            fallback.right_horizontal
+        );
+        assert_eq!(update.gaze_baseline.right_vertical, fallback.right_vertical);
+        assert!(update.gaze_baseline_changed);
+    }
+
+    #[test]
+    fn robust_gaze_stays_absent_without_fallback_or_valid_candidates() {
+        let mut collector = AutoNeutralCollector::new();
+        let interval = 1_000_000_000 / 15;
+        for seq in 0..20 {
+            let sample = sample_with_gaze(
+                seq + 1,
+                seq * interval,
+                &[
+                    (MediaPipeBlendshape::EyeBlinkLeft, 1.0),
+                    (MediaPipeBlendshape::EyeBlinkRight, 1.0),
+                ],
+            );
+            let update = collector.observe(&sample).unwrap();
+            if update.used_robust_window {
+                assert_eq!(collector.gaze_baseline(), None);
+                assert_eq!(update.gaze_baseline, GazeNeutralBaseline::default());
+                assert!(!update.gaze_baseline_changed);
+            }
+        }
+        assert_eq!(collector.gaze_baseline(), None);
     }
 
     #[test]
