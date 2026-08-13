@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 
+use vtuber_avatar::arm::ArmSide;
 use vtuber_avatar::bind::BindTriggered;
 use vtuber_avatar::binding::{AvatarBinding, bind_humanoid_bones};
 use vtuber_avatar::lifecycle::{ActiveAvatar, AvatarLifecycle, AvatarLifecycleState};
@@ -26,10 +27,59 @@ fn spawn_bone(app: &mut App) -> Entity {
         .id()
 }
 
+fn spawn_rest_bone(
+    app: &mut App,
+    position: Vec3,
+    local_rest_rotation: Quat,
+    global_rest_rotation: Quat,
+) -> Entity {
+    let rest = Transform::from_translation(position).with_rotation(local_rest_rotation);
+    let rest_global = GlobalTransform::from(
+        Transform::from_translation(position).with_rotation(global_rest_rotation),
+    );
+    app.world_mut()
+        .spawn((
+            Transform::from_translation(position + Vec3::new(0.0, 0.25, 0.0)),
+            GlobalTransform::from_translation(position + Vec3::new(0.0, 0.25, 0.0)),
+            RestTransform(rest),
+            RestGlobalTransform(rest_global),
+        ))
+        .id()
+}
+
 fn enter_binding(app: &mut App, root: Entity) {
     let mut lifecycle = app.world_mut().resource_mut::<AvatarLifecycle>();
     lifecycle.request_load(root).unwrap();
     lifecycle.start_binding(root);
+}
+
+fn spawn_complete_arm_root(app: &mut App, x: f32, y: f32) -> (Entity, Entity, Entity, Entity) {
+    let upper_arm = spawn_rest_bone(app, Vec3::new(x, y, 0.0), Quat::IDENTITY, Quat::IDENTITY);
+    let lower_arm = spawn_rest_bone(
+        app,
+        Vec3::new(x.signum() * (x.abs() + 0.5), y - 0.3, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let hand = spawn_rest_bone(
+        app,
+        Vec3::new(x.signum() * (x.abs() + 0.8), y - 0.6, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let head = spawn_bone(app);
+    let root = app
+        .world_mut()
+        .spawn((
+            ActiveAvatar,
+            BindTriggered,
+            HeadBoneEntity(head),
+            LeftUpperArmBoneEntity(upper_arm),
+            LeftLowerArmBoneEntity(lower_arm),
+            LeftHandBoneEntity(hand),
+        ))
+        .id();
+    (root, upper_arm, lower_arm, hand)
 }
 
 #[test]
@@ -150,6 +200,367 @@ fn humanoid_binding_despawned_head_fails() {
     let lifecycle = app.world().resource::<AvatarLifecycle>();
     assert_eq!(lifecycle.state(), AvatarLifecycleState::Failed);
     assert!(lifecycle.active_root().is_none());
+}
+
+#[test]
+fn humanoid_binding_caches_normal_symmetric_arm_chains() {
+    let mut app = test_app();
+    let head = spawn_bone(&mut app);
+    let left_upper_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.4, 1.4, 0.0),
+        Quat::from_rotation_x(0.2),
+        Quat::from_rotation_y(0.3),
+    );
+    let left_lower_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.9, 1.1, 0.0),
+        Quat::from_rotation_x(-0.2),
+        Quat::from_rotation_y(0.4),
+    );
+    let left_hand = spawn_rest_bone(
+        &mut app,
+        Vec3::new(1.2, 0.8, 0.0),
+        Quat::from_rotation_z(0.1),
+        Quat::from_rotation_y(0.5),
+    );
+    let right_upper_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(-0.4, 1.4, 0.0),
+        Quat::from_rotation_x(-0.2),
+        Quat::from_rotation_y(-0.3),
+    );
+    let right_lower_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(-0.9, 1.1, 0.0),
+        Quat::from_rotation_x(0.2),
+        Quat::from_rotation_y(-0.4),
+    );
+    let right_hand = spawn_rest_bone(
+        &mut app,
+        Vec3::new(-1.2, 0.8, 0.0),
+        Quat::from_rotation_z(-0.1),
+        Quat::from_rotation_y(-0.5),
+    );
+    let root = app
+        .world_mut()
+        .spawn((
+            ActiveAvatar,
+            BindTriggered,
+            HeadBoneEntity(head),
+            LeftUpperArmBoneEntity(left_upper_arm),
+            LeftLowerArmBoneEntity(left_lower_arm),
+            LeftHandBoneEntity(left_hand),
+            RightUpperArmBoneEntity(right_upper_arm),
+            RightLowerArmBoneEntity(right_lower_arm),
+            RightHandBoneEntity(right_hand),
+        ))
+        .id();
+
+    enter_binding(&mut app, root);
+    app.update();
+
+    let binding = app.world().get::<AvatarBinding>(root).unwrap();
+    let left = binding.left_arm.expect("left symmetric chain should bind");
+    let right = binding
+        .right_arm
+        .expect("right symmetric chain should bind");
+    assert!((left.rest.upper_arm_length - right.rest.upper_arm_length).abs() < 1.0e-6);
+    assert!((left.rest.forearm_length - right.rest.forearm_length).abs() < 1.0e-6);
+    assert!((left.rest.total_arm_length - right.rest.total_arm_length).abs() < 1.0e-6);
+    assert_eq!(
+        left.rest.upper_arm.position,
+        -right.rest.upper_arm.position * Vec3::new(1.0, -1.0, 1.0)
+    );
+    assert_eq!(
+        left.rest.elbow.position,
+        -right.rest.elbow.position * Vec3::new(1.0, -1.0, 1.0)
+    );
+    assert_eq!(
+        left.rest.wrist.position,
+        -right.rest.wrist.position * Vec3::new(1.0, -1.0, 1.0)
+    );
+}
+
+#[test]
+fn humanoid_binding_replacement_caches_fresh_arm_geometry_and_generation() {
+    let mut app = test_app();
+    let (root_a, upper_a, lower_a, hand_a) = spawn_complete_arm_root(&mut app, 0.4, 1.4);
+    enter_binding(&mut app, root_a);
+    app.update();
+
+    let binding_a = *app.world().get::<AvatarBinding>(root_a).unwrap();
+    let generation_a = binding_a.generation;
+    let left_a = binding_a.left_arm.expect("avatar A arm should bind");
+    assert_eq!(left_a.upper_arm, upper_a);
+    assert_eq!(left_a.lower_arm, lower_a);
+    assert_eq!(left_a.hand, hand_a);
+
+    let (root_b, upper_b, lower_b, hand_b) = spawn_complete_arm_root(&mut app, 0.7, 1.8);
+    app.world_mut()
+        .resource_mut::<AvatarLifecycle>()
+        .request_replace(root_b)
+        .expect("ready avatar should accept replacement");
+    app.world_mut().entity_mut(root_a).remove::<ActiveAvatar>();
+    app.world_mut().entity_mut(root_a).despawn();
+    app.world_mut()
+        .resource_mut::<AvatarLifecycle>()
+        .finish_unload();
+    app.world_mut().entity_mut(root_b).insert(ActiveAvatar);
+    {
+        let mut lifecycle = app.world_mut().resource_mut::<AvatarLifecycle>();
+        lifecycle.start_binding(root_b);
+    }
+    app.update();
+
+    let binding_b = app.world().get::<AvatarBinding>(root_b).unwrap();
+    let left_b = binding_b.left_arm.expect("avatar B arm should bind");
+    assert_ne!(binding_b.generation, generation_a);
+    assert_ne!(left_b.upper_arm, left_a.upper_arm);
+    assert_eq!(left_b.upper_arm, upper_b);
+    assert_eq!(left_b.lower_arm, lower_b);
+    assert_eq!(left_b.hand, hand_b);
+    assert_ne!(
+        left_b.rest.upper_arm.position,
+        left_a.rest.upper_arm.position
+    );
+    assert!(app.world().get_entity(root_a).is_err());
+}
+
+#[test]
+fn humanoid_binding_caches_asymmetric_rest_space_arm_geometry() {
+    let mut app = test_app();
+    let head = spawn_bone(&mut app);
+    let left_shoulder = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.2, 1.5, 0.0),
+        Quat::from_rotation_y(0.2),
+        Quat::from_rotation_z(0.1),
+    );
+    let left_upper_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.4, 1.4, 0.0),
+        Quat::from_rotation_x(0.3),
+        Quat::from_rotation_y(0.4),
+    );
+    let left_lower_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.9, 1.1, 0.0),
+        Quat::from_rotation_x(-0.25),
+        Quat::from_rotation_y(-0.2),
+    );
+    let left_hand = spawn_rest_bone(
+        &mut app,
+        Vec3::new(1.2, 0.8, 0.0),
+        Quat::from_rotation_z(0.15),
+        Quat::from_rotation_x(0.5),
+    );
+    let left_index_proximal = spawn_rest_bone(
+        &mut app,
+        Vec3::new(1.25, 0.75, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+
+    let right_upper_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(-0.4, 1.4, 0.0),
+        Quat::from_rotation_x(-0.3),
+        Quat::from_rotation_y(-0.4),
+    );
+    let right_lower_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(-0.8, 1.05, 0.0),
+        Quat::from_rotation_x(0.25),
+        Quat::from_rotation_y(0.2),
+    );
+    let right_hand = spawn_rest_bone(
+        &mut app,
+        Vec3::new(-1.0, 0.7, 0.0),
+        Quat::from_rotation_z(-0.15),
+        Quat::from_rotation_x(-0.5),
+    );
+
+    let root = app
+        .world_mut()
+        .spawn((
+            ActiveAvatar,
+            BindTriggered,
+            HeadBoneEntity(head),
+            LeftShoulderBoneEntity(left_shoulder),
+            LeftUpperArmBoneEntity(left_upper_arm),
+            LeftLowerArmBoneEntity(left_lower_arm),
+            LeftHandBoneEntity(left_hand),
+            LeftIndexProximalBoneEntity(left_index_proximal),
+            RightUpperArmBoneEntity(right_upper_arm),
+            RightLowerArmBoneEntity(right_lower_arm),
+            RightHandBoneEntity(right_hand),
+        ))
+        .id();
+
+    enter_binding(&mut app, root);
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<AvatarLifecycle>().state(),
+        AvatarLifecycleState::Ready
+    );
+    let binding = app.world().get::<AvatarBinding>(root).unwrap();
+    let left = binding
+        .left_arm
+        .expect("complete left arm should be cached");
+    let right = binding
+        .right_arm
+        .expect("complete right arm should be cached");
+
+    assert_eq!(left.side, ArmSide::Left);
+    assert_eq!(left.shoulder, Some(left_shoulder));
+    assert!(left.capabilities.has_shoulder);
+    assert!(left.capabilities.has_fingers);
+    assert_eq!(left.fingers.index.proximal, Some(left_index_proximal));
+    assert_eq!(left.rest.upper_arm.position, Vec3::new(0.4, 1.4, 0.0));
+    assert_eq!(left.rest.elbow.position, Vec3::new(0.9, 1.1, 0.0));
+    assert_eq!(left.rest.wrist.position, Vec3::new(1.2, 0.8, 0.0));
+    assert!((left.rest.upper_arm_length - 0.5830952).abs() < 1.0e-5);
+    assert!((left.rest.forearm_length - 0.42426407).abs() < 1.0e-5);
+    assert!((left.rest.total_arm_length - 1.0073593).abs() < 1.0e-5);
+    assert!(
+        left.rest
+            .upper_arm
+            .global_rotation
+            .dot(Quat::from_rotation_y(0.4))
+            .abs()
+            > 0.999_99
+    );
+    assert!(
+        left.rest
+            .upper_arm
+            .local_rotation
+            .dot(Quat::from_rotation_x(0.3))
+            .abs()
+            > 0.999_99
+    );
+
+    assert_eq!(right.side, ArmSide::Right);
+    assert!(!right.capabilities.has_shoulder);
+    assert!(!right.capabilities.has_fingers);
+    assert!((right.rest.upper_arm_length - 0.5315073).abs() < 1.0e-5);
+    assert!((right.rest.forearm_length - 0.4031129).abs() < 1.0e-5);
+}
+
+#[test]
+fn humanoid_binding_missing_optional_shoulder_and_fingers_keeps_complete_chain() {
+    let mut app = test_app();
+    let head = spawn_bone(&mut app);
+    let upper_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.4, 1.2, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let lower_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.9, 1.0, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let hand = spawn_rest_bone(
+        &mut app,
+        Vec3::new(1.2, 0.8, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let root = app
+        .world_mut()
+        .spawn((
+            ActiveAvatar,
+            BindTriggered,
+            HeadBoneEntity(head),
+            LeftUpperArmBoneEntity(upper_arm),
+            LeftLowerArmBoneEntity(lower_arm),
+            LeftHandBoneEntity(hand),
+        ))
+        .id();
+
+    enter_binding(&mut app, root);
+    app.update();
+
+    let binding = app.world().get::<AvatarBinding>(root).unwrap();
+    let left = binding
+        .left_arm
+        .expect("required arm chain should be present");
+    assert!(left.shoulder.is_none());
+    assert!(!left.capabilities.has_shoulder);
+    assert!(!left.capabilities.has_fingers);
+    assert_eq!(left.fingers, Default::default());
+}
+
+#[test]
+fn humanoid_binding_degenerate_or_nonfinite_rest_geometry_is_unavailable_only() {
+    let mut app = test_app();
+    let head = spawn_bone(&mut app);
+    let upper_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.4, 1.2, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let lower_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(0.4, 1.2, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let hand = spawn_rest_bone(
+        &mut app,
+        Vec3::new(1.2, 0.8, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let right_upper_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(f32::NAN, 1.2, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let right_lower_arm = spawn_rest_bone(
+        &mut app,
+        Vec3::new(-0.4, 1.0, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let right_hand = spawn_rest_bone(
+        &mut app,
+        Vec3::new(-0.7, 0.8, 0.0),
+        Quat::IDENTITY,
+        Quat::IDENTITY,
+    );
+    let root = app
+        .world_mut()
+        .spawn((
+            ActiveAvatar,
+            BindTriggered,
+            HeadBoneEntity(head),
+            LeftUpperArmBoneEntity(upper_arm),
+            LeftLowerArmBoneEntity(lower_arm),
+            LeftHandBoneEntity(hand),
+            RightUpperArmBoneEntity(right_upper_arm),
+            RightLowerArmBoneEntity(right_lower_arm),
+            RightHandBoneEntity(right_hand),
+        ))
+        .id();
+
+    enter_binding(&mut app, root);
+    app.update();
+
+    let binding = app.world().get::<AvatarBinding>(root).unwrap();
+    assert!(binding.left_arm.is_none());
+    assert!(binding.right_arm.is_none());
+    assert_eq!(binding.left_upper_arm, Some(upper_arm));
+    assert_eq!(
+        app.world().resource::<AvatarLifecycle>().state(),
+        AvatarLifecycleState::Ready
+    );
 }
 
 #[test]

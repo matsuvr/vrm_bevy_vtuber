@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod arm;
 pub mod bind;
 pub mod binding;
 pub mod capabilities;
@@ -21,6 +22,10 @@ pub mod plugin;
 pub mod pose;
 pub mod unload;
 
+pub use arm::{
+    ArmChainBinding, ArmChainCapabilities, ArmChainReferences, ArmRestGeometry, ArmSide,
+    FingerJointReferences, FingerReferences, RestSpaceBonePose,
+};
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};
 pub use capabilities::{
