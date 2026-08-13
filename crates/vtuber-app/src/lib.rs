@@ -41,6 +41,9 @@ pub mod placeholder;
 /// Camera preview texture pipeline.
 pub mod preview;
 
+/// Pure low-resolution conversion for the privacy camera preview.
+pub mod privacy_preview;
+
 /// Dev-only synthetic tracking source (feature-gated).
 #[cfg(feature = "dev-synthetic-input")]
 pub mod synthetic_tracking;
