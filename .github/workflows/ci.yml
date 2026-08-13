@@ -33,6 +33,9 @@ jobs:
         with:
           shared-key: vrm-bevy-vtuber
 
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

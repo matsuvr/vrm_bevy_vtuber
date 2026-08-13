@@ -517,6 +517,11 @@ impl TrackingPipeline {
             .expect("config was validated in constructor");
     }
 
+    /// Resets only eye-gaze smoothing after a neutral gaze baseline change.
+    pub fn reset_gaze_filter(&mut self) {
+        self.gaze_filter.reset();
+    }
+
     /// Runs one frame through the pipeline.
     ///
     /// `observation` is the latest inference output, or `None` when no face

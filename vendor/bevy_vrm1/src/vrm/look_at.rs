@@ -287,7 +287,7 @@ fn compose_direct_eye_rotation(
 ) -> Option<(Quat, AppliedEyeGaze)> {
     let gaze_delta = (rest.inverse() * target).normalize();
     let animated_base = match applied {
-        Some(applied) if current.abs_diff_eq(applied.last_output, 1.0e-5) => {
+        Some(applied) if same_rotation(current, applied.last_output, 1.0e-5) => {
             (current * applied.last_delta.inverse()).normalize()
         }
         _ => current,
@@ -300,6 +300,14 @@ fn compose_direct_eye_rotation(
             last_delta: gaze_delta,
         },
     ))
+}
+
+fn same_rotation(
+    a: Quat,
+    b: Quat,
+    epsilon: f32,
+) -> bool {
+    a.is_finite() && b.is_finite() && a.dot(b).abs() >= 1.0 - epsilon
 }
 
 fn expression_weights(
@@ -330,9 +338,16 @@ fn map_range(
     if !input.is_finite()
         || !range.input_max_value.is_finite()
         || !range.output_scale.is_finite()
-        || range.input_max_value <= 0.0
+        || range.input_max_value < 0.0
     {
         return 0.0;
+    }
+    if range.input_max_value == 0.0 {
+        return if input == 0.0 {
+            0.0
+        } else {
+            range.output_scale.max(0.0).clamp(0.0, 1.0)
+        };
     }
     (input.min(range.input_max_value) / range.input_max_value * range.output_scale).clamp(0.0, 1.0)
 }
@@ -520,9 +535,16 @@ fn map_range_output(
     if !input.is_finite()
         || !range.input_max_value.is_finite()
         || !range.output_scale.is_finite()
-        || range.input_max_value <= 0.0
+        || range.input_max_value < 0.0
     {
         return 0.0;
+    }
+    if range.input_max_value == 0.0 {
+        return if input == 0.0 {
+            0.0
+        } else {
+            range.output_scale.max(0.0)
+        };
     }
     input.min(range.input_max_value) / range.input_max_value * range.output_scale.max(0.0)
 }
@@ -578,14 +600,19 @@ mod tests {
     }
 
     #[test]
-    fn zero_input_max_value_produces_neutral_without_division() {
+    fn zero_input_max_value_steps_nonzero_input_to_output_scale() {
         let mut properties = properties(LookAtType::Expression);
         properties.range_map_horizontal_outer.input_max_value = 0.0;
         let weights = expression_weights(&properties, 30.0, 0.0, 1.0);
-        assert_eq!(weights.look_left, 0.0);
+        assert_eq!(weights.look_left, 1.0);
         assert!(weights.look_left.is_finite());
         assert_eq!(
             map_range_output(30.0, properties.range_map_horizontal_outer),
+            properties.range_map_horizontal_outer.output_scale
+        );
+        assert_eq!(map_range(0.0, properties.range_map_horizontal_outer), 0.0);
+        assert_eq!(
+            map_range_output(0.0, properties.range_map_horizontal_outer),
             0.0
         );
     }
@@ -650,6 +677,15 @@ mod tests {
         let (first, state) = compose_direct_eye_rotation(rest, rest, target, None).unwrap();
         let (second, _) = compose_direct_eye_rotation(first, rest, target, Some(state)).unwrap();
         assert!(second.abs_diff_eq(first, 1.0e-5));
+    }
+
+    #[test]
+    fn sign_flipped_quaternion_does_not_reapply_direct_eye_delta() {
+        let rest = Quat::IDENTITY;
+        let target = Quat::from_rotation_y(0.2);
+        let (first, state) = compose_direct_eye_rotation(rest, rest, target, None).unwrap();
+        let (output, _) = compose_direct_eye_rotation(-first, rest, target, Some(state)).unwrap();
+        assert!(same_rotation(output, first, 1.0e-5));
     }
 
     #[test]

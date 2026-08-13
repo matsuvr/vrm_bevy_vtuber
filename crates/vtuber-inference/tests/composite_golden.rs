@@ -73,6 +73,7 @@ fn composite_golden_mean_frame_is_no_face_without_landmark_execution() {
 }
 
 #[test]
+#[ignore = "requires downloaded legacy UltraFace and Peppa Pig ONNX research artifacts"]
 fn composite_golden_actual_ultraface_mean_frame_is_no_face() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

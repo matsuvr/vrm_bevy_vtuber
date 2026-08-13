@@ -18,6 +18,7 @@ fn model_path() -> PathBuf {
 }
 
 #[test]
+#[ignore = "requires the downloaded legacy UltraFace ONNX research artifact"]
 fn detector_runtime_ultraface_runnable_receives_tensor_and_returns_raw_outputs() {
     let detector = UltraFaceDetector::from_path(model_path())
         .expect("the exact supplied UltraFace artifact should be runnable");

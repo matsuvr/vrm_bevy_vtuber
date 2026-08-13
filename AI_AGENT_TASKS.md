@@ -48,7 +48,7 @@ repository基準: `main`が少なくとも次を含むこと。
 | `M1-08-022` | `DONE` | C922とELECOMの起動時列挙、symbolic-link identity選択、C922実previewを確認した。 |
 | `M1-09` | `DEFERRED` | macOS開発環境へ移るまで保留。削除・DONE扱いはしないが、Windows-only Quality 2の開始条件にはしない。 |
 | `Q2-01`〜`Q2-05` | `PENDING` | Windows部分は`M1-08-019`のWindows gate PASS後に開始可能。macOS固有・両OS比較部分は`M1-09`完了まで保留する。 |
-| `Q2-06` | `DONE` | `Q2-06-001`でdirect-pose `bevy_vrm1::BodyTracking`を導入し、上半身追従を統合した。 |
+| `Q2-06` | `IN_PROGRESS` | `Q2-06-001`〜`002`を実装済み。review blockerを`Q2-06-002-001`〜`004`で修正中。 |
 | `R3-01` | `PENDING` | Windows実験は`Q2-01`のWindows経路と`Q2-03-007`完了後に開始可能。macOS比較は後日追補する。 |
 
 M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05`のWindows部分から一つのtask ID**である。M1-08-018はC922 symbolic-link明示選択後のreal preview、real-VRM head／blink／mouth／gaze、capture-to-apply、Stop／Start 3回と既存recovery evidenceを統合して`DONE`、M1-08-019はbounded performance gateをPASSした。`M1-09`は`DEFERRED`のままとする。
@@ -95,7 +95,7 @@ M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05
 | `Q2-03` | `Q2-03-001`〜`Q2-03-008` | 8 | `PENDING`（008はmacOS再開までdeferred） |
 | `Q2-04` | `Q2-04-001`〜`Q2-04-008` | 8 | `PENDING`（004〜008はmacOS再開までdeferred） |
 | `Q2-05` | `Q2-05-001`〜`Q2-05-008` | 8 | `PENDING` |
-| `Q2-06` | `Q2-06-001` | 1 | `DONE` |
+| `Q2-06` | `Q2-06-001`〜`Q2-06-002`、repair `Q2-06-002-001`〜`004` | 2 + repair 4 | `IN_PROGRESS` |
 | `R3-01` | `R3-01-001`〜`R3-01-010` | 10 | `PENDING` |
 
 ### 0.4 status更新
@@ -9878,8 +9878,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 ## Q2-06: BodyTracking上半身追従とhead-relative gaze
 
-状態: `DONE`
-実行単位: `Q2-06-001`、`Q2-06-002`
+状態: `IN_PROGRESS`
+実行単位: `Q2-06-001`、`Q2-06-002`、repair `Q2-06-002-001`〜`Q2-06-002-004`
 重点参照: DESIGN.md §7.3、§11.8、§15.4、§16.5〜§16.9、ADR-002、ADR-004、ADR-010
 
 ### 目的
@@ -9946,7 +9946,7 @@ cargo deny check
 - 毎frameのbone名検索、固定lerp、rest orientationの重複cache、tracking deltaの累積を導入しない。
 - VRMA playbackまたは未実施hardware acceptanceを対応済みと表現しない。
 
-**完了記録（2026-08-12）**
+**完了記録（2026-08-13）**
 
 - upstream revision `f9593fd78136fb9e0507bcae111e09291ec9b82a`をbaseとして、licenseとprovenanceを保持したvendored patchへdirect yaw／pitch／roll入力、axis別weight、yaw engagement、optional bone再正規化、bone別half-life／limitを追加した。
 - `vtuber-avatar`はbone Transformを直接書かず、generation一致の`BodyTrackingPoseInput`だけを更新する。旧`HeadNeckWeights`とrest orientation cacheは永続化対象ではなかったため、設定migrationは不要だった。
@@ -10010,6 +10010,47 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 - vendored `bevy_vrm1`でfmt、all-target check、all-target clippy、76 unit tests、10 doctestsが成功した。base revisionとlicenseは不変である。
 - Windowsではlicensed test VRM 1.0のimport、描画、lifecycle `Ready`まで実画面で確認した。C922 MSMFは5秒で150 framesを取得しstage errorなしだったが、顔がframe内になく`face_count=0`だったため、head／eye visual acceptanceは`NOT RUN`。macOS実機確認も`NOT RUN`。
 - commits: `docs(gaze): define head-relative coordination`、`refactor(core): make gaze availability explicit`、`feat(tracking): filter calibrated binocular gaze`、`feat(vrm): add direct head-relative look at`、`feat(avatar): coordinate gaze through VRM LookAt`、`test(vrm): verify additive direct eye gaze`、`test(gaze): cover composition and schedule regressions`、`chore(policy): audit locked runtime licenses`、`docs(gaze): record Q2-06-002 completion`。
+
+#### Q2-06-002-001: backend fallbackのrange-map単位を修正する
+
+状態: `DONE`
+依存: `Q2-06-002`
+
+- 宣言backendと選択backendが一致する場合だけモデルのrange mapをそのまま使う。
+- backend変更時は`inputMaxValue`を保持し、`outputScale`をBoneの度またはExpression weightへ変換する。
+- Expression→Bone、Bone→Expression、metadataなし→Bone／Expressionをbinding後の実効値で検証する。
+
+#### Q2-06-002-002: auto-neutral窓とgaze baseline品質を修正する
+
+状態: `DONE`
+依存: `Q2-06-002-001`
+
+- 15Hzでも15 sampleのrobust windowへ到達できる期間へ変更する。
+- blink／低weightの眼をgaze baseline集計から除外する。
+- pose referenceとgaze baselineの変更通知を分離し、該当filterをresetする。
+
+#### Q2-06-002-003: VRM zero-rangeとQuaternion signを修正する
+
+状態: `DONE`
+依存: `Q2-06-002-002`
+
+- `inputMaxValue == 0`のVRM 1.0推奨挙動をBone／Expressionの両mappingで実装する。
+- 同一回転を表す`q`／`-q`でdirect eye deltaが二重適用されないようにする。
+
+#### Q2-06-002-004: CI・実schedule test・visual gate状態を修正する
+
+状態: `DONE`
+依存: `Q2-06-002-003`
+
+- `percentile_ms`を全platformでtest compile可能にする。
+- 実際の`VtuberAvatarPlugin`／`VrmPlugin`登録を使うschedule回帰testを追加する。
+- Windows実カメラ＋実VRM visual acceptanceとmacOS実機確認は、証拠がなければ`PENDING`／`NOT RUN`のままにする。
+
+**完了記録（2026-08-12）**
+
+- `percentile_ms`のWindows限定compile guardを外し、macOS test moduleでも同じpure functionをcompileできるようにした。
+- 手組みのset順テストを、実際の`VtuberAvatarPlugin`が追加する`VrmPlugin`とavatar bridge systemへtrace systemを加えた解決済み実行順検査へ置き換えた。
+- Windows C922＋実VRM visual acceptance 6項目は`PENDING`、macOS実機確認は`NOT RUN`。過去のM1眼球確認をhead-relative gaze修正後の証拠として再利用しない。
 
 ---
 
