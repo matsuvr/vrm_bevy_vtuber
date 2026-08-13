@@ -425,6 +425,14 @@ fn humanoid_binding_caches_asymmetric_rest_space_arm_geometry() {
     assert!(left.capabilities.has_shoulder);
     assert!(left.capabilities.has_fingers);
     assert_eq!(left.fingers.index.proximal, Some(left_index_proximal));
+    assert_eq!(
+        left.finger_rest.index.proximal.unwrap().entity,
+        left_index_proximal
+    );
+    assert_eq!(
+        left.finger_rest.index.proximal.unwrap().rest.position,
+        Vec3::new(1.25, 0.75, 0.0)
+    );
     assert_eq!(left.rest.upper_arm.position, Vec3::new(0.4, 1.4, 0.0));
     assert_eq!(left.rest.elbow.position, Vec3::new(0.9, 1.1, 0.0));
     assert_eq!(left.rest.wrist.position, Vec3::new(1.2, 0.8, 0.0));

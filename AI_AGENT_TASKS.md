@@ -10146,6 +10146,7 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 
 - bindingがcomplete arm chainを一度だけ解決し、rest-space geometryからanalytic IK poseをgeneration付きでcacheする。`RestTransform`／`RestGlobalTransform`は不変である。
 - AnimationSystemsとdirect `BodyTracking`後のcompositorがupper／lowerへrest-relative deltaを適用し、前frame出力の検出で累積を防ぐ。actual `ChildOf`経路のintermediate nodeを含むGlobalTransform propagationを行う。
+- Issue #17で解決upper displacementの18%・最大5°のshoulder followと、authored rest-global axisへ変換した10°のoptional finger curlを追加した。wrist／handは固定角度を書かずlower armの階層伝播でauthored orientationを保つ。
 - binding／IK／compositor integration testでnon-identity rest、target reach、small animation update、intermediate propagation、generation replacement、missing/degenerate chainのno-opを固定した。旧bind-time固定±55°仕様はIssue #16で廃止した。
 - root workspaceで`cargo fmt --all -- --check`、`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`、`cargo deny check`、`git diff --check`が成功した。対象の`cargo test -p vtuber-avatar --test binding`と`cargo clippy -p vtuber-avatar --all-targets -- -D warnings`も成功した。
 - Windows／macOSでの実VRM visual確認は`NOT RUN`。この自動検証は実画面の見た目をPASSと主張しない。

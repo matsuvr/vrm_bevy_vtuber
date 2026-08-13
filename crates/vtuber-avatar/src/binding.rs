@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use crate::arm::{
     ArmChainBinding, ArmChainReferences, ArmRestGeometry, ArmSide, FingerJointReferences,
-    FingerReferences, RestSpaceBonePose,
+    FingerJointRestBinding, FingerJointRestReferences, FingerReferences, FingerRestReferences,
+    RestSpaceBonePose,
 };
 use crate::arm_pose::DefaultArmPose;
 use crate::bind::BindTriggered;
@@ -599,10 +600,10 @@ fn resolve_arm_chain(
         return None;
     }
 
-    let fingers = resolve_finger_references(references.fingers, bone_query);
+    let (fingers, finger_rest) = resolve_finger_references(references.fingers, bone_query);
     let capabilities = crate::arm::ArmChainCapabilities {
         has_shoulder: rest.shoulder.is_some(),
-        has_fingers: fingers.has_any(),
+        has_fingers: finger_rest.has_any(),
     };
 
     Some(ArmChainBinding {
@@ -612,6 +613,7 @@ fn resolve_arm_chain(
         lower_arm,
         hand,
         fingers,
+        finger_rest,
         rest: ArmRestGeometry {
             upper_arm_length,
             forearm_length,
@@ -629,14 +631,22 @@ fn resolve_finger_references(
         Option<&RestTransform>,
         Option<&RestGlobalTransform>,
     )>,
-) -> FingerReferences {
-    FingerReferences {
+) -> (FingerReferences, FingerRestReferences) {
+    let fingers = FingerReferences {
         thumb: resolve_finger_joints("thumb", references.thumb, bone_query),
         index: resolve_finger_joints("index", references.index, bone_query),
         middle: resolve_finger_joints("middle", references.middle, bone_query),
         ring: resolve_finger_joints("ring", references.ring, bone_query),
         little: resolve_finger_joints("little", references.little, bone_query),
-    }
+    };
+    let rest = FingerRestReferences {
+        thumb: resolve_finger_rest_joints(fingers.thumb, bone_query),
+        index: resolve_finger_rest_joints(fingers.index, bone_query),
+        middle: resolve_finger_rest_joints(fingers.middle, bone_query),
+        ring: resolve_finger_rest_joints(fingers.ring, bone_query),
+        little: resolve_finger_rest_joints(fingers.little, bone_query),
+    };
+    (fingers, rest)
 }
 
 fn resolve_finger_joints(
@@ -653,6 +663,28 @@ fn resolve_finger_joints(
         proximal: resolve_optional_bone(name, references.proximal, bone_query),
         intermediate: resolve_optional_bone(name, references.intermediate, bone_query),
         distal: resolve_optional_bone(name, references.distal, bone_query),
+    }
+}
+
+fn resolve_finger_rest_joints(
+    references: FingerJointReferences,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+) -> FingerJointRestReferences {
+    let rest = |entity: Option<Entity>| {
+        entity.and_then(|entity| {
+            rest_space_pose(entity, bone_query)
+                .map(|pose| FingerJointRestBinding { entity, rest: pose })
+        })
+    };
+    FingerJointRestReferences {
+        metacarpal: rest(references.metacarpal),
+        proximal: rest(references.proximal),
+        intermediate: rest(references.intermediate),
+        distal: rest(references.distal),
     }
 }
 

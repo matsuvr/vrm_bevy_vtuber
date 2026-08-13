@@ -26,9 +26,13 @@ pub mod unload;
 pub use arm::{
     ArmChainBinding, ArmChainCapabilities, ArmChainReferences, ArmIkError, ArmIkInput,
     ArmIkSolution, ArmIkTarget, ArmPoseProfile, ArmRestGeometry, ArmSide, FingerJointReferences,
-    FingerReferences, RestSpaceBonePose, default_arm_target, solve_two_bone_arm,
+    FingerJointRestBinding, FingerJointRestReferences, FingerReferences, FingerRestReferences,
+    RestSpaceBonePose, default_arm_target, solve_two_bone_arm,
 };
-pub use arm_pose::{DefaultArmPose, ResolvedArmPose, apply_default_arm_pose};
+pub use arm_pose::{
+    DefaultArmPose, ResolvedArmPose, ResolvedBoneDelta, ResolvedFingerJointPose,
+    ResolvedFingerPose, apply_default_arm_pose,
+};
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};
 pub use capabilities::{

@@ -17,9 +17,9 @@ pub enum ArmSide {
 
 /// Entity references for one finger's authored joints.
 ///
-/// These are references only. Issue #14 deliberately does not apply any
-/// finger pose. The optional metacarpal is retained because VRM 1.0 exposes
-/// it for the thumb and later relaxation may need the authored joint chain.
+/// These are references only; immutable rest poses for available joints are
+/// cached separately in [`FingerRestReferences`]. The optional metacarpal is
+/// retained because VRM 1.0 exposes it for the thumb's relaxation chain.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FingerJointReferences {
     /// Optional metacarpal joint (normally present for the thumb).
@@ -67,6 +67,66 @@ impl FingerReferences {
             || self.middle.is_present()
             || self.ring.is_present()
             || self.little.is_present()
+    }
+}
+
+/// One authored finger joint with its immutable rest-space pose.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FingerJointRestBinding {
+    /// Finger joint entity.
+    pub entity: Entity,
+    /// Immutable rest-space pose.
+    pub rest: RestSpaceBonePose,
+}
+
+/// Optional rest-space finger data for one arm.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FingerRestReferences {
+    /// Thumb joints.
+    pub thumb: FingerJointRestReferences,
+    /// Index-finger joints.
+    pub index: FingerJointRestReferences,
+    /// Middle-finger joints.
+    pub middle: FingerJointRestReferences,
+    /// Ring-finger joints.
+    pub ring: FingerJointRestReferences,
+    /// Little-finger joints.
+    pub little: FingerJointRestReferences,
+}
+
+impl FingerRestReferences {
+    /// Returns whether at least one finger joint has valid rest data.
+    #[must_use]
+    pub const fn has_any(self) -> bool {
+        self.thumb.has_any()
+            || self.index.has_any()
+            || self.middle.has_any()
+            || self.ring.has_any()
+            || self.little.has_any()
+    }
+}
+
+/// Optional rest-space data for the joints of one finger.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FingerJointRestReferences {
+    /// Metacarpal joint.
+    pub metacarpal: Option<FingerJointRestBinding>,
+    /// Proximal joint.
+    pub proximal: Option<FingerJointRestBinding>,
+    /// Intermediate joint.
+    pub intermediate: Option<FingerJointRestBinding>,
+    /// Distal joint.
+    pub distal: Option<FingerJointRestBinding>,
+}
+
+impl FingerJointRestReferences {
+    /// Returns whether at least one joint has valid rest data.
+    #[must_use]
+    pub const fn has_any(self) -> bool {
+        self.metacarpal.is_some()
+            || self.proximal.is_some()
+            || self.intermediate.is_some()
+            || self.distal.is_some()
     }
 }
 
@@ -148,6 +208,8 @@ pub struct ArmChainBinding {
     pub hand: Entity,
     /// Optional authored finger entities.
     pub fingers: FingerReferences,
+    /// Optional authored finger rest-space poses.
+    pub finger_rest: FingerRestReferences,
     /// Immutable rest-space positions/orientations and lengths.
     pub rest: ArmRestGeometry,
     /// Optional shoulder/finger capability flags.

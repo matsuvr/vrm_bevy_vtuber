@@ -3,8 +3,8 @@
 use bevy::prelude::*;
 use vtuber_avatar::{
     ArmChainBinding, ArmChainCapabilities, ArmIkError, ArmIkInput, ArmIkTarget, ArmPoseProfile,
-    ArmRestGeometry, ArmSide, FingerReferences, RestSpaceBonePose, default_arm_target,
-    solve_two_bone_arm,
+    ArmRestGeometry, ArmSide, FingerReferences, FingerRestReferences, RestSpaceBonePose,
+    default_arm_target, solve_two_bone_arm,
 };
 
 fn chain(side: ArmSide, upper_length: f32, forearm_length: f32) -> ArmChainBinding {
@@ -38,6 +38,7 @@ fn chain(side: ArmSide, upper_length: f32, forearm_length: f32) -> ArmChainBindi
             total_arm_length: upper_length + forearm_length,
         },
         capabilities: ArmChainCapabilities::default(),
+        finger_rest: FingerRestReferences::default(),
     }
 }
 

@@ -1281,7 +1281,9 @@ Issue #15のpure analytic two-bone IKが、モデルごとのrest geometryから
 
 Issue #16のcompositorは`AnimationSystems`とdirect-pose `BodyTracking`の後、direct head-relative gaze／`VrmSystemSets::GazeControl`および`VrmSystemSets::Constraints`の前に毎frame実行する。保存したupper／lowerのrest-relative deltaをanimation baseへ`base * delta`で加算し、前frameのcomposed outputと比較してdeltaを累積させない。実際の`ChildOf`経路を上位から再計算し、非Humanoid中間nodeを含む影響subtreeの`GlobalTransform`を更新する。
 
-`RestTransform`／`RestGlobalTransform`は変更しない。`BodyTracking`はhead、neck、upperChest、chest、spineの唯一の追跡姿勢writerであり、default arm poseはupper／lower armのlocal Transformだけを対象とする。generation不一致、avatar replacement、欠損／退化geometryは安全なno-opとし、lower armやhandへworld transformを直接書き込まない。
+`RestTransform`／`RestGlobalTransform`は変更しない。`BodyTracking`はhead、neck、upperChest、chest、spineの唯一の追跡姿勢writerであり、default arm poseはupper／lower armとoptional shoulder／fingerのlocal Transformだけを対象とする。generation不一致、avatar replacement、欠損／退化geometryは安全なno-opとし、handへworld transformを直接書き込まない。
+
+Issue #17では、解決upper displacementから肩へ18%だけ追従させ、肩deltaを最大5°に制限する。利用可能なfinger jointには、各jointのrest-global axisへ変換した10°の弱いcurlを適用する。wrist／handには固定角度を書かず、lower armの解決回転を実際の`ChildOf`経路で伝播して、モデル作者のrest wrist orientationを保つ。optional boneの欠損は各補正のno-opとする。
 
 ### 16.5 system order
 

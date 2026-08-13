@@ -7,11 +7,17 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use crate::arm::{ArmChainBinding, ArmIkInput, default_arm_target, solve_two_bone_arm};
+use crate::arm::{
+    ArmChainBinding, ArmIkInput, ArmPoseProfile, FingerJointRestBinding, FingerJointRestReferences,
+    FingerRestReferences, default_arm_target, solve_two_bone_arm,
+};
 use crate::binding::AvatarBinding;
 use crate::lifecycle::{ActiveAvatar, AvatarGeneration};
 
 const ROTATION_MATCH_EPSILON: f32 = 1.0e-6;
+const SHOULDER_FOLLOW_WEIGHT: f32 = 0.18;
+const SHOULDER_FOLLOW_MAX_RADIANS: f32 = 5.0_f32.to_radians();
+const FINGER_CURL_RADIANS: f32 = 10.0_f32.to_radians();
 
 /// A resolved default pose for one complete arm chain.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -24,6 +30,47 @@ pub struct ResolvedArmPose {
     pub upper_arm_delta: Quat,
     /// Lower-arm local rest-relative rotation.
     pub lower_arm_delta: Quat,
+    /// Optional weak shoulder-follow correction.
+    pub shoulder: Option<ResolvedBoneDelta>,
+    /// Authored finger curl corrections.
+    pub fingers: ResolvedFingerPose,
+}
+
+/// One optional bone's local rest-relative correction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedBoneDelta {
+    /// Bone entity receiving the correction.
+    pub entity: Entity,
+    /// Local rest-relative correction.
+    pub delta: Quat,
+}
+
+/// Resolved weak curl corrections for one arm's finger joints.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ResolvedFingerPose {
+    /// Thumb corrections.
+    pub thumb: ResolvedFingerJointPose,
+    /// Index-finger corrections.
+    pub index: ResolvedFingerJointPose,
+    /// Middle-finger corrections.
+    pub middle: ResolvedFingerJointPose,
+    /// Ring-finger corrections.
+    pub ring: ResolvedFingerJointPose,
+    /// Little-finger corrections.
+    pub little: ResolvedFingerJointPose,
+}
+
+/// Resolved corrections for the joints of one finger.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ResolvedFingerJointPose {
+    /// Metacarpal correction.
+    pub metacarpal: Option<ResolvedBoneDelta>,
+    /// Proximal correction.
+    pub proximal: Option<ResolvedBoneDelta>,
+    /// Intermediate correction.
+    pub intermediate: Option<ResolvedBoneDelta>,
+    /// Distal correction.
+    pub distal: Option<ResolvedBoneDelta>,
 }
 
 /// The typed default arm pose resolved for one avatar generation.
@@ -49,7 +96,7 @@ impl DefaultArmPose {
         left: Option<ArmChainBinding>,
         right: Option<ArmChainBinding>,
     ) -> Self {
-        let profile = crate::arm::ArmPoseProfile::default();
+        let profile = ArmPoseProfile::default();
         Self {
             generation,
             left: left.and_then(|chain| resolve_chain(chain, profile)),
@@ -73,12 +120,100 @@ fn resolve_chain(
         return None;
     }
 
+    let upper_model_delta = normalized_or_identity(
+        solution.upper_arm_global_rotation * chain.rest.upper_arm.global_rotation.inverse(),
+    )?;
+    let shoulder = chain
+        .shoulder
+        .zip(chain.rest.shoulder)
+        .and_then(|(entity, rest)| {
+            weak_follow_delta(upper_model_delta, rest.global_rotation)
+                .map(|delta| ResolvedBoneDelta { entity, delta })
+        });
+
     Some(ResolvedArmPose {
         upper_arm: chain.upper_arm,
         lower_arm: chain.lower_arm,
         upper_arm_delta: solution.upper_arm_delta.normalize(),
         lower_arm_delta: solution.lower_arm_delta.normalize(),
+        shoulder,
+        fingers: resolve_finger_pose(chain.finger_rest),
     })
+}
+
+fn normalized_or_identity(value: Quat) -> Option<Quat> {
+    if value.is_finite() && value.length_squared() > f32::EPSILON {
+        Some(value.normalize())
+    } else {
+        None
+    }
+}
+
+fn weak_follow_delta(model_delta: Quat, rest_global: Quat) -> Option<Quat> {
+    let model_delta = normalized_or_identity(model_delta)?;
+    let (axis, angle) = model_delta.to_axis_angle();
+    let angle = (angle * SHOULDER_FOLLOW_WEIGHT).min(SHOULDER_FOLLOW_MAX_RADIANS);
+    let weak_model_delta = Quat::from_axis_angle(axis, angle);
+    normalized_or_identity(rest_global.inverse() * weak_model_delta * rest_global)
+}
+
+fn resolve_finger_pose(fingers: FingerRestReferences) -> ResolvedFingerPose {
+    ResolvedFingerPose {
+        thumb: resolve_finger_joints(fingers.thumb),
+        index: resolve_finger_joints(fingers.index),
+        middle: resolve_finger_joints(fingers.middle),
+        ring: resolve_finger_joints(fingers.ring),
+        little: resolve_finger_joints(fingers.little),
+    }
+}
+
+fn resolve_finger_joints(finger: FingerJointRestReferences) -> ResolvedFingerJointPose {
+    ResolvedFingerJointPose {
+        metacarpal: resolve_finger_joint(finger.metacarpal, finger.proximal, None),
+        proximal: resolve_finger_joint(finger.proximal, finger.intermediate, finger.metacarpal),
+        intermediate: resolve_finger_joint(finger.intermediate, finger.distal, finger.proximal),
+        distal: resolve_finger_joint(finger.distal, None, finger.intermediate),
+    }
+}
+
+fn resolve_finger_joint(
+    joint: Option<FingerJointRestBinding>,
+    next: Option<FingerJointRestBinding>,
+    previous: Option<FingerJointRestBinding>,
+) -> Option<ResolvedBoneDelta> {
+    let joint = joint?;
+    let segment = next
+        .map(|next| next.rest.position - joint.rest.position)
+        .or_else(|| previous.map(|previous| joint.rest.position - previous.rest.position))?;
+    let segment_direction = finite_normalized(segment)?;
+    // Prefer authored local Z/Y axes, projected off the finger segment. This
+    // gives a bend axis for the common straight +X finger without assuming a
+    // universal world Euler axis, while still handling unusual authored axes.
+    let axis = [
+        joint.rest.global_rotation * Vec3::Z,
+        joint.rest.global_rotation * Vec3::Y,
+        joint.rest.global_rotation * Vec3::X,
+    ]
+    .into_iter()
+    .map(|candidate| candidate - segment_direction * candidate.dot(segment_direction))
+    .find_map(finite_normalized)?;
+    let model_delta = Quat::from_axis_angle(axis, FINGER_CURL_RADIANS);
+    let delta = normalized_or_identity(
+        joint.rest.global_rotation.inverse() * model_delta * joint.rest.global_rotation,
+    )?;
+    Some(ResolvedBoneDelta {
+        entity: joint.entity,
+        delta,
+    })
+}
+
+fn finite_normalized(value: Vec3) -> Option<Vec3> {
+    let length_squared = value.length_squared();
+    if value.is_finite() && length_squared.is_finite() && length_squared > f32::EPSILON {
+        Some(value.normalize())
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -122,26 +257,70 @@ pub fn apply_default_arm_pose(
         }
 
         for resolved in [pose.left, pose.right].into_iter().flatten() {
-            let upper_changed = apply_delta(
+            let mut any_changed = false;
+            if let Some(shoulder) = resolved.shoulder {
+                any_changed |= apply_delta(
+                    shoulder.entity,
+                    shoulder.delta,
+                    &mut transforms,
+                    &mut bone_states,
+                );
+            }
+            any_changed |= apply_delta(
                 resolved.upper_arm,
                 resolved.upper_arm_delta,
                 &mut transforms,
                 &mut bone_states,
             );
-            let lower_changed = apply_delta(
+            any_changed |= apply_delta(
                 resolved.lower_arm,
                 resolved.lower_arm_delta,
                 &mut transforms,
                 &mut bone_states,
             );
-            if !(upper_changed || lower_changed) {
+            for finger in [
+                resolved.fingers.thumb.metacarpal,
+                resolved.fingers.thumb.proximal,
+                resolved.fingers.thumb.intermediate,
+                resolved.fingers.thumb.distal,
+                resolved.fingers.index.metacarpal,
+                resolved.fingers.index.proximal,
+                resolved.fingers.index.intermediate,
+                resolved.fingers.index.distal,
+                resolved.fingers.middle.metacarpal,
+                resolved.fingers.middle.proximal,
+                resolved.fingers.middle.intermediate,
+                resolved.fingers.middle.distal,
+                resolved.fingers.ring.metacarpal,
+                resolved.fingers.ring.proximal,
+                resolved.fingers.ring.intermediate,
+                resolved.fingers.ring.distal,
+                resolved.fingers.little.metacarpal,
+                resolved.fingers.little.proximal,
+                resolved.fingers.little.intermediate,
+                resolved.fingers.little.distal,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                any_changed |= apply_delta(
+                    finger.entity,
+                    finger.delta,
+                    &mut transforms,
+                    &mut bone_states,
+                );
+            }
+            if !any_changed {
                 continue;
             }
 
             let mut computed = HashMap::new();
             let mut visiting = HashSet::new();
             if refresh_parent_global(
-                resolved.upper_arm,
+                resolved
+                    .shoulder
+                    .map(|bone| bone.entity)
+                    .unwrap_or(resolved.upper_arm),
                 &mut transforms,
                 &child_ofs,
                 &mut computed,
@@ -151,14 +330,18 @@ pub fn apply_default_arm_pose(
             {
                 continue;
             }
-            let upper_parent_global = child_ofs
-                .get(resolved.upper_arm)
+            let refresh_root = resolved
+                .shoulder
+                .map(|bone| bone.entity)
+                .unwrap_or(resolved.upper_arm);
+            let root_parent_global = child_ofs
+                .get(refresh_root)
                 .ok()
                 .and_then(|child_of| computed.get(&child_of.parent()).copied())
                 .unwrap_or(GlobalTransform::IDENTITY);
             refresh_subtree(
-                resolved.upper_arm,
-                upper_parent_global,
+                refresh_root,
+                root_parent_global,
                 &mut transforms,
                 &children,
                 &mut HashSet::new(),

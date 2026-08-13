@@ -77,6 +77,8 @@ binding成功時は`Transform`へ固定角度を書き込まず、completeなupp
 
 このcompositorはhead、neck、upperChest、chest、spineを追跡するdirect `BodyTracking`のwriter所有権を変更せず、eye gaze、Node Constraint、SpringBoneのwriter競合も導入しない。
 
+Issue #17の二次補正は、解決upper displacementの18%を肩へ追従させ、肩回転を5°以内にclampする。finger jointには各jointのrest-global axisを用いた10°の弱いcurlを適用する。wrist／handへ固定角度を直接書かず、lower armの解決回転を実階層へ伝播してauthored wrist orientationを保持する。shoulder／fingerがないモデルでは該当補正だけを無効にする。
+
 ### Gaze
 
 この節の旧MVP判断はADR-010で置換された。Webcam gazeはhead poseとは別の計測／フィルタ入力だが、適用時はhead-relativeなLookAt deltaである。モデル作者の`LookAtType`を尊重してBoneまたはExpressionを排他的に選び、tracked body pose後、Expression／Constraint／SpringBone前のVRM 1.0順序で解決する。
