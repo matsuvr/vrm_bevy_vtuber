@@ -4,6 +4,10 @@
 // Issue #4, so its public(crate) API is unused until that follow-up lands.
 #[allow(dead_code)]
 pub(crate) mod head_subtree_bounds;
+// This pure solver is likewise consumed by the camera integration in Issue
+// #4, while Issue #3 keeps the geometry calculation independent of ECS.
+#[allow(dead_code)]
+pub(crate) mod fixed_fov_fit;
 
 use bevy::prelude::*;
 use bevy_vrm1::prelude::{HeadBoneEntity, HipsBoneEntity};
