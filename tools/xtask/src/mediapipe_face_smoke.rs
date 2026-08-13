@@ -21,7 +21,7 @@ use mediapipe::{
 };
 #[cfg(target_os = "windows")]
 use sha2::{Digest, Sha256};
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 use vtuber_core::FrameSeq;
 #[cfg(target_os = "windows")]
 use vtuber_core::{LatestSlot, ReadResult};
