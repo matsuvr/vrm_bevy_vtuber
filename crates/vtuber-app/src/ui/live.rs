@@ -6,6 +6,20 @@ use crate::actions::UiAction;
 use crate::preview::PreviewState;
 use crate::ui_model::UiViewModel;
 
+fn preview_uv(mirrored: bool) -> bevy_egui::egui::Rect {
+    if mirrored {
+        bevy_egui::egui::Rect::from_min_max(
+            bevy_egui::egui::pos2(1.0, 0.0),
+            bevy_egui::egui::pos2(0.0, 1.0),
+        )
+    } else {
+        bevy_egui::egui::Rect::from_min_max(
+            bevy_egui::egui::pos2(0.0, 0.0),
+            bevy_egui::egui::pos2(1.0, 1.0),
+        )
+    }
+}
+
 /// Render the Live screen.
 pub fn render_live_screen(
     ui: &mut Ui,
@@ -83,10 +97,11 @@ pub fn render_live_screen(
     if preview.visible {
         if let Some(texture) = preview_texture {
             let available = ui.available_width().max(160.0);
-            ui.image((
-                texture,
-                bevy_egui::egui::vec2(available, available * 9.0 / 16.0),
-            ));
+            let size = bevy_egui::egui::vec2(available, available * 9.0 / 16.0);
+            ui.add(
+                bevy_egui::egui::Image::from_texture((texture, size))
+                    .uv(preview_uv(preview.mirrored)),
+            );
         } else {
             ui.label("Waiting for camera frames…");
         }
@@ -96,5 +111,21 @@ pub fn render_live_screen(
     // Start/Stop buttons.
     if vm.can_stop() && ui.button("Stop").clicked() {
         ui_state.emit(UiAction::Stop);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mirror_preview_reverses_only_the_horizontal_uv_axis() {
+        let normal = preview_uv(false);
+        let mirrored = preview_uv(true);
+
+        assert_eq!(normal.min, bevy_egui::egui::pos2(0.0, 0.0));
+        assert_eq!(normal.max, bevy_egui::egui::pos2(1.0, 1.0));
+        assert_eq!(mirrored.min, bevy_egui::egui::pos2(1.0, 0.0));
+        assert_eq!(mirrored.max, bevy_egui::egui::pos2(0.0, 1.0));
     }
 }

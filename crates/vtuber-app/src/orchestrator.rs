@@ -16,6 +16,7 @@ use bevy::prelude::*;
 
 use crate::actions::UiAction;
 use crate::import::{self, ImportedModel, ModelImportError};
+use crate::preview::PreviewState;
 use crate::ui::UiState;
 use crate::ui_model::*;
 use vtuber_camera::device::CameraDescriptor;
@@ -566,12 +567,19 @@ pub fn process_ui_actions_system(
     mut orchestrator: ResMut<Orchestrator>,
     mut ui_state: ResMut<UiState>,
     mut view_model: ResMut<UiViewModel>,
+    mut preview: ResMut<PreviewState>,
 ) {
     let actions = ui_state.take_actions();
     for action in &actions {
-        orchestrator.process_action(action);
+        match action {
+            UiAction::TogglePreview => preview.toggle_visible(),
+            UiAction::ToggleMirror => preview.toggle_mirrored(),
+            _ => orchestrator.process_action(action),
+        }
     }
     orchestrator.update_view_model(&mut view_model);
+    view_model.preview_visible = preview.visible;
+    view_model.mirror_preview = preview.mirrored;
 }
 
 /// Converts the avatar lifecycle's internal state to the UI model's state.
@@ -683,6 +691,7 @@ pub fn sync_avatar_lifecycle_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::preview::PreviewState;
 
     #[test]
     fn orchestrator_default_state() {
@@ -690,6 +699,31 @@ mod tests {
         assert_eq!(orch.import_state(), &ImportState::Idle);
         assert!(orch.last_error().is_none());
         assert!(orch.camera_refresh_requested());
+    }
+
+    #[test]
+    fn preview_actions_update_preview_state_and_view_model() {
+        let mut app = App::new();
+        app.init_resource::<Orchestrator>()
+            .init_resource::<UiState>()
+            .init_resource::<UiViewModel>()
+            .init_resource::<PreviewState>()
+            .add_systems(Update, process_ui_actions_system);
+
+        {
+            let mut actions = app.world_mut().resource_mut::<UiState>();
+            actions.emit(UiAction::TogglePreview);
+            actions.emit(UiAction::ToggleMirror);
+        }
+        app.update();
+
+        let preview = app.world().resource::<PreviewState>();
+        assert!(!preview.visible);
+        assert!(preview.mirrored);
+
+        let view_model = app.world().resource::<UiViewModel>();
+        assert!(!view_model.preview_visible);
+        assert!(view_model.mirror_preview);
     }
 
     #[test]
