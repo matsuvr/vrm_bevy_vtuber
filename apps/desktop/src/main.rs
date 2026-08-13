@@ -1,5 +1,6 @@
 //! Desktop entry point for vrm-bevy-vtuber.
 
+#![cfg_attr(windows, windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
