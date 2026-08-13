@@ -487,36 +487,84 @@ mod tests {
         assert_eq!(read.imported, imported);
     }
 
-    /// Path to the bundled Tsukuyomi-chan legacy VRM fixture.
-    fn fixture_legacy_vrm() -> PathBuf {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("../../tests/fixtures/vrm/tsukuyomi-chan.vrm");
+    const LEGACY_GLTF_JSON: &str = r#"{
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{}]
+    }"#;
+
+    const VRM1_GLTF_JSON: &str = r#"{
+        "asset": {"version": "2.0", "generator": "vtuber-app hermetic test"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [
+            {"name": "Hips", "children": [1]},
+            {"name": "Head"}
+        ],
+        "extensionsUsed": ["VRMC_vrm", "VRMC_springBone"],
+        "extensions": {
+            "VRMC_vrm": {
+                "specVersion": "1.0",
+                "meta": {"name": "Hermetic VRM 1.0"},
+                "humanoid": {
+                    "humanBones": {
+                        "hips": {"node": 0},
+                        "head": {"node": 1}
+                    }
+                }
+            },
+            "VRMC_springBone": {}
+        }
+    }"#;
+
+    fn write_glb_fixture(dir: &TempDir, file_name: &str, json: &str) -> PathBuf {
+        let mut json_chunk = json.as_bytes().to_vec();
+        while !json_chunk.len().is_multiple_of(4) {
+            json_chunk.push(b' ');
+        }
+
+        let total_length = 12 + 8 + json_chunk.len();
+        let mut bytes = Vec::with_capacity(total_length);
+        bytes.extend_from_slice(&0x46546C67_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&(total_length as u32).to_le_bytes());
+        bytes.extend_from_slice(&(json_chunk.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0x4E4F534A_u32.to_le_bytes());
+        bytes.extend_from_slice(&json_chunk);
+
+        let path = dir.path().join(file_name);
+        fs::write(&path, bytes).unwrap();
         path
     }
 
-    /// Path to the bundled VRM 1.0 fixture.
-    fn fixture_vrm1() -> PathBuf {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("../../tests/fixtures/vrm/inore-vrm1.vrm");
-        path
+    fn legacy_fixture(dir: &TempDir) -> PathBuf {
+        write_glb_fixture(dir, "legacy.vrm", LEGACY_GLTF_JSON)
+    }
+
+    fn vrm1_fixture(dir: &TempDir) -> PathBuf {
+        write_glb_fixture(dir, "hermetic.vrm", VRM1_GLTF_JSON)
     }
 
     #[test]
     fn fixture_tsukuyomi_is_legacy_vrm_rejected_as_not_vrm1() {
-        let err = inspect_vrm(fixture_legacy_vrm()).unwrap_err();
+        let dir = TempDir::new().unwrap();
+        let err = inspect_vrm(legacy_fixture(&dir)).unwrap_err();
         assert!(matches!(err, ModelImportError::NotVrm1));
     }
 
     #[test]
     fn fixture_tsukuyomi_import_rejected_as_not_vrm1() {
         let dir = TempDir::new().unwrap();
-        let err = import_vrm(fixture_legacy_vrm(), dir.path(), DEFAULT_SIZE_LIMIT).unwrap_err();
+        let source = legacy_fixture(&dir);
+        let err = import_vrm(source, dir.path(), DEFAULT_SIZE_LIMIT).unwrap_err();
         assert!(matches!(err, ModelImportError::NotVrm1));
     }
 
     #[test]
     fn inspects_real_vrm1_fixture() {
-        let summary = inspect_vrm(fixture_vrm1()).expect("fixture should be valid VRM 1.0");
+        let dir = TempDir::new().unwrap();
+        let summary = inspect_vrm(vrm1_fixture(&dir)).expect("fixture should be valid VRM 1.0");
         assert_eq!(summary.spec_version, "1.0");
         assert!(!summary.name.is_empty(), "model name should be present");
         assert!(summary.humanoid_nodes.hips < 1000);
@@ -527,14 +575,16 @@ mod tests {
     #[test]
     fn imports_real_vrm1_fixture() {
         let dir = TempDir::new().unwrap();
-        let imported = import_vrm(fixture_vrm1(), dir.path(), DEFAULT_SIZE_LIMIT)
+        let source = vrm1_fixture(&dir);
+        let asset_root = dir.path().join("asset-root");
+        let imported = import_vrm(&source, &asset_root, DEFAULT_SIZE_LIMIT)
             .expect("fixture should import successfully");
         assert_eq!(imported.summary.spec_version, "1.0");
         assert!(imported.asset_path.exists());
         assert!(imported.meta_path.exists());
         // Re-import with same file should be idempotent.
-        let reimported = import_vrm(fixture_vrm1(), dir.path(), DEFAULT_SIZE_LIMIT)
-            .expect("re-import should succeed");
+        let reimported =
+            import_vrm(&source, &asset_root, DEFAULT_SIZE_LIMIT).expect("re-import should succeed");
         assert_eq!(imported.id, reimported.id);
         assert_eq!(imported.asset_path, reimported.asset_path);
     }
@@ -542,12 +592,13 @@ mod tests {
     #[test]
     fn repairs_corrupt_existing_cached_file() {
         let dir = TempDir::new().unwrap();
-        let source = fixture_vrm1();
-        let imported = import_vrm(&source, dir.path(), DEFAULT_SIZE_LIMIT)
+        let source = vrm1_fixture(&dir);
+        let asset_root = dir.path().join("asset-root");
+        let imported = import_vrm(&source, &asset_root, DEFAULT_SIZE_LIMIT)
             .expect("fixture should import successfully");
 
         fs::write(&imported.asset_path, b"corrupt cached model").unwrap();
-        let repaired = import_vrm(&source, dir.path(), DEFAULT_SIZE_LIMIT)
+        let repaired = import_vrm(&source, &asset_root, DEFAULT_SIZE_LIMIT)
             .expect("re-import should repair the cached file");
 
         assert_eq!(repaired.id, imported.id);
