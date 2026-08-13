@@ -39,4 +39,4 @@ macOS:
 
 ## Consequences
 
-OS差は`vtuber-camera`とpackagingに閉じる。camera hardwareのないCIではmock、format selection、compile testだけを行い、実機testは明示的なignored testまたはxtaskとする。対象外platformの将来移植だけを目的とした抽象化は作らない。
+OS差は`vtuber-camera`とpackagingに閉じる。GitHub Actionsは利用せず、camera hardwareのない開発者環境ではmock、format selection、compile testだけを行い、実機testは明示的なignored testまたはxtaskでローカル実行する。対象外platformの将来移植だけを目的とした抽象化は作らない。

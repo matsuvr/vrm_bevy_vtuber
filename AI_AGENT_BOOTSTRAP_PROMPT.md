@@ -25,11 +25,11 @@ The project is a full-Rust desktop VTuber application with these fixed boundarie
 
 For G0-01:
 
-- create only the workspace, empty crates, toolchain, workspace lint policy, formatting configuration, license-policy skeleton, root README, and Windows/macOS CI skeleton required by G0-01;
+- create only the workspace, empty crates, toolchain, workspace lint policy, formatting configuration, license-policy skeleton, root README, and Windows/macOS local verification instructions required by G0-01;
 - use the exact directory and package names from `DESIGN.md`;
 - do not add Bevy, `bevy_vrm1`, `nokhwa`, tract, camera code, model artifacts, UI, or VRM code yet;
 - keep `vtuber-core` engine- and platform-independent;
-- configure CI for Windows and macOS only;
+- do not create or configure GitHub Actions; document Windows/macOS verification as developer-local commands only;
 - commit `Cargo.lock` if Cargo generates it;
 - run every verification command listed in G0-01;
 - report exact commands and results, including commands that cannot run in the current environment;

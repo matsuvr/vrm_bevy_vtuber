@@ -42,6 +42,13 @@ Explicitly unsupported:
 
 Do not add abstraction, feature flags, crates, CI jobs, manifests, or documentation solely for unsupported platforms.
 
+## GitHub Actions 禁止
+
+- 本プロジェクトでは GitHub Actions を一切利用しない。Actions の実行枠を使い切っており、実行を試みるだけでエラーになり開発を妨げるためである。
+- `.github/workflows/`、workflow YAML、`actions/*` の参照、Actions badge、`workflow_dispatch` など、GitHub Actions を作成・有効化・実行・再導入する変更を禁止する。
+- 検証は開発者環境で PowerShell、Cargo、`xtask`、および明示的な Windows/macOS 実機手順を実行する。GitHub 上の push／pull request を検証トリガーにしてはならない。
+- 過去の workflow、実行履歴、旧タスク文書に残る CI 記述は履歴であり、現行の検証手段・受入根拠・実装指示として再利用しない。
+
 ## VRM runtime rules
 
 - Use `bevy_vrm1`; do not implement a replacement VRM runtime.
@@ -210,7 +217,7 @@ Mandatory classes over the project lifecycle:
 - avatar binding retry and timeout
 - head/neck pose mapping
 - expression capability fallback
-- Windows and macOS CI
+- Windows and macOS のローカル自動検証
 - target model compatibility matrix
 - soak and latency reports
 

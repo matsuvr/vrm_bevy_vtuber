@@ -69,6 +69,13 @@ M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05
 - 作業終了時に、指定leafの完了条件を一項目ずつ照合する。未達が一つでもあれば`DONE`と報告しない。
 - agentはcommit、push、PR作成を明示指示なしに行わない。
 
+### 0.2.1 GitHub Actions 禁止
+
+- 本プロジェクトでは GitHub Actions を一切利用しない。Actions の実行枠を使い切っており、実行を試みるだけでエラーになり開発効率を下げるためである。
+- `.github/workflows/`、workflow YAML、`actions/*` の参照、Actions badge、`workflow_dispatch` を作成・有効化・実行・再導入してはならない。
+- 検証は開発者環境の PowerShell、Cargo、`xtask`、および明示的な Windows/macOS 実機手順で行う。push／pull request を GitHub 上の検証トリガーにしない。
+- 過去の workflow、実行履歴、旧タスク文書の CI 記述は履歴であり、現行の実装指示・検証手段・受入根拠として再利用しない。
+
 ### 0.3 subtask index
 
 | 親task | subtask範囲 | 件数 | 現在状態 |
@@ -227,14 +234,14 @@ Windows／macOS専用workspaceと依存方向を作り、VRM処理を`bevy_vrm1`
   - `apps/desktop`（package名`vtuber-desktop`）
   - `tools/xtask`（package名`xtask`）
 - workspace lints
-- Windows／macOS CI skeleton
+- Windows／macOSのローカル検証手順
 - forbidden dependency check skeleton
 - `vtuber-core`へplaceholder typesのみ
 - root READMEへcrate責務
 
 ### 制約
 
-- Windows／macOS以外のapp crate、backend、feature、CI jobを作らない。
+- Windows／macOS以外のapp crate、backend、feature、リモート自動化jobを作らない。GitHub Actions workflowは対象OSに関係なく作らない。
 - camera、inference、Bevy、`bevy_vrm1`の実依存はまだ追加しない。
 - `unsafe`は原則禁止。
 
@@ -243,7 +250,7 @@ Windows／macOS専用workspaceと依存方向を作り、VRM処理を`bevy_vrm1`
 - 全crateが空でもbuild／testできる。
 - dependency cycleがない。
 - `vtuber-core`がplatform／Bevy非依存。
-- CI matrixがWindowsとmacOSだけ。
+- Windows／macOSの検証コマンドがローカル手順として定義されている。
 - lockfileがcommit対象。
 - `rustc -Vv`を完了報告へ記録し、toolchainがexactに固定される。
 
@@ -511,36 +518,31 @@ cargo metadata --no-deps --format-version 1
 python -m compileall tools 2>/dev/null || true
 ```
 
-#### G0-01-007: Windows／macOS CI skeletonを追加する
+#### G0-01-007: Windows／macOS CI skeletonを追加する（廃止）
 
-状態: `LEGACY_PROGRESS`
+状態: `LEGACY_PROGRESS`（旧計画。現行規約では GitHub Actions の実装を禁止）
 依存: `G0-01-006`
 親参照: DESIGN.md §9、§10、§21.4、§26、§27
 
-**変更候補**
-
-- `.github/workflows/ci.yml`
+この leaf に記載されていた GitHub Actions skeleton の作成指示は、Actions の実行枠枯渇と実行時エラーを理由に廃止する。workflow ファイルを追加・復元せず、検証コマンドは開発者環境で明示的に実行する。
 
 
 **実装指示**
 
-- matrixを`windows-latest`と`macos-latest`だけにする。
-- toolchain fileを使用し、format、check、Clippy、testのjobを定義する。
-- hardware cameraやGUI smokeを通常CIへ入れない。
-- cache keyへtoolchainとCargo filesを含め、失敗を隠す`continue-on-error`を使わない。
+- Windows/macOS のローカル検証手順へ format、check、Clippy、test、dependency check を記録する。
+- hardware cameraやGUI smokeは明示的なローカル手順で行う。
 
 
 **このsubtaskで行わないこと**
 
 - release packagingを始めない。
-- GUIを起動するCI stepを追加しない。
+- GitHub Actions または他のリモート workflow を追加しない。
 
 
 **完了条件**
 
-- workflow YAMLがparse可能である。
-- Linux、Android、WASM jobがない。
-- 各OSで少なくとも`cargo check --workspace`とtestを実行する。
+- `.github/workflows/` に workflow が存在しない。
+- Windows/macOSの検証コマンドを各開発者環境で実行し、結果を記録する。
 
 
 **検証**
@@ -1705,19 +1707,19 @@ cargo run -p xtask -- camera smoke --help
 
 - format selection／decode boundaryを検証できるfake backendまたはfixture bufferを用意する。
 - 実camera testは`#[ignore]`またはxtaskだけで明示実行する。
-- CI通常testがcamera permissionやdeviceを要求しないことを確認する。
+- ローカル通常testがcamera permissionやdeviceを要求しないことを確認する。
 - hardware testの必要環境変数／device selectorを文書化する。
 
 
 **このsubtaskで行わないこと**
 
-- CIで実deviceを必須にしない。
+- ローカル自動検証で実deviceを必須にしない。
 - testだけのunsafe backendを作らない。
 
 
 **完了条件**
 
-- cameraなしCIでunit testが成功する。
+- cameraなしのローカル環境でunit testが成功する。
 - ignored testは明示commandでだけ実行される。
 - fakeがproduction code pathを過度に分岐させない。
 
@@ -10071,7 +10073,7 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 - `inputMaxValue == 0`のVRM 1.0推奨挙動をBone／Expressionの両mappingで実装する。
 - 同一回転を表す`q`／`-q`でdirect eye deltaが二重適用されないようにする。
 
-#### Q2-06-002-004: CI・実schedule test・visual gate状態を修正する
+#### Q2-06-002-004: ローカル検証・実schedule test・visual gate状態を修正する
 
 状態: `DONE`
 依存: `Q2-06-002-003`

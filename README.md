@@ -16,7 +16,8 @@ Webカメラで一人の顔を追跡し、VRM 1.0モデルを動かすWindows／
 - camera、inference、Bevy main threadを分離
 - frame transportは容量1件のlatest-value方式
 - production inference runtimeはpure Rust
-- macOS対応を初期CI、camera設計、package設計へ最初から含める
+- macOS対応を初期workspace、ローカル検証、camera設計、package設計へ最初から含める
+- GitHub Actionsは一切利用しない。検証は開発者環境で実行する
 
 ## 読む順序
 
@@ -38,6 +39,8 @@ Webカメラで一人の顔を追跡し、VRM 1.0モデルを動かすWindows／
 設計一式をrepository rootへ配置し、最初に`AI_AGENT_BOOTSTRAP_PROMPT.md`を渡す。以後は`AI_AGENT_TASKS.md`からtask IDを一つだけ指定する。
 
 Gate 0を省略しない。特に、顔modelのpure-Rust runtime互換性、対象VRMの`bevy_vrm1`互換性、Windows／macOS camera、macOS app bundle permissionを実測してから縦断MVPへ進む。
+
+検証は GitHub Actions へ移さず、README と `DESIGN.md` に記載した PowerShell、Cargo、`xtask`、および明示的な実機手順を開発者環境で実行する。
 
 ## 完成時の最小成果
 

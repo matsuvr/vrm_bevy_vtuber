@@ -52,7 +52,7 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 12. 表情は`bevy_vrm1::ModifyExpressions`を利用する。`isBinary`、`overrideBlink`、`overrideMouth`、`overrideLookAt`の解決は`bevy_vrm1`へ委譲する。
 13. head poseとeye gazeは推定／filter入力として分離するが、適用時のgazeは現在のhead姿勢へhead-relativeなeye-in-head deltaとして合成する。`Q2-06-002`のdirect LookAtはworld targetを作らず、モデル作者のBone／Expression種別とVRM range mapを尊重する。
 14. MToon、SpringBone、Node Constraintをアプリ側で再実装しない。互換性問題が発生した場合は対象モデルの回帰テストを追加し、必要最小限のupstream patchまたは一時forkで対処する。
-15. Windowsを最初の縦断MVPとし、その後macOSで同一機能を完成させる。macOSは後付け移植ではなく、初期workspaceとCIからcompile対象に含める。
+15. Windowsを最初の縦断MVPとし、その後macOSで同一機能を完成させる。macOSは後付け移植ではなく、初期workspaceとローカル検証手順のcompile対象に含める。
 
 ---
 
@@ -93,6 +93,12 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 
 ---
 
+### 3.4 GitHub Actions 禁止
+
+本プロジェクトでは GitHub Actions を一切利用しない。Actions の実行枠を使い切っており、実行を試みるだけでエラーになり開発効率を下げるためである。`.github/workflows/` と workflow YAML を作成・保持・再有効化してはならず、push／pull request／手動 dispatch を GitHub 上の検証トリガーにしてはならない。検証は開発者環境の PowerShell、Cargo、`xtask`、および明示的な Windows/macOS 実機手順で行う。過去の workflow と実行履歴は履歴情報であり、現行の受入根拠ではない。
+
+---
+
 ## 4. 対象環境
 
 ### 4.1 サポート階層
@@ -103,7 +109,7 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 | Tier 1 | macOS 13以降, Apple Silicon | 全機能、camera permission、app bundle、性能試験対象 |
 | Tier 2 | macOS 13以降, Intel | compileと基本smokeを維持。実機がない場合は性能保証しない |
 
-上表が完全なサポート対象である。対象外プラットフォームへの将来移植だけを目的としたtrait、feature、package、CI jobは追加しない。
+上表が完全なサポート対象である。対象外プラットフォームへの将来移植だけを目的としたtrait、feature、package、リモート自動化jobは追加しない。
 
 ### 4.2 GPU基準
 
@@ -1831,13 +1837,9 @@ visual検査:
 - blink
 - mouth
 
-### 21.4 platform CI
+### 21.4 ローカル検証（GitHub Actionsは禁止）
 
-GitHub Actions matrix:
-
-- `windows-latest`
-- `macos-14`または利用可能なApple Silicon runner
-- optional macOS Intel runner
+GitHub Actions、`.github/workflows/`、および GitHub の push／pull request workflow は使用しない。Windows と macOS の検証は、各開発者環境で次のコマンドを実行し、OS、toolchain、hardware、model、結果をレポートへ記録する。
 
 commands:
 
@@ -1849,7 +1851,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-camera実機testはCIで行わない。mock backendとmanual checklistを併用する。
+camera実機testはローカルの明示的な手順で行い、mock backend、unit test、`xtask`、manual checklistを併用する。これらを GitHub Actions workflow へ移してはならない。
 
 ### 21.5 soak test
 
@@ -1934,7 +1936,7 @@ VtuberRs.app/
 
 ### Gate 0: 技術不確実性の解消
 
-- workspace / CI
+- workspace / ローカル検証
 - Bevy + `bevy_vrm1` model smoke
 - target VRM compatibility matrix
 - Windows / macOS camera spike
@@ -1996,7 +1998,7 @@ VtuberRs.app/
 
 ### Quality
 
-- WindowsとmacOS CIがgreen。
+- WindowsとmacOSのローカル検証がgreen。
 - compatibility modelがpanicなしで300frame動く。
 - 10分soakでlatency増大がない。
 - workerが終了時にjoinされる。
