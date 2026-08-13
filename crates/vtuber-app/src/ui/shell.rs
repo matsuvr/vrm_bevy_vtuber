@@ -146,6 +146,30 @@ fn shutdown_workers_on_exit(
 pub struct UiState {
     /// Actions emitted by the UI this frame.
     pub pending_actions: Vec<UiAction>,
+    /// Session-local visibility state for the main Controls window.
+    control_window: ControlWindowState,
+}
+
+/// Session-local visibility state for the main Controls window.
+///
+/// The window starts visible so first-run setup remains discoverable. Its
+/// visibility is deliberately not persisted until the settings task owns the
+/// configuration schema.
+#[derive(Resource, Debug)]
+struct ControlWindowState {
+    visible: bool,
+}
+
+impl Default for ControlWindowState {
+    fn default() -> Self {
+        Self { visible: true }
+    }
+}
+
+impl ControlWindowState {
+    fn toggle(&mut self) {
+        self.visible = !self.visible;
+    }
 }
 
 impl UiState {
@@ -213,54 +237,86 @@ fn ui_render_system(
     // Poll file dialog.
     super::file_dialog::poll_file_dialog(&mut file_dialog, &mut ui_state);
 
-    // Main control window (left side, 350px wide).
-    bevy_egui::egui::Window::new("Controls")
-        .id(bevy_egui::egui::Id::new("control_window"))
-        .default_width(350.0)
-        .default_height(600.0)
-        .resizable(true)
-        .collapsible(false)
-        .movable(true)
-        .show(ctx, |ui| {
-            // Navigation tabs at the top.
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(view_model.screen == Screen::Setup, "Setup")
-                    .clicked()
-                {
-                    ui_state.emit(UiAction::SwitchScreen(Screen::Setup));
-                }
-                if ui
-                    .selectable_label(view_model.screen == Screen::Live, "Live")
-                    .clicked()
-                {
-                    ui_state.emit(UiAction::SwitchScreen(Screen::Live));
-                }
-                if ui
-                    .selectable_label(view_model.screen == Screen::Diagnostics, "Diagnostics")
-                    .clicked()
-                {
-                    ui_state.emit(UiAction::SwitchScreen(Screen::Diagnostics));
-                }
-            });
-            ui.separator();
+    if ctx.input(|input| input.key_pressed(bevy_egui::egui::Key::F1)) {
+        ui_state.control_window.toggle();
+    }
 
-            // Screen content in a scroll area.
-            bevy_egui::egui::ScrollArea::vertical().show(ui, |ui| match view_model.screen {
-                Screen::Setup => {
-                    render_setup_screen(ui, &view_model, &mut ui_state, &mut file_dialog)
-                }
-                Screen::Live => render_live_screen(
-                    ui,
-                    &view_model,
-                    &mut ui_state,
-                    &preview,
-                    *avatar_motion_mirror,
-                    preview_texture,
-                ),
-                Screen::Diagnostics => render_diagnostics_screen(ui, &view_model, &diagnostics),
+    if ui_state.control_window.visible {
+        let mut visible = true;
+        let mut hide_requested = false;
+
+        // Main control window (left side, 350px wide).
+        bevy_egui::egui::Window::new("Controls")
+            .id(bevy_egui::egui::Id::new("control_window"))
+            .open(&mut visible)
+            .default_width(350.0)
+            .default_height(600.0)
+            .resizable(true)
+            .collapsible(false)
+            .movable(true)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Hide Controls").clicked() {
+                        hide_requested = true;
+                    }
+                    ui.small("F1 toggles controls");
+                });
+                ui.separator();
+
+                // Navigation tabs at the top.
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(view_model.screen == Screen::Setup, "Setup")
+                        .clicked()
+                    {
+                        ui_state.emit(UiAction::SwitchScreen(Screen::Setup));
+                    }
+                    if ui
+                        .selectable_label(view_model.screen == Screen::Live, "Live")
+                        .clicked()
+                    {
+                        ui_state.emit(UiAction::SwitchScreen(Screen::Live));
+                    }
+                    if ui
+                        .selectable_label(view_model.screen == Screen::Diagnostics, "Diagnostics")
+                        .clicked()
+                    {
+                        ui_state.emit(UiAction::SwitchScreen(Screen::Diagnostics));
+                    }
+                });
+                ui.separator();
+
+                // Screen content in a scroll area.
+                bevy_egui::egui::ScrollArea::vertical().show(ui, |ui| match view_model.screen {
+                    Screen::Setup => {
+                        render_setup_screen(ui, &view_model, &mut ui_state, &mut file_dialog)
+                    }
+                    Screen::Live => render_live_screen(
+                        ui,
+                        &view_model,
+                        &mut ui_state,
+                        &preview,
+                        *avatar_motion_mirror,
+                        preview_texture,
+                    ),
+                    Screen::Diagnostics => render_diagnostics_screen(ui, &view_model, &diagnostics),
+                });
             });
-        });
+        ui_state.control_window.visible = visible && !hide_requested;
+    }
+
+    if !ui_state.control_window.visible {
+        bevy_egui::egui::Area::new(bevy_egui::egui::Id::new("show_control_window"))
+            .anchor(
+                bevy_egui::egui::Align2::LEFT_TOP,
+                bevy_egui::egui::vec2(12.0, 12.0),
+            )
+            .show(ctx, |ui| {
+                if ui.button("Show Controls (F1)").clicked() {
+                    ui_state.control_window.visible = true;
+                }
+            });
+    }
 
     // Handle drag-and-drop for VRM files.
     super::file_dialog::handle_dropped_files(ctx, &mut ui_state);
@@ -332,5 +388,17 @@ mod tests {
         state.emit(UiAction::Start);
         state.emit(UiAction::Start); // not deduplicated
         assert_eq!(state.pending_actions.len(), 2);
+    }
+
+    #[test]
+    fn control_window_is_visible_by_default_and_toggles() {
+        let mut state = ControlWindowState::default();
+        assert!(state.visible);
+
+        state.toggle();
+        assert!(!state.visible);
+
+        state.toggle();
+        assert!(state.visible);
     }
 }

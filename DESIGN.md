@@ -1554,6 +1554,8 @@ pub enum CalibrationState {
 
 `bevy_egui`を利用する場合、次のpanelを持つ。
 
+- Controls windowはsession中に表示／非表示を切り替えられる。非表示時も画面隅の再表示buttonと`F1`で復帰でき、操作不能な状態を作らない。表示状態の永続化はsettings schemaが担当するまで行わない。
+
 #### Setup
 
 - model選択

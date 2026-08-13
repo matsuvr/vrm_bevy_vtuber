@@ -87,7 +87,7 @@ M1-08のWindows gateは完了した。次の実行単位は、**`Q2-01`〜`Q2-05
 | `M1-04` | `M1-04-001`〜`M1-04-009` | 9 | `LEGACY_PROGRESS` |
 | `M1-05` | `M1-05-001`〜`M1-05-008` | 8 | `LEGACY_PROGRESS` |
 | `M1-06` | `M1-06-001`〜`M1-06-009` | 9 | `LEGACY_PROGRESS` |
-| `M1-07` | `M1-07-001`〜`M1-07-009` | 9 | `LEGACY_PROGRESS`＋GUI補完済み |
+| `M1-07` | `M1-07-001`〜`M1-07-010` | 10 | `LEGACY_PROGRESS`＋GUI補完済み。`M1-07-010`はControls windowのsession内開閉修正。 |
 | `M1-08` | top-level `M1-08-001`〜`022`、repair `M1-08-013-001`〜`009` | 22 + repair 9 | `DONE`（Windows gate PASS、M1-09は別途DEFERRED） |
 | `M1-09` | `M1-09-001`〜`M1-09-008` | 8 | `DEFERRED` |
 | `Q2-01` | `Q2-01-001`〜`Q2-01-008` | 8 | `PENDING` |
@@ -5950,6 +5950,40 @@ cargo test -p vtuber-app error_presenter
 cargo test -p vtuber-app --no-fail-fast
 cargo check -p vtuber-desktop
 cargo clippy -p vtuber-app -p vtuber-desktop --all-targets -- -D warnings
+```
+
+#### M1-07-010: Controls windowをsession内で開閉可能にする
+
+状態: `DONE`
+依存: `M1-07-009`
+親参照: DESIGN.md §18.2
+
+**変更候補**
+
+- `crates/vtuber-app/src/ui/shell.rs`
+- `DESIGN.md`
+
+**実装指示**
+
+- Controls windowをdefault表示とし、windowのclose操作、明示的なHide操作、`F1`で表示／非表示を切り替えられるようにする。
+- 非表示時は画面上の小さい再表示buttonと`F1`で必ず戻せるようにし、Controlsを閉じたことで操作不能な状態を作らない。
+- 表示切替はUI sessionだけに限定し、camera、tracking、avatar lifecycle、previewの実行状態を変更しない。
+- settings schema、依存、rendererを追加しない。表示状態の永続化はQ2-02へ送る。
+
+**完了条件**
+
+- 起動時はControlsが表示される。
+- Hide、window close、`F1`で非表示にでき、非表示後もbuttonまたは`F1`で再表示できる。
+- 表示状態のunit testがあり、既存UI action／domain境界を変更しない。
+
+**検証**
+
+```powershell
+cargo fmt --all -- --check
+cargo test -p vtuber-app ui::shell
+cargo check -p vtuber-desktop
+cargo clippy -p vtuber-app -p vtuber-desktop --all-targets -- -D warnings
+git diff --check
 ```
 
 ## M1-08: Windows vertical implementation and acceptance
