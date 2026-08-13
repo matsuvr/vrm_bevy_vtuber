@@ -12,6 +12,7 @@ use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
 use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
 use crate::expression::apply_tracked_expressions;
+use crate::framing::fixed_fov_fit::FIXED_VERTICAL_FOV;
 use crate::framing::{AvatarViewportCamera, frame_avatar_camera};
 use crate::gaze::update_direct_look_at_input;
 use crate::lifecycle::{
@@ -126,6 +127,10 @@ fn setup_scene(
     // Camera framing the upper body.
     commands.spawn((
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            fov: FIXED_VERTICAL_FOV,
+            ..default()
+        }),
         AvatarViewportCamera,
         Transform::from_translation(Vec3::new(0.0, 0.0, 2.5))
             .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),

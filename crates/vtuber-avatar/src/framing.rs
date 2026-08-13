@@ -1,20 +1,16 @@
 //! Avatar-aware viewport camera framing.
 
-// This foundation is intentionally added before the camera integration in
-// Issue #4, so its public(crate) API is unused until that follow-up lands.
-#[allow(dead_code)]
-pub(crate) mod head_subtree_bounds;
-// This pure solver is likewise consumed by the camera integration in Issue
-// #4, while Issue #3 keeps the geometry calculation independent of ECS.
-#[allow(dead_code)]
 pub(crate) mod fixed_fov_fit;
+pub(crate) mod head_subtree_bounds;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_vrm1::prelude::{HeadBoneEntity, HipsBoneEntity};
 
+use self::fixed_fov_fit::{FIXED_VERTICAL_FOV, solve_fixed_fov_fit};
+use self::head_subtree_bounds::{HeadSubtreeBounds, WorldBounds, collect_head_subtree_bounds};
 use crate::lifecycle::{AvatarGeneration, AvatarLifecycle, AvatarLifecycleState};
 
-const DEFAULT_VERTICAL_FOV: f32 = std::f32::consts::FRAC_PI_4;
 const TARGET_FROM_HIPS: f32 = 0.60;
 const VERTICAL_HALF_EXTENT_IN_HIPS_HEADS: f32 = 0.75;
 const MIN_HIPS_HEAD_HEIGHT: f32 = 0.05;
@@ -23,13 +19,21 @@ const MIN_HIPS_HEAD_HEIGHT: f32 = 0.05;
 #[derive(Component)]
 pub(crate) struct AvatarViewportCamera;
 
+#[derive(SystemParam)]
+pub(crate) struct FramingWorld<'w, 's> {
+    roots: Query<'w, 's, (&'static HeadBoneEntity, &'static HipsBoneEntity)>,
+    bones: Query<'w, 's, &'static GlobalTransform>,
+    children: Query<'w, 's, &'static Children>,
+    renderables: Query<'w, 's, &'static Mesh3d>,
+    mesh_assets: Res<'w, Assets<Mesh>>,
+}
+
 /// Frames a newly-ready avatar once, keeping live head motion visible instead
 /// of making the camera follow and cancel it.
 pub(crate) fn frame_avatar_camera(
     lifecycle: Res<AvatarLifecycle>,
-    roots: Query<(&HeadBoneEntity, &HipsBoneEntity)>,
-    bones: Query<&GlobalTransform>,
-    mut cameras: Query<(&mut Transform, &Projection), With<AvatarViewportCamera>>,
+    world: FramingWorld,
+    mut cameras: Query<(&Camera, &mut Transform, &mut Projection), With<AvatarViewportCamera>>,
     mut framed_generation: Local<Option<AvatarGeneration>>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Ready {
@@ -42,31 +46,88 @@ pub(crate) fn frame_avatar_camera(
     let Some(root) = lifecycle.active_root() else {
         return;
     };
-    let Ok((head_entity, hips_entity)) = roots.get(root) else {
+    let Ok((head_entity, hips_entity)) = world.roots.get(root) else {
         return;
     };
-    let (Ok(head), Ok(hips)) = (bones.get(**head_entity), bones.get(**hips_entity)) else {
+    let (Ok(head), Ok(hips)) = (
+        world.bones.get(**head_entity),
+        world.bones.get(**hips_entity),
+    ) else {
         return;
     };
 
+    let subtree_bounds = collect_head_subtree_bounds(
+        **head_entity,
+        &world.children,
+        &world.renderables,
+        &world.bones,
+        &world.mesh_assets,
+    );
+    let Some(upper_body_bounds) = upper_body_bounds(head.translation(), hips.translation()) else {
+        return;
+    };
+    let bounds = match subtree_bounds {
+        HeadSubtreeBounds::Pending => return,
+        HeadSubtreeBounds::Empty | HeadSubtreeBounds::Invalid => upper_body_bounds,
+        HeadSubtreeBounds::Ready(subtree_bounds) => upper_body_bounds.union(subtree_bounds),
+    };
+
     let mut framed = false;
-    for (mut camera, projection) in &mut cameras {
-        let vertical_fov = match projection {
-            Projection::Perspective(perspective) => perspective.fov,
-            _ => DEFAULT_VERTICAL_FOV,
+    for (camera, mut transform, mut projection) in &mut cameras {
+        let Some(viewport_size) = camera.physical_viewport_size() else {
+            continue;
         };
-        if let Some(transform) =
-            upper_body_camera_transform(head.translation(), hips.translation(), vertical_fov)
-        {
-            *camera = transform;
-            framed = true;
+        if viewport_size.x == 0 || viewport_size.y == 0 {
+            continue;
         }
+        let aspect_ratio = viewport_size.x as f32 / viewport_size.y as f32;
+        let Projection::Perspective(perspective) = &mut *projection else {
+            continue;
+        };
+        perspective.fov = FIXED_VERTICAL_FOV;
+        perspective.aspect_ratio = aspect_ratio;
+
+        let Ok(fit) =
+            solve_fixed_fov_fit(bounds, transform.rotation, aspect_ratio, perspective.near)
+        else {
+            continue;
+        };
+        if !fit.translation.is_finite() {
+            continue;
+        }
+        transform.translation = fit.translation;
+        framed = true;
     }
     if framed {
         *framed_generation = Some(generation);
     }
 }
 
+fn upper_body_bounds(head: Vec3, hips: Vec3) -> Option<WorldBounds> {
+    if !head.is_finite() || !hips.is_finite() {
+        return None;
+    }
+    let hips_head_height = head.y - hips.y;
+    if hips_head_height < MIN_HIPS_HEAD_HEIGHT {
+        return None;
+    }
+
+    let target = hips.lerp(head, TARGET_FROM_HIPS);
+    let half_vertical_extent = hips_head_height * VERTICAL_HALF_EXTENT_IN_HIPS_HEADS;
+    let min = Vec3::new(
+        head.x.min(hips.x),
+        target.y - half_vertical_extent,
+        head.z.min(hips.z),
+    );
+    let max = Vec3::new(
+        head.x.max(hips.x),
+        target.y + half_vertical_extent,
+        head.z.max(hips.z),
+    );
+    WorldBounds::new(min, max)
+}
+
+#[cfg(test)]
 fn upper_body_camera_transform(head: Vec3, hips: Vec3, vertical_fov: f32) -> Option<Transform> {
     if !head.is_finite() || !hips.is_finite() || !vertical_fov.is_finite() {
         return None;
@@ -92,8 +153,15 @@ fn upper_body_camera_transform(head: Vec3, hips: Vec3, vertical_fov: f32) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::asset::RenderAssetUsages;
+    use bevy::camera::Viewport;
+    use bevy::render::render_resource::PrimitiveTopology;
 
     fn spawn_humanoid(app: &mut App, x: f32) -> Entity {
+        spawn_humanoid_parts(app, x).0
+    }
+
+    fn spawn_humanoid_parts(app: &mut App, x: f32) -> (Entity, Entity, Entity) {
         let hips = app
             .world_mut()
             .spawn(GlobalTransform::from_translation(Vec3::new(x, 1.0, 0.0)))
@@ -102,9 +170,11 @@ mod tests {
             .world_mut()
             .spawn(GlobalTransform::from_translation(Vec3::new(x, 1.8, 0.0)))
             .id();
-        app.world_mut()
+        let root = app
+            .world_mut()
             .spawn((HeadBoneEntity(head), HipsBoneEntity(hips)))
-            .id()
+            .id();
+        (root, head, hips)
     }
 
     fn make_ready(app: &mut App, root: Entity) {
@@ -114,14 +184,96 @@ mod tests {
         lifecycle.finish_ready();
     }
 
+    fn frame_app(viewport_size: UVec2) -> App {
+        let mut app = App::new();
+        app.init_resource::<AvatarLifecycle>()
+            .init_resource::<Assets<Mesh>>()
+            .add_systems(Update, frame_avatar_camera);
+        app.world_mut().spawn((
+            Camera3d::default(),
+            Camera {
+                viewport: Some(Viewport {
+                    physical_size: viewport_size,
+                    ..default()
+                }),
+                ..default()
+            },
+            AvatarViewportCamera,
+            Transform::from_xyz(0.0, 0.0, 2.5),
+        ));
+        app
+    }
+
+    fn camera_entity(app: &mut App) -> Entity {
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Entity, With<AvatarViewportCamera>>();
+        query
+            .iter(app.world())
+            .next()
+            .expect("frame test app has an avatar camera")
+    }
+
+    fn mesh_asset(app: &mut App, positions: &[[f32; 3]]) -> Handle<Mesh> {
+        let mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions.to_vec());
+        app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh)
+    }
+
+    fn cube_positions() -> [[f32; 3]; 8] {
+        [
+            [-0.25, -0.25, -0.25],
+            [-0.25, -0.25, 0.25],
+            [-0.25, 0.25, -0.25],
+            [-0.25, 0.25, 0.25],
+            [0.25, -0.25, -0.25],
+            [0.25, -0.25, 0.25],
+            [0.25, 0.25, -0.25],
+            [0.25, 0.25, 0.25],
+        ]
+    }
+
+    fn spawn_renderable(
+        app: &mut App,
+        parent: Entity,
+        mesh: Handle<Mesh>,
+        transform: GlobalTransform,
+    ) -> Entity {
+        app.world_mut()
+            .spawn((Mesh3d(mesh), ChildOf(parent), transform))
+            .id()
+    }
+
+    fn assert_projected_inside(
+        camera: Transform,
+        projection: &PerspectiveProjection,
+        bounds: WorldBounds,
+    ) {
+        let inverse_rotation = camera.rotation.inverse();
+        let vertical_tangent = (projection.fov * 0.5).tan();
+        let horizontal_tangent = vertical_tangent * projection.aspect_ratio;
+        for corner in bounds.corners() {
+            let camera_relative = inverse_rotation * (corner - camera.translation);
+            let depth = -camera_relative.z;
+            assert!(depth >= projection.near, "depth={depth}");
+            let ndc_x = camera_relative.x / (depth * horizontal_tangent);
+            let ndc_y = camera_relative.y / (depth * vertical_tangent);
+            assert!((-0.95..=0.95).contains(&ndc_x), "ndc_x={ndc_x}");
+            assert!((-0.95..=0.95).contains(&ndc_y), "ndc_y={ndc_y}");
+        }
+    }
+
     #[test]
     fn framing_places_head_high_and_hips_low() {
         let hips = Vec3::new(0.0, 1.0, 0.0);
         let head = Vec3::new(0.0, 1.8, 0.0);
-        let transform = upper_body_camera_transform(head, hips, DEFAULT_VERTICAL_FOV)
+        let transform = upper_body_camera_transform(head, hips, FIXED_VERTICAL_FOV)
             .expect("valid humanoid framing should be computed");
         let target_y = hips.lerp(head, TARGET_FROM_HIPS).y;
-        let projected_half_extent = transform.translation.z * (DEFAULT_VERTICAL_FOV * 0.5).tan();
+        let projected_half_extent = transform.translation.z * (FIXED_VERTICAL_FOV * 0.5).tan();
         let head_screen_y = 0.5 - (head.y - target_y) / projected_half_extent * 0.5;
         let hips_screen_y = 0.5 - (hips.y - target_y) / projected_half_extent * 0.5;
 
@@ -133,7 +285,7 @@ mod tests {
     fn framing_centres_model_world_offset() {
         let hips = Vec3::new(2.0, 0.8, -3.0);
         let head = Vec3::new(2.2, 1.8, -2.8);
-        let transform = upper_body_camera_transform(head, hips, DEFAULT_VERTICAL_FOV)
+        let transform = upper_body_camera_transform(head, hips, FIXED_VERTICAL_FOV)
             .expect("valid offset humanoid framing should be computed");
         let target = hips.lerp(head, TARGET_FROM_HIPS);
 
@@ -149,11 +301,9 @@ mod tests {
 
     #[test]
     fn invalid_bone_geometry_uses_existing_fixed_camera() {
+        assert!(upper_body_camera_transform(Vec3::ZERO, Vec3::ZERO, FIXED_VERTICAL_FOV).is_none());
         assert!(
-            upper_body_camera_transform(Vec3::ZERO, Vec3::ZERO, DEFAULT_VERTICAL_FOV).is_none()
-        );
-        assert!(
-            upper_body_camera_transform(Vec3::splat(f32::NAN), Vec3::ZERO, DEFAULT_VERTICAL_FOV)
+            upper_body_camera_transform(Vec3::splat(f32::NAN), Vec3::ZERO, FIXED_VERTICAL_FOV)
                 .is_none()
         );
     }
@@ -162,11 +312,19 @@ mod tests {
     fn replacement_generation_is_reframed() {
         let mut app = App::new();
         app.init_resource::<AvatarLifecycle>()
+            .init_resource::<Assets<Mesh>>()
             .add_systems(Update, frame_avatar_camera);
         let camera = app
             .world_mut()
             .spawn((
                 Camera3d::default(),
+                Camera {
+                    viewport: Some(Viewport {
+                        physical_size: UVec2::new(1600, 900),
+                        ..default()
+                    }),
+                    ..default()
+                },
                 AvatarViewportCamera,
                 Transform::from_xyz(0.0, 0.0, 2.5),
             ))
@@ -192,5 +350,259 @@ mod tests {
 
         assert!(first_x.abs() < 1e-6);
         assert!((replacement_x - 3.0).abs() < 1e-6);
+        let projection = app.world().get::<Projection>(camera).unwrap();
+        let Projection::Perspective(perspective) = projection else {
+            panic!("avatar viewport camera must use perspective projection");
+        };
+        assert!((perspective.fov - FIXED_VERTICAL_FOV).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn does_not_frame_before_ready_but_frames_after_ready() {
+        let mut app = frame_app(UVec2::new(1600, 900));
+        let camera = camera_entity(&mut app);
+        let root = spawn_humanoid(&mut app, 0.0);
+        let before = *app
+            .world()
+            .get::<Transform>(camera)
+            .expect("camera transform");
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<Transform>(camera)
+                .expect("camera transform"),
+            &before
+        );
+
+        make_ready(&mut app, root);
+        app.update();
+        let after = app
+            .world()
+            .get::<Transform>(camera)
+            .expect("camera transform");
+        assert_ne!(after.translation, before.translation);
+        let Projection::Perspective(projection) = app.world().get::<Projection>(camera).unwrap()
+        else {
+            panic!("avatar viewport camera must use perspective projection");
+        };
+        assert!((projection.fov - FIXED_VERTICAL_FOV).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn pending_bounds_retry_without_marking_generation_framed() {
+        let mut app = frame_app(UVec2::new(1600, 900));
+        let camera = camera_entity(&mut app);
+        let (root, head, _) = spawn_humanoid_parts(&mut app, 0.0);
+        let mesh = mesh_asset(&mut app, &cube_positions());
+        let accessory = spawn_renderable(&mut app, head, mesh, GlobalTransform::IDENTITY);
+        app.world_mut()
+            .entity_mut(accessory)
+            .remove::<GlobalTransform>();
+        make_ready(&mut app, root);
+        let before = *app
+            .world()
+            .get::<Transform>(camera)
+            .expect("camera transform");
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<Transform>(camera)
+                .expect("camera transform"),
+            &before
+        );
+
+        app.world_mut()
+            .entity_mut(accessory)
+            .insert(GlobalTransform::IDENTITY);
+        app.update();
+        assert_ne!(
+            app.world()
+                .get::<Transform>(camera)
+                .expect("camera transform"),
+            &before
+        );
+    }
+
+    #[test]
+    fn accessory_bounds_and_head_hips_envelope_are_inside_viewport() {
+        let mut app = frame_app(UVec2::new(1600, 900));
+        let camera = camera_entity(&mut app);
+        let (root, head, hips) = spawn_humanoid_parts(&mut app, 0.0);
+        let mesh = mesh_asset(&mut app, &cube_positions());
+        spawn_renderable(
+            &mut app,
+            head,
+            mesh.clone(),
+            GlobalTransform::from_translation(Vec3::new(-4.0, 0.0, 0.0)),
+        );
+        spawn_renderable(
+            &mut app,
+            head,
+            mesh.clone(),
+            GlobalTransform::from_translation(Vec3::new(4.0, 0.0, 0.0)),
+        );
+        spawn_renderable(
+            &mut app,
+            head,
+            mesh,
+            GlobalTransform::from_translation(Vec3::new(0.0, 5.0, 0.0)),
+        );
+        make_ready(&mut app, root);
+        app.update();
+
+        let camera_transform = *app
+            .world()
+            .get::<Transform>(camera)
+            .expect("camera transform");
+        let Projection::Perspective(projection) = app.world().get::<Projection>(camera).unwrap()
+        else {
+            panic!("avatar viewport camera must use perspective projection");
+        };
+        let base = upper_body_bounds(
+            app.world()
+                .get::<GlobalTransform>(head)
+                .unwrap()
+                .translation(),
+            app.world()
+                .get::<GlobalTransform>(hips)
+                .unwrap()
+                .translation(),
+        )
+        .unwrap();
+        let accessory =
+            WorldBounds::new(Vec3::new(-4.25, -0.25, -0.25), Vec3::new(4.25, 5.25, 0.25)).unwrap();
+        assert_projected_inside(camera_transform, projection, base.union(accessory));
+        assert!((projection.aspect_ratio - 1600.0 / 900.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn same_generation_does_not_follow_live_head_motion() {
+        let mut app = frame_app(UVec2::new(1600, 900));
+        let camera = camera_entity(&mut app);
+        let (root, head, hips) = spawn_humanoid_parts(&mut app, 0.0);
+        make_ready(&mut app, root);
+        app.update();
+        let first = *app
+            .world()
+            .get::<Transform>(camera)
+            .expect("camera transform");
+
+        app.world_mut()
+            .entity_mut(head)
+            .insert(GlobalTransform::from_translation(Vec3::new(2.0, 2.4, 0.0)));
+        app.world_mut()
+            .entity_mut(hips)
+            .insert(GlobalTransform::from_translation(Vec3::new(2.0, 1.0, 0.0)));
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<Transform>(camera)
+                .expect("camera transform"),
+            &first
+        );
+    }
+
+    #[test]
+    fn zero_viewport_retries_after_viewport_becomes_available() {
+        let mut app = frame_app(UVec2::ZERO);
+        let camera = camera_entity(&mut app);
+        let root = spawn_humanoid(&mut app, 0.0);
+        make_ready(&mut app, root);
+        let before = *app
+            .world()
+            .get::<Transform>(camera)
+            .expect("camera transform");
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<Transform>(camera)
+                .expect("camera transform"),
+            &before
+        );
+
+        app.world_mut()
+            .get_mut::<Camera>(camera)
+            .expect("avatar camera")
+            .viewport = Some(Viewport {
+            physical_size: UVec2::new(900, 1600),
+            ..default()
+        });
+        app.update();
+        assert_ne!(
+            app.world()
+                .get::<Transform>(camera)
+                .expect("camera transform"),
+            &before
+        );
+    }
+
+    #[test]
+    fn invalid_or_empty_subtree_uses_finite_head_hips_fallback() {
+        let mut empty = frame_app(UVec2::new(1600, 900));
+        let empty_camera = camera_entity(&mut empty);
+        let empty_root = spawn_humanoid(&mut empty, 0.0);
+        make_ready(&mut empty, empty_root);
+        empty.update();
+        assert!(
+            empty
+                .world()
+                .get::<Transform>(empty_camera)
+                .unwrap()
+                .translation
+                .is_finite()
+        );
+
+        let mut invalid = frame_app(UVec2::new(1600, 900));
+        let invalid_camera = camera_entity(&mut invalid);
+        let (invalid_root, head, _) = spawn_humanoid_parts(&mut invalid, 0.0);
+        let invalid_mesh = mesh_asset(
+            &mut invalid,
+            &[[f32::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        );
+        spawn_renderable(&mut invalid, head, invalid_mesh, GlobalTransform::IDENTITY);
+        make_ready(&mut invalid, invalid_root);
+        invalid.update();
+        let transform = invalid.world().get::<Transform>(invalid_camera).unwrap();
+        assert!(transform.translation.is_finite());
+        let Projection::Perspective(projection) =
+            invalid.world().get::<Projection>(invalid_camera).unwrap()
+        else {
+            panic!("avatar viewport camera must use perspective projection");
+        };
+        assert!((projection.fov - FIXED_VERTICAL_FOV).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn portrait_and_landscape_viewports_use_their_actual_aspect_ratio() {
+        fn run_fit(viewport: UVec2) -> (f32, f32) {
+            let mut app = frame_app(viewport);
+            let camera = camera_entity(&mut app);
+            let (root, head, _) = spawn_humanoid_parts(&mut app, 0.0);
+            let mesh = mesh_asset(&mut app, &cube_positions());
+            spawn_renderable(
+                &mut app,
+                head,
+                mesh,
+                GlobalTransform::from_translation(Vec3::new(4.0, 0.0, 0.0)),
+            );
+            make_ready(&mut app, root);
+            app.update();
+            let transform = app.world().get::<Transform>(camera).unwrap();
+            let Projection::Perspective(projection) =
+                app.world().get::<Projection>(camera).unwrap()
+            else {
+                panic!("avatar viewport camera must use perspective projection");
+            };
+            (transform.translation.z, projection.aspect_ratio)
+        }
+
+        let (portrait_distance, portrait_aspect) = run_fit(UVec2::new(900, 1600));
+        let (landscape_distance, landscape_aspect) = run_fit(UVec2::new(1600, 900));
+        assert!((portrait_aspect - 900.0 / 1600.0).abs() < f32::EPSILON);
+        assert!((landscape_aspect - 1600.0 / 900.0).abs() < f32::EPSILON);
+        assert!(portrait_distance > landscape_distance);
     }
 }

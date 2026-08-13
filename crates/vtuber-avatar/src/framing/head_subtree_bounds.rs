@@ -48,9 +48,15 @@ impl WorldBounds {
         ]
     }
 
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
+
     fn include(&mut self, other: Self) {
-        self.min = self.min.min(other.min);
-        self.max = self.max.max(other.max);
+        *self = self.union(other);
     }
 }
 
