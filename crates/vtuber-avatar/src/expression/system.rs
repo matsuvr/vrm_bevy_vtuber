@@ -17,6 +17,7 @@ use crate::expression::command::ExpressionCommand;
 use crate::expression::command::build_frame_commands;
 use crate::expression::mouth::{RawMouthInput, map_mouth_with_fallback};
 use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
+use crate::mirror::AvatarMotionMirror;
 use crate::unload::ActiveControlFrame;
 
 /// Default epsilon for change detection.
@@ -168,6 +169,7 @@ pub fn apply_tracked_expressions(
     mut commands: Commands,
     lifecycle: Res<AvatarLifecycle>,
     control_frame: Res<ActiveControlFrame>,
+    mirror: Option<Res<AvatarMotionMirror>>,
     expression_maps: Query<(&ExpressionEntityMap, Option<&LookAtExpressionWeights>)>,
     mut tracker: Local<ExpressionStateTracker>,
 ) {
@@ -191,14 +193,7 @@ pub fn apply_tracked_expressions(
     };
 
     let blink = map_blink_with_fallback(
-        &RawBlinkInput {
-            left: frame.expressions.blink_left,
-            right: frame.expressions.blink_right,
-            combined: frame
-                .expressions
-                .blink_left
-                .max(frame.expressions.blink_right),
-        },
+        &blink_input(frame, mirror.is_none_or(|mirror| mirror.is_enabled())),
         capabilities.blink,
     );
     let mouth = map_mouth_with_fallback(
@@ -232,6 +227,21 @@ pub fn apply_tracked_expressions(
     ));
 }
 
+fn blink_input(frame: &vtuber_core::AvatarControlFrame, mirrored: bool) -> RawBlinkInput {
+    let (left, right) = if mirrored {
+        // VRM's left/right names are anatomical. Swapping them preserves the
+        // image-space side when the avatar is presented as a mirror.
+        (frame.expressions.blink_right, frame.expressions.blink_left)
+    } else {
+        (frame.expressions.blink_left, frame.expressions.blink_right)
+    };
+    RawBlinkInput {
+        left,
+        right,
+        combined: left.max(right),
+    }
+}
+
 fn look_at_expression_commands(
     backend: SelectedGazeBackend,
     weights: Option<LookAtExpressionWeights>,
@@ -251,12 +261,51 @@ fn look_at_expression_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vtuber_core::{
+        AvatarControlFrame, ExpressionCoefficients, FrameSeq, GazeSignal, HeadPose, MonoTimeNs,
+        TrackingState,
+    };
 
     fn cmd(name: &str, weight: f32) -> ExpressionCommand {
         ExpressionCommand {
             name: name.to_string(),
             weight,
         }
+    }
+
+    #[test]
+    fn mirrored_blink_input_swaps_only_side_specific_channels() {
+        let frame = AvatarControlFrame {
+            source_seq: FrameSeq(1),
+            captured_at: MonoTimeNs(1),
+            produced_at: MonoTimeNs(1),
+            confidence: 1.0,
+            state: TrackingState::Tracking,
+            head: HeadPose::default(),
+            gaze: GazeSignal::UNAVAILABLE,
+            expressions: ExpressionCoefficients {
+                blink_left: 0.2,
+                blink_right: 0.8,
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(
+            blink_input(&frame, true),
+            RawBlinkInput {
+                left: 0.8,
+                right: 0.2,
+                combined: 0.8,
+            }
+        );
+        assert_eq!(
+            blink_input(&frame, false),
+            RawBlinkInput {
+                left: 0.2,
+                right: 0.8,
+                combined: 0.8,
+            }
+        );
     }
 
     #[test]

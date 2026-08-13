@@ -99,10 +99,10 @@ fn smoke_preview_toggle_safe() {
 
     let mut preview = PreviewState::default();
     assert!(preview.visible);
-    assert!(!preview.mirrored);
+    assert!(preview.mirrored);
 
     preview.toggle_mirrored();
-    assert!(preview.mirrored);
+    assert!(!preview.mirrored);
 
     preview.toggle_visible();
     assert!(!preview.visible);

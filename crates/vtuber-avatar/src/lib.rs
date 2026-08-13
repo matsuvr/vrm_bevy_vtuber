@@ -15,6 +15,7 @@ mod framing;
 pub mod gaze;
 pub mod lifecycle;
 pub mod load;
+pub mod mirror;
 pub mod placeholder;
 pub mod plugin;
 pub mod pose;
@@ -32,6 +33,7 @@ pub use load::{
     AssetPathError, AvatarAssetId, ImportedAvatar, LoadImportedAvatarError,
     LoadImportedAvatarRequest, LoadImportedAvatarResult, PendingAvatarLoad, UserAssetPath,
 };
+pub use mirror::AvatarMotionMirror;
 pub use plugin::{StartupModelPath, VtuberAvatarPlugin};
 pub use pose::PoseApplyMetrics;
 pub use unload::{

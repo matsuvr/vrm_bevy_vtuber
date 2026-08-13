@@ -5,6 +5,7 @@ use bevy_egui::egui::Ui;
 use crate::actions::UiAction;
 use crate::preview::PreviewState;
 use crate::ui_model::UiViewModel;
+use vtuber_avatar::AvatarMotionMirror;
 
 fn preview_uv(mirrored: bool) -> bevy_egui::egui::Rect {
     if mirrored {
@@ -26,6 +27,7 @@ pub fn render_live_screen(
     vm: &UiViewModel,
     ui_state: &mut super::UiState,
     preview: &PreviewState,
+    avatar_motion_mirror: AvatarMotionMirror,
     preview_texture: Option<bevy_egui::egui::TextureId>,
 ) {
     ui.heading("Live");
@@ -92,6 +94,13 @@ pub fn render_live_screen(
     let mut mirror = preview.mirrored;
     if ui.checkbox(&mut mirror, "Mirror Preview").changed() {
         ui_state.emit(UiAction::ToggleMirror);
+    }
+    let mut mirror_avatar_motion = avatar_motion_mirror.is_enabled();
+    if ui
+        .checkbox(&mut mirror_avatar_motion, "Mirror Avatar Motion")
+        .changed()
+    {
+        ui_state.emit(UiAction::ToggleAvatarMotionMirror);
     }
 
     if preview.visible {

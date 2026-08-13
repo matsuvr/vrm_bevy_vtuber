@@ -21,6 +21,7 @@ use crate::lifecycle::{
 use crate::load::{
     LoadImportedAvatarRequest, LoadImportedAvatarResult, handle_load_imported_avatar_requests,
 };
+use crate::mirror::AvatarMotionMirror;
 use crate::pose::{
     PoseApplyMetrics, reset_pose_metrics_on_lifecycle_change, update_body_tracking_pose_input,
 };
@@ -38,6 +39,7 @@ impl Plugin for VtuberAvatarPlugin {
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
             .init_resource::<ActiveControlFrame>()
+            .init_resource::<AvatarMotionMirror>()
             .init_resource::<PoseApplyMetrics>()
             .add_message::<LoadAvatarRequest>()
             .add_message::<LoadAvatarResult>()

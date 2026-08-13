@@ -2,6 +2,7 @@
 
 Status: Accepted  
 Date: 2026-08-04
+Amended: 2026-08-13
 
 ## Context
 
@@ -28,6 +29,22 @@ roll  -> -Z rotation
 ```
 
 実装候補は`Quat::from_euler(EulerRot::YXZ, yaw, -pitch, -roll)`。人工点群と公式VRM 1.0 sampleで符号を固定し、目視だけで反転しない。
+
+### Mirror-control default
+
+canonical trackingは常にunmirrored camera座標のまま保持する。一方、ユーザーがアバターを鏡のように操作できるよう、adapter-localの`AvatarMotionMirror`は既定で有効にする。これはpreviewのUV mirrorとは独立した設定であり、camera frame、inference、calibration、tracking filter、`AvatarControlFrame`を書き換えない。
+
+VRM入力の直前に水平反射を一度だけ適用する。
+
+```text
+yaw              -> -yaw
+pitch            ->  pitch
+roll             -> -roll
+gaze horizontal  -> -horizontal
+blink left/right -> swap
+```
+
+水平反射はpitch、vertical gaze、口・感情など左右を持たないexpressionを変えない。OFF時は従来のcanonical-to-model対応を用いる。この分離により、preview toggleがtracking mathへ入らない既存の不変条件を維持しつつ、avatar表示だけをユーザー向けに反射できる。
 
 ### Direct-pose BodyTracking
 
@@ -62,4 +79,4 @@ procedural expressionは`ModifyExpressions`へ統合し、1アバター・1フ�
 
 ## Consequences
 
-tracking coreはBevy／VRM座標を知らない。`vtuber-avatar`は既にcalibrationとsemantic座標変換が済んだyaw／pitch／rollを`BodyTrackingPoseInput`へ渡し、bone Transformへの適用、rest-pose変換、animation base検出は`bevy_vrm1`の`BodyTracking`へ限定される。gazeは入力チャネルとして分離し、適用時はADR-010のhead-relative直接LookAtへ渡す。
+tracking coreはBevy／VRM座標を知らない。`vtuber-avatar`は既にcalibrationとsemantic座標変換が済んだyaw／pitch／rollを、既定のmirror-control adapterを通して`BodyTrackingPoseInput`へ渡し、bone Transformへの適用、rest-pose変換、animation base検出は`bevy_vrm1`の`BodyTracking`へ限定される。gazeは入力チャネルとして分離し、同じmirror-control adapterを通してADR-010のhead-relative直接LookAtへ渡す。

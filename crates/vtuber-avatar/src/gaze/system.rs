@@ -5,6 +5,7 @@ use bevy_vrm1::prelude::{DirectLookAtInput, LookAtProperties, LookAtType, RangeM
 
 use crate::capabilities::SelectedGazeBackend;
 use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
+use crate::mirror::AvatarMotionMirror;
 use crate::unload::ActiveControlFrame;
 use vtuber_core::GazeSignal;
 
@@ -68,6 +69,7 @@ pub fn fallback_look_at_properties(backend: SelectedGazeBackend) -> LookAtProper
 pub fn update_direct_look_at_input(
     lifecycle: Res<AvatarLifecycle>,
     control_frame: Res<ActiveControlFrame>,
+    mirror: Option<Res<AvatarMotionMirror>>,
     mut roots: Query<(&LookAtProperties, &mut DirectLookAtInput)>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Ready {
@@ -83,10 +85,18 @@ pub fn update_direct_look_at_input(
         .frame
         .as_ref()
         .map_or(GazeSignal::UNAVAILABLE, |frame| frame.gaze);
-    *input = direct_look_at_input(properties, gaze);
+    *input = direct_look_at_input(
+        properties,
+        gaze,
+        mirror.is_none_or(|mirror| mirror.is_enabled()),
+    );
 }
 
-fn direct_look_at_input(properties: &LookAtProperties, gaze: GazeSignal) -> DirectLookAtInput {
+fn direct_look_at_input(
+    properties: &LookAtProperties,
+    gaze: GazeSignal,
+    mirrored: bool,
+) -> DirectLookAtInput {
     let horizontal_scale = properties
         .range_map_horizontal_inner
         .input_max_value
@@ -99,8 +109,11 @@ fn direct_look_at_input(properties: &LookAtProperties, gaze: GazeSignal) -> Dire
         properties.range_map_vertical_up.input_max_value
     }
     .max(0.0);
+    let horizontal_sign = if mirrored { 1.0 } else { -1.0 };
     DirectLookAtInput {
-        yaw_degrees: finite_or_zero(-gaze.horizontal * horizontal_scale),
+        // DirectLookAt uses model-left-positive yaw, hence the opposite sign
+        // from BodyTracking's semantic yaw. Mirroring reverses only this axis.
+        yaw_degrees: finite_or_zero(horizontal_sign * gaze.horizontal * horizontal_scale),
         pitch_degrees: finite_or_zero(vrm_pitch_sign * vertical_scale),
         weight: if gaze.confidence.is_finite() {
             gaze.confidence.clamp(0.0, 1.0)
@@ -132,7 +145,7 @@ mod tests {
     #[test]
     fn centered_gaze_is_active_zero_not_unavailable() {
         let properties = fallback_look_at_properties(SelectedGazeBackend::Bone);
-        let input = direct_look_at_input(&properties, GazeSignal::tracked(0.0, 0.0, 0.8));
+        let input = direct_look_at_input(&properties, GazeSignal::tracked(0.0, 0.0, 0.8), true);
         assert!(input.active);
         assert_eq!(input.yaw_degrees, 0.0);
         assert_eq!(input.pitch_degrees, 0.0);
@@ -140,22 +153,29 @@ mod tests {
     }
 
     #[test]
-    fn image_directions_convert_once_at_vrm_boundary() {
+    fn mirrored_image_directions_reflect_only_horizontal_gaze() {
         let properties = fallback_look_at_properties(SelectedGazeBackend::Bone);
-        let right = direct_look_at_input(&properties, GazeSignal::tracked(1.0, 0.0, 1.0));
-        let left = direct_look_at_input(&properties, GazeSignal::tracked(-1.0, 0.0, 1.0));
-        let up = direct_look_at_input(&properties, GazeSignal::tracked(0.0, 1.0, 1.0));
-        let down = direct_look_at_input(&properties, GazeSignal::tracked(0.0, -1.0, 1.0));
-        assert_eq!(right.yaw_degrees, -30.0);
-        assert_eq!(left.yaw_degrees, 30.0);
+        let right = direct_look_at_input(&properties, GazeSignal::tracked(1.0, 0.0, 1.0), true);
+        let left = direct_look_at_input(&properties, GazeSignal::tracked(-1.0, 0.0, 1.0), true);
+        let up = direct_look_at_input(&properties, GazeSignal::tracked(0.0, 1.0, 1.0), true);
+        let down = direct_look_at_input(&properties, GazeSignal::tracked(0.0, -1.0, 1.0), true);
+        assert_eq!(right.yaw_degrees, 30.0);
+        assert_eq!(left.yaw_degrees, -30.0);
         assert_eq!(up.pitch_degrees, -30.0);
         assert_eq!(down.pitch_degrees, 30.0);
     }
 
     #[test]
+    fn unmirrored_image_directions_preserve_existing_vrm_conversion() {
+        let properties = fallback_look_at_properties(SelectedGazeBackend::Bone);
+        let right = direct_look_at_input(&properties, GazeSignal::tracked(1.0, 0.0, 1.0), false);
+        assert_eq!(right.yaw_degrees, -30.0);
+    }
+
+    #[test]
     fn unavailable_gaze_deactivates_direct_path() {
         let properties = fallback_look_at_properties(SelectedGazeBackend::Expression);
-        let input = direct_look_at_input(&properties, GazeSignal::UNAVAILABLE);
+        let input = direct_look_at_input(&properties, GazeSignal::UNAVAILABLE, true);
         assert!(!input.active);
         assert_eq!(input.weight, 0.0);
     }

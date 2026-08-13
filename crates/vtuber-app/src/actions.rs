@@ -54,6 +54,8 @@ pub enum UiAction {
     ToggleMirror,
     /// Toggle preview visibility.
     TogglePreview,
+    /// Toggle mirror-style avatar motion.
+    ToggleAvatarMotionMirror,
 
     // --- Error actions ---
     /// Dismiss the current error (does not clear domain failure state).

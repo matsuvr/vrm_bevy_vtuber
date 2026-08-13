@@ -9879,7 +9879,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 ## Q2-06: BodyTracking上半身追従とhead-relative gaze
 
 状態: `IN_PROGRESS`
-実行単位: `Q2-06-001`、`Q2-06-002`、repair `Q2-06-002-001`〜`Q2-06-002-004`
+実行単位: `Q2-06-001`、`Q2-06-002`、repair `Q2-06-002-001`〜`Q2-06-002-004`、`Q2-06-003`
 重点参照: DESIGN.md §7.3、§11.8、§15.4、§16.5〜§16.9、ADR-002、ADR-004、ADR-010
 
 ### 目的
@@ -10051,6 +10051,41 @@ cargo test --manifest-path vendor/bevy_vrm1/Cargo.toml
 - `percentile_ms`のWindows限定compile guardを外し、macOS test moduleでも同じpure functionをcompileできるようにした。
 - 手組みのset順テストを、実際の`VtuberAvatarPlugin`が追加する`VrmPlugin`とavatar bridge systemへtrace systemを加えた解決済み実行順検査へ置き換えた。
 - Windows C922＋実VRM visual acceptance 6項目は`PENDING`、macOS実機確認は`NOT RUN`。過去のM1眼球確認をhead-relative gaze修正後の証拠として再利用しない。
+
+#### Q2-06-003: アバターとpreviewのmirrorを既定にする
+
+状態: `DONE`
+依存: `Q2-06-002-004`
+親参照: DESIGN.md §11.6、§13.6、§18.2〜§18.3、ADR-004、ADR-010
+
+**実装指示**
+
+- previewの表示UV mirrorを既定ONにし、capture／inferenceへ渡すframeは非mirrorのまま保持する。
+- `vtuber-avatar`にadapter-localなavatar motion mirrorを追加し、既定ONかつLive UIから個別に切替可能にする。
+- mirror ONではVRM入力直前にyaw／rollとhorizontal gazeを反転し、pitch／vertical gazeは維持する。per-eye blinkは左右をswapする。
+- core／inference／trackingのcanonical unmirrored座標、calibration、filter、`AvatarControlFrame`を変更しない。preview toggleをtracking mathへ入れない。
+- direct `BodyTracking`、direct head-relative LookAt、Expression backendの既存排他とscheduleを維持する。
+
+**完了条件**
+
+- previewとavatar motionが新規sessionでmirror ONになるunit testがある。
+- mirror ON／OFFのpose、gaze、per-eye blinkの左右変換と、pitch／vertical gaze不変が自動検証される。
+- UI actionがavatar motion mirrorを一度だけ切替え、view-modelへ同期する。
+- workspace fmt、check、clippy、test、`cargo deny check`、`git diff --check`が成功する。
+- Windows／macOSの実camera＋実VRM visual acceptanceは、実施しなければ`NOT RUN`と記録する。
+
+**このsubtaskで行わないこと**
+
+- camera frame、MediaPipe入力、landmark、tracking座標、calibration値をmirrorしない。
+- synthetic world-space LookAt target、eye world transform、VRM runtime改変を追加しない。
+- 未実施の実camera visual acceptanceをPASSと記録しない。
+
+**完了記録（2026-08-13）**
+
+- preview UV mirrorとadapter-localな`AvatarMotionMirror`を既定ONにした。Live UIの`Mirror Preview`と`Mirror Avatar Motion`は独立して切替可能であり、後者はview-modelにも同期する。
+- avatar motion mirrorはVRM適用境界だけでyaw／roll、horizontal gaze、per-eye blinkの左右を反転する。pitch、vertical gaze、mouth、emotionは維持し、camera frame、MediaPipe入力、landmark、calibration、tracking filter、canonical `AvatarControlFrame`は変更しない。
+- pose、gaze、blink、default、UI actionのunit／integration testを追加・更新した。root workspaceで`cargo fmt --all -- --check`、`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --no-fail-fast`、`cargo deny check`、`git diff --check`はすべて成功した。
+- Windows実camera＋実VRMのmirror visual acceptance、macOS実機確認は`NOT RUN`。この変更はhardware PASSを主張しない。
 
 ---
 

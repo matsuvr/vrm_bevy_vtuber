@@ -14,6 +14,7 @@ use bevy_vrm1::prelude::BodyTrackingPoseInput;
 
 use crate::binding::AvatarBinding;
 use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
+use crate::mirror::AvatarMotionMirror;
 use crate::unload::ActiveControlFrame;
 
 /// Metrics for the pose apply system, useful for diagnostics.
@@ -119,6 +120,7 @@ impl PoseApplyMetrics {
 pub fn update_body_tracking_pose_input(
     lifecycle: Res<AvatarLifecycle>,
     control_frame: Res<ActiveControlFrame>,
+    mirror: Option<Res<AvatarMotionMirror>>,
     mut metrics: ResMut<PoseApplyMetrics>,
     binding_query: Query<&AvatarBinding>,
     mut inputs: Query<&mut BodyTrackingPoseInput>,
@@ -170,21 +172,23 @@ pub fn update_body_tracking_pose_input(
         return;
     }
 
-    *input = body_tracking_input(frame);
+    *input = body_tracking_input(frame, mirror.is_none_or(|mirror| mirror.is_enabled()));
 
     let applied_at = monotonic_now();
     metrics.record_apply(frame.source_seq, frame.captured_at, applied_at);
 }
 
-fn body_tracking_input(frame: &AvatarControlFrame) -> BodyTrackingPoseInput {
+fn body_tracking_input(frame: &AvatarControlFrame, mirrored: bool) -> BodyTrackingPoseInput {
     let active = matches!(
         frame.state,
         TrackingState::Tracking | TrackingState::Degraded
     );
+    let horizontal_sign = if mirrored { -1.0 } else { 1.0 };
     BodyTrackingPoseInput {
-        yaw_radians: frame.head.yaw_rad,
+        // A horizontal reflection preserves pitch but reverses yaw and roll.
+        yaw_radians: horizontal_sign * frame.head.yaw_rad,
         pitch_radians: frame.head.pitch_rad,
-        roll_radians: frame.head.roll_rad,
+        roll_radians: horizontal_sign * frame.head.roll_rad,
         weight: frame.confidence,
         active,
     }
@@ -252,18 +256,26 @@ mod tests {
     }
 
     #[test]
-    fn tracking_frame_maps_directly_without_coordinate_reinterpretation() {
-        let input = body_tracking_input(&frame(TrackingState::Tracking));
-        assert_eq!(input.yaw_radians, 0.3);
+    fn mirrored_tracking_frame_reflects_horizontal_pose_axes() {
+        let input = body_tracking_input(&frame(TrackingState::Tracking), true);
+        assert_eq!(input.yaw_radians, -0.3);
         assert_eq!(input.pitch_radians, 0.2);
-        assert_eq!(input.roll_radians, 0.1);
+        assert_eq!(input.roll_radians, -0.1);
         assert_eq!(input.weight, 0.75);
         assert!(input.active);
     }
 
     #[test]
+    fn unmirrored_tracking_frame_preserves_canonical_pose_axes() {
+        let input = body_tracking_input(&frame(TrackingState::Tracking), false);
+        assert_eq!(input.yaw_radians, 0.3);
+        assert_eq!(input.pitch_radians, 0.2);
+        assert_eq!(input.roll_radians, 0.1);
+    }
+
+    #[test]
     fn degraded_tracking_remains_weighted_and_loss_targets_neutral() {
-        assert!(body_tracking_input(&frame(TrackingState::Degraded)).active);
+        assert!(body_tracking_input(&frame(TrackingState::Degraded), true).active);
         for state in [
             TrackingState::Starting,
             TrackingState::Searching,
@@ -272,7 +284,7 @@ mod tests {
             TrackingState::ReturningNeutral,
         ] {
             assert!(
-                !body_tracking_input(&frame(state)).active,
+                !body_tracking_input(&frame(state), true).active,
                 "state={state:?}"
             );
         }

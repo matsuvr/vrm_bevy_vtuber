@@ -26,7 +26,7 @@ impl Default for PreviewState {
     fn default() -> Self {
         Self {
             visible: true,
-            mirrored: false,
+            mirrored: true,
             image_handle: None,
             target_fps: 30,
         }
@@ -56,10 +56,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preview_default_is_visible_not_mirrored() {
+    fn preview_default_is_visible_and_mirrored() {
         let state = PreviewState::default();
         assert!(state.visible);
-        assert!(!state.mirrored);
+        assert!(state.mirrored);
     }
 
     #[test]
@@ -75,9 +75,9 @@ mod tests {
     fn preview_toggle_mirrored() {
         let mut state = PreviewState::default();
         state.toggle_mirrored();
-        assert!(state.mirrored);
-        state.toggle_mirrored();
         assert!(!state.mirrored);
+        state.toggle_mirrored();
+        assert!(state.mirrored);
     }
 
     /// Mirror toggle must not affect tracking data.
@@ -90,6 +90,6 @@ mod tests {
         // PreviewState has no tracking data fields.
         // This test documents the invariant.
         assert!(state.visible);
-        assert!(state.mirrored);
+        assert!(!state.mirrored);
     }
 }

@@ -165,6 +165,8 @@ pub struct UiViewModel {
     pub tracking: TrackingViewModel,
     /// Whether preview mirroring is enabled.
     pub mirror_preview: bool,
+    /// Whether avatar motion is reflected for the operator.
+    pub mirror_avatar_motion: bool,
     /// Whether preview is visible.
     pub preview_visible: bool,
 }

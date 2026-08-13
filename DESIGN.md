@@ -717,7 +717,7 @@ pub struct GazeSignal {
 
 この規約をsynthetic testで固定する。Bevyへの符号変換はadapterだけで行う。
 
-固定revisionの`bevy_vrm1`はBevy `GltfLoader`を`GltfConvertCoordinates::default()`で構築するため、VRM nodeのmodel軸はglTF/VRM 1.0のまま扱う。すなわちforwardは`+Z`、upは`+Y`、avatar rightは`-X`である。semantic poseからmodel-space deltaへの初期対応は次とする。
+固定revisionの`bevy_vrm1`はBevy `GltfLoader`を`GltfConvertCoordinates::default()`で構築するため、VRM nodeのmodel軸はglTF/VRM 1.0のまま扱う。すなわちforwardは`+Z`、upは`+Y`、avatar rightは`-X`である。非ミラーavatar motion時のsemantic poseからmodel-space deltaへの対応は次とする。
 
 ```text
 yaw   > 0  -> +Y軸回転
@@ -726,6 +726,19 @@ roll  > 0  -> +Z軸回転
 ```
 
 回転は intrinsic Y-X-Z 順序で合成される。すなわち、`R = R_y(yaw) * R_x(pitch) * R_z(roll)` である。Bevy adapterはこのcanonical回転をmodel-space（glTF/VRM 1.0: forward `+Z`、up `+Y`、avatar right `-X`）へ変換する。`bevy_vrm1`のcoordinate conversion設定を変更した場合はADR-004とgolden testを更新する。
+
+`AvatarMotionMirror`はユーザー操作用のadapter-local表示方針で、既定はONとする。canonical tracking値を変更せずVRM入力直前だけで水平反射を適用する。
+
+```text
+avatar motion mirror ON:
+yaw              -> -yaw
+pitch            ->  pitch
+roll             -> -roll
+gaze horizontal  -> -horizontal
+blink left/right -> swap
+```
+
+この方針により、プレビューとアバターはともに鏡写しの操作感になる。OFFにすると従来のcanonical-to-VRM対応へ戻る。inference入力、landmark、calibration、tracking filter、canonical `HeadPose`／`GazeSignal`はこの設定の影響を受けない。
 
 ### 11.7 ExpressionCoefficients
 
@@ -910,8 +923,9 @@ camera previewはoptionalである。
 
 - preview非表示時はBevy Image uploadを行わない。
 - preview表示時も15fpsを上限にしてよい。
-- previewだけ水平mirrorする設定を持つ。
-- inference入力とlandmark座標はmirrorしない。
+- preview mirrorとavatar motion mirrorを個別に切り替えられ、どちらも既定ONとする。
+- preview mirrorはUV表示だけ、avatar motion mirrorはVRM adapter入力だけで適用する。
+- inference入力、landmark座標、calibration、tracking値はmirrorしない。
 
 ---
 
@@ -1550,6 +1564,7 @@ pub enum CalibrationState {
 
 - preview toggle
 - mirror preview
+- mirror avatar motion
 - head / neck weight
 - smoothing
 - expression enable
@@ -1575,6 +1590,7 @@ TOMLで保存する。
 - last camera ID
 - requested resolution / FPS
 - preview mirror
+- avatar motion mirror
 - smoothing
 - head / neck weights
 - range limits

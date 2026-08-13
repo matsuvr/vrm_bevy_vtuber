@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_vrm1::prelude::BodyTrackingPoseInput;
+use vtuber_avatar::AvatarMotionMirror;
 use vtuber_avatar::binding::AvatarBinding;
 use vtuber_avatar::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
 use vtuber_avatar::pose::{PoseApplyMetrics, update_body_tracking_pose_input};
@@ -32,6 +33,7 @@ fn ready_app(frame: Option<AvatarControlFrame>) -> (App, Entity) {
     app.add_plugins(MinimalPlugins)
         .init_resource::<AvatarLifecycle>()
         .init_resource::<ActiveControlFrame>()
+        .init_resource::<AvatarMotionMirror>()
         .init_resource::<PoseApplyMetrics>()
         .add_systems(PostUpdate, update_body_tracking_pose_input);
 
@@ -58,9 +60,9 @@ fn tracking_frame_updates_direct_input() {
 
     let input = app.world().get::<BodyTrackingPoseInput>(root).unwrap();
     assert!(input.active);
-    assert_eq!(input.yaw_radians, 0.4);
+    assert_eq!(input.yaw_radians, -0.4);
     assert_eq!(input.pitch_radians, 0.2);
-    assert_eq!(input.roll_radians, 0.1);
+    assert_eq!(input.roll_radians, -0.1);
     assert_eq!(input.weight, 0.8);
 }
 
@@ -86,7 +88,7 @@ fn lost_tracking_targets_neutral_without_removing_input() {
 
     let input = app.world().get::<BodyTrackingPoseInput>(root).unwrap();
     assert!(!input.active);
-    assert_eq!(input.yaw_radians, 0.4);
+    assert_eq!(input.yaw_radians, -0.4);
 }
 
 #[test]

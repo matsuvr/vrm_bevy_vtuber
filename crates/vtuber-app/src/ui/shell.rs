@@ -24,6 +24,7 @@ use crate::orchestrator::{Orchestrator, process_ui_actions_system, sync_avatar_l
 use crate::preview::PreviewState;
 use crate::tracking_runtime::{TrackingRuntime, tracking_bridge_system};
 use crate::ui_model::{Screen, UiViewModel};
+use vtuber_avatar::AvatarMotionMirror;
 
 use super::diagnostics::render_diagnostics_screen;
 use super::live::render_live_screen;
@@ -46,6 +47,7 @@ impl Plugin for UiShellPlugin {
             .init_resource::<UiViewModel>()
             .init_resource::<Orchestrator>()
             .init_resource::<PreviewState>()
+            .init_resource::<AvatarMotionMirror>()
             .init_resource::<DiagnosticsSnapshot>()
             .init_resource::<MetricsExportState>()
             .init_resource::<ErrorPresenter>()
@@ -164,6 +166,9 @@ impl UiState {
 
 /// Check if an action should be deduplicated within a batch.
 fn is_deduplicatable(action: &UiAction) -> bool {
+    if matches!(action, UiAction::ToggleAvatarMotionMirror) {
+        return true;
+    }
     matches!(
         action,
         UiAction::SwitchScreen(_)
@@ -196,6 +201,7 @@ fn ui_render_system(
     mut ui_state: ResMut<UiState>,
     diagnostics: Res<DiagnosticsSnapshot>,
     preview: Res<PreviewState>,
+    avatar_motion_mirror: Res<AvatarMotionMirror>,
     mut file_dialog: ResMut<super::file_dialog::FileDialogState>,
 ) -> Result {
     let preview_texture = preview
@@ -244,9 +250,14 @@ fn ui_render_system(
                 Screen::Setup => {
                     render_setup_screen(ui, &view_model, &mut ui_state, &mut file_dialog)
                 }
-                Screen::Live => {
-                    render_live_screen(ui, &view_model, &mut ui_state, &preview, preview_texture)
-                }
+                Screen::Live => render_live_screen(
+                    ui,
+                    &view_model,
+                    &mut ui_state,
+                    &preview,
+                    *avatar_motion_mirror,
+                    preview_texture,
+                ),
                 Screen::Diagnostics => render_diagnostics_screen(ui, &view_model, &diagnostics),
             });
         });
@@ -298,6 +309,10 @@ mod tests {
         state.emit(UiAction::ToggleMirror);
         state.emit(UiAction::ToggleMirror); // duplicate
         assert_eq!(state.pending_actions.len(), 1);
+
+        state.emit(UiAction::ToggleAvatarMotionMirror);
+        state.emit(UiAction::ToggleAvatarMotionMirror); // duplicate
+        assert_eq!(state.pending_actions.len(), 2);
     }
 
     #[test]

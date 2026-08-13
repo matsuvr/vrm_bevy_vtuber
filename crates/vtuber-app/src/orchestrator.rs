@@ -19,6 +19,7 @@ use crate::import::{self, ImportedModel, ModelImportError};
 use crate::preview::PreviewState;
 use crate::ui::UiState;
 use crate::ui_model::*;
+use vtuber_avatar::AvatarMotionMirror;
 use vtuber_camera::device::CameraDescriptor;
 
 /// A pending avatar load request waiting to be submitted to the lifecycle.
@@ -568,18 +569,21 @@ pub fn process_ui_actions_system(
     mut ui_state: ResMut<UiState>,
     mut view_model: ResMut<UiViewModel>,
     mut preview: ResMut<PreviewState>,
+    mut avatar_motion_mirror: ResMut<AvatarMotionMirror>,
 ) {
     let actions = ui_state.take_actions();
     for action in &actions {
         match action {
             UiAction::TogglePreview => preview.toggle_visible(),
             UiAction::ToggleMirror => preview.toggle_mirrored(),
+            UiAction::ToggleAvatarMotionMirror => avatar_motion_mirror.toggle(),
             _ => orchestrator.process_action(action),
         }
     }
     orchestrator.update_view_model(&mut view_model);
     view_model.preview_visible = preview.visible;
     view_model.mirror_preview = preview.mirrored;
+    view_model.mirror_avatar_motion = avatar_motion_mirror.is_enabled();
 }
 
 /// Converts the avatar lifecycle's internal state to the UI model's state.
@@ -708,22 +712,25 @@ mod tests {
             .init_resource::<UiState>()
             .init_resource::<UiViewModel>()
             .init_resource::<PreviewState>()
+            .init_resource::<AvatarMotionMirror>()
             .add_systems(Update, process_ui_actions_system);
 
         {
             let mut actions = app.world_mut().resource_mut::<UiState>();
             actions.emit(UiAction::TogglePreview);
             actions.emit(UiAction::ToggleMirror);
+            actions.emit(UiAction::ToggleAvatarMotionMirror);
         }
         app.update();
 
         let preview = app.world().resource::<PreviewState>();
         assert!(!preview.visible);
-        assert!(preview.mirrored);
+        assert!(!preview.mirrored);
 
         let view_model = app.world().resource::<UiViewModel>();
         assert!(!view_model.preview_visible);
-        assert!(view_model.mirror_preview);
+        assert!(!view_model.mirror_preview);
+        assert!(!view_model.mirror_avatar_motion);
     }
 
     #[test]
