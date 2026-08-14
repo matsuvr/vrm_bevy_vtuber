@@ -55,6 +55,11 @@ pub fn render_setup_screen(
     ui.heading("Avatar");
     if let Some(model) = &vm.avatar.imported_model {
         ui.label(format!("Model: {}", model.name));
+        let generation = match model.generation {
+            crate::import::VrmGeneration::Vrm0 => "VRM 0.x",
+            crate::import::VrmGeneration::Vrm1 => "VRM 1.0",
+        };
+        ui.label(format!("Generation: {generation}"));
         ui.label(format!("ID: {}", &model.id[..8.min(model.id.len())]));
         ui.label(format!(
             "Required bones: {}",

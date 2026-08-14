@@ -401,6 +401,7 @@ impl Orchestrator {
 
         // Avatar — imported model summary for display.
         vm.avatar.imported_model = self.imported_model.as_ref().map(|m| ImportedModelSummary {
+            generation: m.summary.generation,
             id: m.id.clone(),
             name: m.name.clone(),
             original_path: m.original_path.clone(),

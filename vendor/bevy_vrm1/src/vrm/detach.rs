@@ -77,6 +77,9 @@ fn remove_vrm_components(
         .try_remove::<VrmHandle>()
         .try_remove::<Name>()
         .try_remove::<WorldAssetRoot>()
+        .try_remove::<Transform>()
+        .try_remove::<GlobalTransform>()
+        .try_remove::<Visibility>()
         // Rest transforms
         .try_remove::<RestTransform>()
         .try_remove::<RestGlobalTransform>()
@@ -216,6 +219,9 @@ mod tests {
             .spawn((
                 Vrm,
                 Initialized,
+                Transform::from_translation(Vec3::new(0.0, 0.0, 1.0)),
+                GlobalTransform::default(),
+                Visibility::Hidden,
                 ExpressionEntityMap(HashMap::default()),
                 BodyTracking::default(),
                 BodyTrackingPoseInput::default(),
@@ -236,6 +242,9 @@ mod tests {
         assert!(!world.entity(vrm_entity).contains::<BodyTracking>());
         assert!(!world.entity(vrm_entity).contains::<BodyTrackingPoseInput>());
         assert!(!world.entity(vrm_entity).contains::<BodyTrackingProfile>());
+        assert!(!world.entity(vrm_entity).contains::<Transform>());
+        assert!(!world.entity(vrm_entity).contains::<GlobalTransform>());
+        assert!(!world.entity(vrm_entity).contains::<Visibility>());
         // Entity itself survives
         assert!(world.get_entity(vrm_entity).is_ok());
     }

@@ -170,7 +170,11 @@ pub fn import_vrm<P: AsRef<Path>, Q: AsRef<Path>>(
     }
 
     let source = source.as_ref();
-    if source.extension().and_then(|e| e.to_str()) != Some("vrm") {
+    if !source
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("vrm"))
+    {
         return Err(ModelImportError::InvalidExtension);
     }
     let metadata = fs::symlink_metadata(source)?;
@@ -578,6 +582,15 @@ mod tests {
         fs::write(&path, b"not a vrm").unwrap();
         let err = import_vrm(&path, dir.path(), DEFAULT_SIZE_LIMIT).unwrap_err();
         assert!(matches!(err, ModelImportError::InvalidExtension));
+    }
+
+    #[test]
+    fn accepts_uppercase_vrm_extension_for_preflight() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.VRM");
+        fs::write(&path, b"not a glb").unwrap();
+        let err = import_vrm(&path, dir.path(), DEFAULT_SIZE_LIMIT).unwrap_err();
+        assert!(!matches!(err, ModelImportError::InvalidExtension));
     }
 
     #[test]

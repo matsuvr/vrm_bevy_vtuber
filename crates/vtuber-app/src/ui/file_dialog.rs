@@ -50,7 +50,7 @@ impl FileDialogState {
                 rt.block_on(async {
                     let handle = rfd::AsyncFileDialog::new()
                         .add_filter("VRM models", &["vrm"])
-                        .set_title("Select VRM 1.0 model")
+                        .set_title("Select VRM model (0.x or 1.0)")
                         .pick_file()
                         .await;
                     handle.map(|h| h.path().to_path_buf())
