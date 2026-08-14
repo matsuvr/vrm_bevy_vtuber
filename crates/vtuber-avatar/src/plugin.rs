@@ -13,6 +13,7 @@ use crate::arm_pose::ArmPoseOverrideStore;
 use crate::arm_pose::apply_default_arm_pose;
 use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
+use crate::breathing::apply_breathing_hips_translation;
 use crate::expression::apply_tracked_expressions;
 use crate::framing::fixed_fov_fit::FIXED_VERTICAL_FOV;
 use crate::framing::{AvatarViewportCamera, frame_avatar_camera};
@@ -75,6 +76,13 @@ impl Plugin for VtuberAvatarPlugin {
             .add_systems(
                 PostUpdate,
                 update_body_tracking_pose_input
+                    .after(AnimationSystems)
+                    .before(apply_direct_body_tracking)
+                    .before(VrmSystemSets::Constraints),
+            )
+            .add_systems(
+                PostUpdate,
+                apply_breathing_hips_translation
                     .after(AnimationSystems)
                     .before(apply_direct_body_tracking)
                     .before(VrmSystemSets::Constraints),

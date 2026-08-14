@@ -19,6 +19,10 @@ use crate::arm::{
 };
 use crate::arm_pose::{ArmPoseBlendState, ArmPoseOverrideStore, DefaultArmPose};
 use crate::bind::BindTriggered;
+use crate::breathing::{
+    BreathingBinding, BreathingProfile, BreathingState, collect_hips_ancestor_path,
+    resolve_breathing_binding,
+};
 use crate::capabilities::{
     AvatarCapabilities, BonePresence, DeclaredLookAtType, ExpressionCapabilities,
     SelectedGazeBackend,
@@ -250,6 +254,7 @@ pub fn bind_humanoid_bones(
 
     let root_entity = root_ref.id();
     let head = entity_reference::<HeadBoneEntity>(&root_ref);
+    let hips = entity_reference::<HipsBoneEntity>(&root_ref);
     let neck = entity_reference::<NeckBoneEntity>(&root_ref);
     let upper_chest = entity_reference::<UpperChestBoneEntity>(&root_ref);
     let chest = entity_reference::<ChestBoneEntity>(&root_ref);
@@ -319,6 +324,20 @@ pub fn bind_humanoid_bones(
             );
             let arm_pose_blend = ArmPoseBlendState::from_default(&default_arm_pose);
 
+            // Breathing geometry is resolved from the hips bone's immutable
+            // rest data exactly once. A failed resolution (pathological rest
+            // geometry) simply omits the breathing components, which disables
+            // the always-on idle motion for that avatar as a safe no-op.
+            let breathing_profile = BreathingProfile::default();
+            let breathing_binding = resolve_avatar_breathing(
+                &breathing_profile,
+                binding.generation,
+                hips,
+                root_entity,
+                &bone_query,
+                &parents,
+            );
+
             let expression_map = expression_maps.get(root_entity).ok().flatten();
             let expression_caps = ExpressionCapabilities::from_map(expression_map);
             let has_spring_bone = spring_roots
@@ -362,6 +381,13 @@ pub fn bind_humanoid_bones(
                 BodyTrackingProfile::default(),
                 Visibility::Inherited,
             ));
+            if let Some(breathing_binding) = breathing_binding {
+                commands.entity(root_entity).insert((
+                    breathing_profile,
+                    breathing_binding,
+                    BreathingState::default(),
+                ));
+            }
             if capabilities.gaze_backend != SelectedGazeBackend::None {
                 let effective_properties =
                     effective_look_at_properties(look_at_properties, capabilities.gaze_backend);
@@ -503,6 +529,47 @@ where
     T: Component + std::ops::Deref<Target = Entity>,
 {
     root.get::<T>().map(|reference| **reference)
+}
+
+/// Resolves the per-avatar breathing geometry from the hips bone's immutable
+/// rest data and the real `ChildOf` ancestor path.
+///
+/// Returns `None` (disabling the always-on idle motion for this avatar) when
+/// the hips bone or its rest data is missing, the rest hips height is not
+/// positive and finite, the rest affine cannot be inverted, or the ancestor
+/// path does not reach the avatar root.
+fn resolve_avatar_breathing(
+    profile: &BreathingProfile,
+    generation: AvatarGeneration,
+    hips: Option<Entity>,
+    root: Entity,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+    parents: &Query<&ChildOf>,
+) -> Option<BreathingBinding> {
+    let hips = hips?;
+    let rest_local = bone_query.get(hips).ok()?.1.map(|rest| rest.0);
+    let rest_global = bone_query.get(hips).ok()?.2.map(|rest| rest.0);
+    let ancestors = match collect_hips_ancestor_path(hips, root, |entity| {
+        parents.get(entity).ok().map(ChildOf::parent)
+    }) {
+        Some(ancestors) => ancestors,
+        None => {
+            warn!("hips ancestor path does not reach the avatar root; breathing is disabled");
+            return None;
+        }
+    };
+    resolve_breathing_binding(
+        generation,
+        hips,
+        profile,
+        rest_local,
+        rest_global,
+        ancestors,
+    )
 }
 
 fn left_finger_references(root: &EntityRef<'_>) -> FingerReferences {

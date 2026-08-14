@@ -112,6 +112,16 @@ fn avatar_schedule_ordering_matches_design() {
                     "update_body_tracking_pose_input",
                     "apply_direct_body_tracking",
                 ),
+                ("trace_animation", "apply_breathing_hips_translation"),
+                (
+                    "apply_breathing_hips_translation",
+                    "apply_direct_body_tracking",
+                ),
+                ("apply_breathing_hips_translation", "apply_default_arm_pose"),
+                (
+                    "apply_breathing_hips_translation",
+                    "update_direct_look_at_input",
+                ),
                 ("apply_direct_body_tracking", "apply_default_arm_pose"),
                 ("apply_default_arm_pose", "update_direct_look_at_input"),
                 ("apply_direct_body_tracking", "update_direct_look_at_input"),

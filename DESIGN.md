@@ -1296,6 +1296,7 @@ VRM更新順に合わせ、tracking applyを次へ配置する。
 ```text
 PostUpdate:
   Bevy AnimationSystems
+  -> apply_breathing_hips_translation
   -> direct-pose bevy_vrm1 BodyTracking
   -> model-adaptive DefaultArmPose
   -> direct head-relative LookAt / GazeControl
@@ -1364,6 +1365,16 @@ R_output_local    = R_animated_base_local * R_tracking_delta
 ```
 
 各frameでanimation systemが書いたbase姿勢を検出し、そのbaseへrest-relative tracking deltaを加算する。前frameのtracking deltaを再度乗算してはならない。tracking喪失時はtarget角を0へ戻し、同じbone別half-lifeでanimated baseへ復帰する。汎用Bevy Animationとの加算合成を自動検証するが、VRMA playback自体は固定scopeどおり未サポートであり、実機互換性を合格扱いしない。
+
+### 16.6a Always-on idle breathing (Issue #20)
+
+`Ready`状態のアバターは常時、subtleなprocedural breathingを行う。カメラ・control frame・tracking confidenceには依存しない。所有する値はadditive `hips.translation`のみで、head〜spine rotationの唯一のwriterはdirect-pose `BodyTracking`のままとする。
+
+- 波形: `phase_01 = (elapsed / period) mod 1`、`breath_01 = sin(PI * phase_01)^2`。既定periodは5.0秒で、binding直後の最初のframeはphase `0`（neutral、popなし）。phase accumulatorは`f64`。
+- amplitude: immutable rest空間の正のhips高さから `vertical = clamp(0.010 * h, 0.006, 0.0125)` m、`forward = clamp(0.008 * h, 0.004, 0.010)` m。ピーク時のmodel-space offsetは`+Y * vertical + +Z * forward`。
+- 座標変換: `RestGlobalTransform(hips) = parent_rest ∘ RestTransform(hips)`から`parent_linear⁻¹`をbinding時に一度だけ導出し、non-humanoid intermediate nodeを含む実際の`ChildOf`経路でmodel軸の意味を保つ。runtimeはcached ancestor pathでhipsの`GlobalTransform`のみ更新し、full hierarchyを走査しない。
+- base合成: `output = base + current_delta`。animationが書いた新しいhips translationをbaseとして捕捉し、自前の前回出力を累積しない。cycle境界でauthored baseへ正確に復帰する。
+- lifecycle: `Ready`の間だけ書き、unload／replacementで状態ごと破棄。replacementはneutral phase `0`から開始する。
 
 ### 16.7 range limit
 
