@@ -1,7 +1,8 @@
-//! VRM 1.0 model import and lightweight preflight inspection.
+//! VRM 0.x/1.0 model import and lightweight preflight inspection.
 //!
 //! Imports a user-selected file into an application-managed asset source and
-//! verifies that it is a valid VRM 1.0 model before it reaches `bevy_vrm1`.
+//! verifies that it is a supported VRM generation before it reaches the
+//! `bevy_vrm1` compatibility boundary.
 
 use std::fs;
 use std::io::{self, Write};
@@ -47,9 +48,12 @@ pub enum ModelImportError {
     /// GLB parse failure.
     #[error("MODEL_FILE_INVALID: failed to parse GLB: {0}")]
     GlbParse(String),
-    /// Missing `VRMC_vrm` extension.
-    #[error("MODEL_NOT_VRM1: missing VRMC_vrm extension")]
-    NotVrm1,
+    /// Missing or ambiguous VRM generation extension.
+    #[error("MODEL_NOT_VRM: {reason}")]
+    NotVrm {
+        /// Stable reason for diagnostics and user-facing error mapping.
+        reason: String,
+    },
     /// Unsupported VRM spec version.
     #[error("MODEL_UNSUPPORTED_VERSION: spec version {0}")]
     UnsupportedVersion(String),
@@ -67,16 +71,30 @@ pub enum ModelImportError {
     },
 }
 
+/// Supported VRM generation detected by preflight.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VrmGeneration {
+    /// Legacy VRM 0.x using the root `VRM` extension.
+    Vrm0,
+    /// VRM 1.0 using the root `VRMC_vrm` extension.
+    #[default]
+    Vrm1,
+}
+
 /// Summary returned after a successful inspection.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct VrmInspectionSummary {
-    /// VRM spec version, expected to be `"1.0"`.
+    /// Detected VRM generation.
+    pub generation: VrmGeneration,
+    /// VRM spec version, or the stable `"0.x"` marker for VRM 0.x.
     pub spec_version: String,
-    /// Model name from `VRMC_vrm.meta`.
+    /// Model name from the generation-specific metadata object.
     pub name: String,
-    /// Authors from `VRMC_vrm.meta`.
+    /// Authors from the generation-specific metadata object.
     pub authors: Vec<String>,
-    /// License URL from `VRMC_vrm.meta`.
+    /// License URL from the generation-specific metadata object.
     pub license_url: Option<String>,
     /// Expression preset names discovered in the model.
     pub expression_presets: Vec<String>,
@@ -86,12 +104,18 @@ pub struct VrmInspectionSummary {
     pub has_spring_bone: bool,
     /// Whether the model contains Node Constraint extensions.
     pub has_node_constraint: bool,
+    /// Whether the model declares first-person mesh annotations.
+    pub has_first_person: bool,
+    /// Whether the model declares a material extension understood by the
+    /// runtime compatibility layer.
+    pub has_mtoon_materials: bool,
     /// Humanoid node indices.
     pub humanoid_nodes: HumanoidNodes,
 }
 
 /// Humanoid bone node indices.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct HumanoidNodes {
     /// Hips node index.
     pub hips: usize,
@@ -209,15 +233,126 @@ pub fn inspect_vrm<P: AsRef<Path>>(path: P) -> Result<VrmInspectionSummary, Mode
     check_external_uris(&document)?;
 
     let json = document.as_json().clone();
-    let vrmc = json
-        .extensions
-        .as_ref()
-        .and_then(|ext| ext.others.get("VRMC_vrm"))
-        .ok_or(ModelImportError::NotVrm1)?;
+    let extensions = json.extensions.as_ref().map(|ext| &ext.others);
+    let legacy = extensions.and_then(|ext| ext.get("VRM"));
+    let modern = extensions.and_then(|ext| ext.get("VRMC_vrm"));
 
+    let mut summary = match (legacy, modern) {
+        (Some(_), Some(_)) => {
+            return Err(ModelImportError::NotVrm {
+                reason: "both VRM and VRMC_vrm extensions are present".into(),
+            });
+        }
+        (Some(vrm), None) => inspect_vrm0(&document, vrm)?,
+        (None, Some(vrmc)) => inspect_vrm1(&document, vrmc)?,
+        (None, None) => {
+            return Err(ModelImportError::NotVrm {
+                reason: "missing VRM or VRMC_vrm extension".into(),
+            });
+        }
+    };
+
+    summary.has_node_constraint =
+        extensions.is_some_and(|ext| ext.contains_key("VRMC_node_constraint"));
+    summary.has_mtoon_materials = match summary.generation {
+        VrmGeneration::Vrm0 => legacy
+            .and_then(|vrm| vrm.get("materialProperties"))
+            .is_some(),
+        VrmGeneration::Vrm1 => json
+            .extensions_used
+            .iter()
+            .any(|name| name == "VRMC_materials_mtoon"),
+    };
+
+    Ok(summary)
+}
+
+fn inspect_vrm0(
+    document: &gltf::Document,
+    vrm: &serde_json::Value,
+) -> Result<VrmInspectionSummary, ModelImportError> {
+    let meta = vrm
+        .get("meta")
+        .and_then(|value| value.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let name = meta
+        .get("title")
+        .or_else(|| meta.get("name"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let authors = meta
+        .get("author")
+        .and_then(|value| value.as_str())
+        .map(|value| vec![value.to_string()])
+        .unwrap_or_default();
+    let license_url = meta
+        .get("otherLicenseUrl")
+        .or_else(|| meta.get("licenseUrl"))
+        .and_then(|value| value.as_str())
+        .map(String::from);
+
+    let human_bones = vrm
+        .get("humanoid")
+        .and_then(|humanoid| humanoid.get("humanBones"))
+        .and_then(|bones| bones.as_array())
+        .ok_or_else(|| ModelImportError::GlbParse("missing legacy humanoid.humanBones".into()))?;
+    let node_count = document.nodes().len();
+    let hips = required_legacy_bone_index(human_bones, "hips", node_count)?;
+    let head = required_legacy_bone_index(human_bones, "head", node_count)?;
+    let neck = optional_legacy_bone_index(human_bones, "neck", node_count)?;
+
+    let mut expression_presets = vrm
+        .get("blendShapeMaster")
+        .and_then(|master| master.get("blendShapeGroups"))
+        .and_then(|groups| groups.as_array())
+        .map(|groups| {
+            groups
+                .iter()
+                .filter_map(|group| {
+                    let preset = group.get("presetName").and_then(|value| value.as_str());
+                    let name = group.get("name").and_then(|value| value.as_str());
+                    match preset.filter(|value| !value.is_empty() && *value != "unknown") {
+                        Some(value) => Some(value.to_string()),
+                        None => name.filter(|value| !value.is_empty()).map(String::from),
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    expression_presets.sort();
+    expression_presets.dedup();
+
+    let look_at_type = vrm
+        .get("lookAtMaster")
+        .and_then(|look_at| look_at.get("type"))
+        .and_then(|value| value.as_str())
+        .map(normalize_legacy_look_at_type);
+
+    Ok(VrmInspectionSummary {
+        generation: VrmGeneration::Vrm0,
+        spec_version: "0.x".into(),
+        name,
+        authors,
+        license_url,
+        expression_presets,
+        look_at_type,
+        has_spring_bone: vrm.get("secondaryAnimation").is_some(),
+        has_node_constraint: false,
+        has_first_person: vrm.get("firstPerson").is_some(),
+        has_mtoon_materials: false,
+        humanoid_nodes: HumanoidNodes { hips, head, neck },
+    })
+}
+
+fn inspect_vrm1(
+    document: &gltf::Document,
+    vrmc: &serde_json::Value,
+) -> Result<VrmInspectionSummary, ModelImportError> {
     let spec_version = vrmc
         .get("specVersion")
-        .and_then(|v| v.as_str())
+        .and_then(|value| value.as_str())
         .map(String::from)
         .ok_or_else(|| ModelImportError::GlbParse("missing specVersion".into()))?;
     if spec_version != "1.0" {
@@ -226,80 +361,109 @@ pub fn inspect_vrm<P: AsRef<Path>>(path: P) -> Result<VrmInspectionSummary, Mode
 
     let meta = vrmc
         .get("meta")
-        .and_then(|m| m.as_object())
+        .and_then(|value| value.as_object())
         .cloned()
         .unwrap_or_default();
     let name = meta
         .get("name")
-        .and_then(|v| v.as_str())
+        .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string();
     let authors = meta
         .get("authors")
-        .and_then(|a| a.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
+        .and_then(|authors| authors.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(String::from))
                 .collect()
         })
         .unwrap_or_default();
     let license_url = meta
         .get("licenseUrl")
-        .and_then(|v| v.as_str())
+        .and_then(|value| value.as_str())
         .map(String::from);
 
-    let humanoid = vrmc
+    let human_bones = vrmc
         .get("humanoid")
-        .and_then(|h| h.as_object())
-        .ok_or_else(|| ModelImportError::GlbParse("missing humanoid".into()))?;
-    let human_bones = humanoid
-        .get("humanBones")
-        .and_then(|b| b.as_object())
-        .ok_or_else(|| ModelImportError::GlbParse("missing humanBones".into()))?;
-
+        .and_then(|humanoid| humanoid.get("humanBones"))
+        .and_then(|bones| bones.as_object())
+        .ok_or_else(|| ModelImportError::GlbParse("missing humanoid.humanBones".into()))?;
     let node_count = document.nodes().len();
     let hips = required_bone_index(human_bones, "hips", node_count)?;
     let head = required_bone_index(human_bones, "head", node_count)?;
     let neck = optional_bone_index(human_bones, "neck", node_count)?;
 
-    let expressions = vrmc.get("expressions").and_then(|e| e.as_object());
-    let mut expression_presets = Vec::new();
-    if let Some(expr) = expressions
-        && let Some(preset) = expr.get("preset").and_then(|p| p.as_object())
-    {
-        for key in preset.keys() {
-            expression_presets.push(key.clone());
-        }
-    }
+    let mut expression_presets = vrmc
+        .get("expressions")
+        .and_then(|expressions| expressions.get("preset"))
+        .and_then(|preset| preset.as_object())
+        .map(|preset| preset.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    expression_presets.sort();
 
     let look_at_type = vrmc
         .get("lookAt")
-        .and_then(|l| l.get("type"))
-        .and_then(|v| v.as_str())
+        .and_then(|look_at| look_at.get("type"))
+        .and_then(|value| value.as_str())
         .map(String::from);
 
-    let has_spring_bone = json
-        .extensions
-        .as_ref()
-        .map(|ext| ext.others.contains_key("VRMC_springBone"))
-        .unwrap_or(false);
-    let has_node_constraint = json
-        .extensions
-        .as_ref()
-        .map(|ext| ext.others.contains_key("VRMC_node_constraint"))
-        .unwrap_or(false);
-
     Ok(VrmInspectionSummary {
+        generation: VrmGeneration::Vrm1,
         spec_version,
         name,
         authors,
         license_url,
         expression_presets,
         look_at_type,
-        has_spring_bone,
-        has_node_constraint,
+        has_spring_bone: document
+            .as_json()
+            .extensions
+            .as_ref()
+            .is_some_and(|ext| ext.others.contains_key("VRMC_springBone")),
+        has_node_constraint: false,
+        has_first_person: vrmc.get("firstPerson").is_some(),
+        has_mtoon_materials: false,
         humanoid_nodes: HumanoidNodes { hips, head, neck },
     })
+}
+
+fn normalize_legacy_look_at_type(value: &str) -> String {
+    match value {
+        "Bone" | "bone" => "bone".into(),
+        "BlendShape" | "Expression" | "blendShape" | "expression" => "expression".into(),
+        other => other.to_string(),
+    }
+}
+
+fn required_legacy_bone_index(
+    bones: &[serde_json::Value],
+    name: &str,
+    node_count: usize,
+) -> Result<usize, ModelImportError> {
+    let index = bones
+        .iter()
+        .find(|bone| bone.get("bone").and_then(|value| value.as_str()) == Some(name))
+        .and_then(|bone| bone.get("node"))
+        .and_then(|node| node.as_u64())
+        .map(|node| node as usize)
+        .ok_or_else(|| ModelImportError::MissingRequiredBone(name.to_string()))?;
+    if index >= node_count {
+        return Err(ModelImportError::InvalidNodeIndex { index });
+    }
+    Ok(index)
+}
+
+fn optional_legacy_bone_index(
+    bones: &[serde_json::Value],
+    name: &str,
+    node_count: usize,
+) -> Result<Option<usize>, ModelImportError> {
+    match required_legacy_bone_index(bones, name, node_count) {
+        Ok(index) => Ok(Some(index)),
+        Err(ModelImportError::MissingRequiredBone(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn required_bone_index(
@@ -487,11 +651,44 @@ mod tests {
         assert_eq!(read.imported, imported);
     }
 
-    const LEGACY_GLTF_JSON: &str = r#"{
+    const NON_VRM_GLTF_JSON: &str = r#"{
         "asset": {"version": "2.0"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{}]
+    }"#;
+
+    const VRM0_GLTF_JSON: &str = r#"{
+        "asset": {"version": "2.0", "generator": "vtuber-app hermetic test"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [
+            {"name": "Hips", "children": [1, 2]},
+            {"name": "Head"},
+            {"name": "Neck"}
+        ],
+        "extensionsUsed": ["VRM"],
+        "extensions": {
+            "VRM": {
+                "meta": {"title": "Hermetic VRM 0.x", "author": "Legacy Author"},
+                "humanoid": {
+                    "humanBones": [
+                        {"bone": "hips", "node": 0},
+                        {"bone": "head", "node": 1},
+                        {"bone": "neck", "node": 2}
+                    ]
+                },
+                "lookAtMaster": {"type": "BlendShape"},
+                "blendShapeMaster": {
+                    "blendShapeGroups": [
+                        {"name": "blink", "presetName": "blink"},
+                        {"name": "customSmile", "presetName": "unknown"}
+                    ]
+                },
+                "materialProperties": [],
+                "secondaryAnimation": {"boneGroups": []}
+            }
+        }
     }"#;
 
     const VRM1_GLTF_JSON: &str = r#"{
@@ -539,7 +736,11 @@ mod tests {
     }
 
     fn legacy_fixture(dir: &TempDir) -> PathBuf {
-        write_glb_fixture(dir, "legacy.vrm", LEGACY_GLTF_JSON)
+        write_glb_fixture(dir, "legacy.vrm", NON_VRM_GLTF_JSON)
+    }
+
+    fn vrm0_fixture(dir: &TempDir) -> PathBuf {
+        write_glb_fixture(dir, "legacy-0.x.vrm", VRM0_GLTF_JSON)
     }
 
     fn vrm1_fixture(dir: &TempDir) -> PathBuf {
@@ -547,29 +748,71 @@ mod tests {
     }
 
     #[test]
-    fn generated_legacy_glb_is_rejected_as_not_vrm1() {
+    fn generated_non_vrm_glb_is_rejected_with_generation_error() {
         let dir = TempDir::new().unwrap();
         let err = inspect_vrm(legacy_fixture(&dir)).unwrap_err();
-        assert!(matches!(err, ModelImportError::NotVrm1));
+        assert!(matches!(err, ModelImportError::NotVrm { .. }));
     }
 
     #[test]
-    fn generated_legacy_glb_import_is_rejected_as_not_vrm1() {
+    fn generated_non_vrm_glb_import_is_rejected_with_generation_error() {
         let dir = TempDir::new().unwrap();
         let source = legacy_fixture(&dir);
         let err = import_vrm(source, dir.path(), DEFAULT_SIZE_LIMIT).unwrap_err();
-        assert!(matches!(err, ModelImportError::NotVrm1));
+        assert!(matches!(err, ModelImportError::NotVrm { .. }));
+    }
+
+    #[test]
+    fn inspects_generated_minimal_vrm0_fixture() {
+        let dir = TempDir::new().unwrap();
+        let summary = inspect_vrm(vrm0_fixture(&dir)).expect("fixture should be valid VRM 0.x");
+        assert_eq!(summary.generation, VrmGeneration::Vrm0);
+        assert_eq!(summary.spec_version, "0.x");
+        assert_eq!(summary.name, "Hermetic VRM 0.x");
+        assert_eq!(summary.authors, vec!["Legacy Author"]);
+        assert_eq!(summary.look_at_type.as_deref(), Some("expression"));
+        assert_eq!(summary.expression_presets, vec!["blink", "customSmile"]);
+        assert!(summary.has_spring_bone);
+        assert!(summary.has_mtoon_materials);
+        assert_eq!(summary.humanoid_nodes.neck, Some(2));
     }
 
     #[test]
     fn inspects_generated_minimal_vrm1_fixture() {
         let dir = TempDir::new().unwrap();
         let summary = inspect_vrm(vrm1_fixture(&dir)).expect("fixture should be valid VRM 1.0");
+        assert_eq!(summary.generation, VrmGeneration::Vrm1);
         assert_eq!(summary.spec_version, "1.0");
         assert!(!summary.name.is_empty(), "model name should be present");
         assert!(summary.humanoid_nodes.hips < 1000);
         assert!(summary.humanoid_nodes.head < 1000);
         assert!(summary.has_spring_bone);
+    }
+
+    #[test]
+    fn rejects_ambiguous_vrm_generation() {
+        let dir = TempDir::new().unwrap();
+        let both = VRM1_GLTF_JSON.replace("\"VRMC_vrm\": {", "\"VRM\": {}, \"VRMC_vrm\": {");
+        let path = write_glb_fixture(&dir, "ambiguous.vrm", &both);
+        let err = inspect_vrm(path).unwrap_err();
+        assert!(matches!(err, ModelImportError::NotVrm { .. }));
+    }
+
+    #[test]
+    fn old_summary_defaults_to_vrm1_for_cache_compatibility() {
+        let summary: VrmInspectionSummary = toml::from_str(
+            r#"spec_version = "1.0"
+name = "old cache"
+authors = []
+expression_presets = []
+has_spring_bone = false
+has_node_constraint = false
+humanoid_nodes = { hips = 0, head = 1 }
+"#,
+        )
+        .expect("old cache summary should remain readable");
+        assert_eq!(summary.generation, VrmGeneration::Vrm1);
+        assert!(!summary.has_first_person);
     }
 
     #[test]

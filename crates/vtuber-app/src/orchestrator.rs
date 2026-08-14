@@ -550,7 +550,9 @@ fn format_import_error(error: &ModelImportError) -> String {
         ModelImportError::SizeExceeded { size, limit } => {
             format!("File size ({size} bytes) exceeds limit ({limit} bytes)")
         }
-        ModelImportError::NotVrm1 => "File is not a VRM 1.0 model".to_string(),
+        ModelImportError::NotVrm { reason } => {
+            format!("File is not a supported VRM model: {reason}")
+        }
         ModelImportError::UnsupportedVersion(v) => format!("Unsupported VRM version: {v}"),
         ModelImportError::MissingRequiredBone(bone) => format!("Missing required bone: {bone}"),
         ModelImportError::GlbParse(msg) => format!("Failed to parse model: {msg}"),
@@ -879,10 +881,12 @@ mod tests {
     }
 
     #[test]
-    fn format_import_error_not_vrm1() {
-        let err = ModelImportError::NotVrm1;
+    fn format_import_error_not_vrm() {
+        let err = ModelImportError::NotVrm {
+            reason: "missing VRM or VRMC_vrm extension".into(),
+        };
         let msg = format_import_error(&err);
-        assert!(msg.contains("VRM 1.0"));
+        assert!(msg.contains("supported VRM"));
     }
 
     #[test]
