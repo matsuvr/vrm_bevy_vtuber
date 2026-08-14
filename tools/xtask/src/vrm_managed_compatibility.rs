@@ -197,9 +197,10 @@ fn verify_breathing(app: &mut App, root: Entity) -> Result<(), String> {
     }
 
     println!(
-        "breathing verified: hips={:?} period={}s vertical={:.6}m forward={:.6}m up_local={:?} forward_local={:?}",
+        "breathing verified: hips={:?} period={}s rest_hips_height={:.6}m vertical={:.6}m forward={:.6}m up_local={:?} forward_local={:?}",
         binding.hips,
         profile.period_seconds,
+        binding.rest_hips_height,
         binding.vertical_amplitude,
         binding.forward_amplitude,
         binding.up_local,

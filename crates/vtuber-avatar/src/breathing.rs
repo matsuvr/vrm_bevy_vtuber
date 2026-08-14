@@ -19,9 +19,11 @@
 //!   is converted to f32.
 //! - Breathing is independent of camera availability, control frames,
 //!   BodyTrackingPoseInput.active, and tracking confidence.
-//! - Geometry and the model-space-to-parent-local conversion are resolved once
-//!   when binding becomes ready. The steady-state update is allocation-free and
-//!   performs one scalar evaluation and one small transform composition.
+//! - `RestGlobalTransform` is a global/world-space affine. Binding removes the
+//!   immutable avatar-root rest affine before measuring hips height or mapping
+//!   the semantic model-space `+Y`/`+Z` vectors into the hips parent local space.
+//!   The steady-state update is allocation-free and performs one scalar
+//!   evaluation and one small transform composition.
 //!
 //! # Reference behavior
 //!
@@ -35,9 +37,11 @@
 //! +Y * vertical_amplitude + +Z * forward_amplitude (VRM model space: up
 //! +Y, forward +Z per ADR-004). That model-space vector is converted
 //! through the hips parent's actual rest orientation so non-humanoid
-//! intermediate nodes in the ChildOf path are handled exactly.
+//! intermediate nodes in the ChildOf path are handled exactly. The root rest
+//! affine is removed first, so root rotation, translation, and scale do not
+//! change the model-space amplitudes or semantic direction.
 
-use bevy::math::Mat3A;
+use bevy::math::{Affine3A, Mat3A};
 use bevy::prelude::*;
 
 use crate::binding::AvatarBinding;
@@ -254,6 +258,12 @@ pub struct BreathingBinding {
     pub generation: AvatarGeneration,
     /// Hips bone entity receiving the additive translation.
     pub hips: Entity,
+    /// Immutable avatar-root global/rest affine captured at binding time.
+    ///
+    /// This is the `RestGlobalTransform` of the root when available, or the
+    /// root's binding-time `GlobalTransform` fallback. It is never replaced by
+    /// an animated/current root transform.
+    pub root_rest_global: GlobalTransform,
     /// Ancestors from the hips parent up to (excluding) the avatar root,
     /// nearest first. Resolved once from the real ChildOf path.
     pub ancestors: Vec<Entity>,
@@ -263,6 +273,8 @@ pub struct BreathingBinding {
     /// Hips-parent-local direction whose rest-space global motion is exactly
     /// model-space forward (+Z). Includes parent scale compensation.
     pub forward_local: Vec3,
+    /// Positive hips height measured in VRM model/root space, not world space.
+    pub rest_hips_height: f32,
     /// Bounded vertical amplitude in model-space meters.
     pub vertical_amplitude: f32,
     /// Bounded forward amplitude in model-space meters.
@@ -316,70 +328,92 @@ impl BreathingState {
 ///
 /// # Arguments
 ///
+/// - root_rest_global: the avatar root's immutable binding-time rest/global
+///   affine. This must be the root `RestGlobalTransform`, or the binding-time
+///   root `GlobalTransform` fallback when the root has no rest component.
 /// - hips_rest_local / hips_rest_global: the hips bone's immutable
-///   RestTransform / RestGlobalTransform values.
+///   RestTransform / RestGlobalTransform values. `RestGlobalTransform` is in
+///   global/world space and is converted back to model/root space through the
+///   cached root affine.
 /// - ancestors: the ChildOf path from the hips parent up to (excluding)
 ///   the avatar root, nearest first (see collect_hips_ancestor_path).
 ///
-/// Returns None when rest data is missing, the hips height is not positive
-/// and finite, the rest affine cannot be inverted, or the converted directions
-/// degenerate. The caller then simply does not insert the breathing
-/// components, which disables the motion for that avatar as a safe no-op.
+/// Returns None when rest data is missing, the model-space hips height is not
+/// positive and finite, a rest affine is non-finite or non-invertible, or the
+/// converted directions degenerate. The caller then simply does not insert
+/// the breathing components, which disables the motion for that avatar as a
+/// safe no-op.
 #[must_use]
 pub fn resolve_breathing_binding(
     generation: AvatarGeneration,
     hips: Entity,
     profile: &BreathingProfile,
+    root_rest_global: Option<GlobalTransform>,
     hips_rest_local: Option<Transform>,
     hips_rest_global: Option<GlobalTransform>,
     ancestors: Vec<Entity>,
 ) -> Option<BreathingBinding> {
     profile.validate().ok()?;
+    let root_rest_global = root_rest_global?;
     let rest_local = hips_rest_local?;
     let rest_global = hips_rest_global?;
+    let root_affine = root_rest_global.affine();
+    let hips_affine = rest_global.affine();
+    let local_affine = rest_local.compute_affine();
+    if !root_affine.is_finite() || !hips_affine.is_finite() || !local_affine.is_finite() {
+        return None;
+    }
+    let root_inverse = finite_affine_inverse(root_affine)?;
+    let parent_global = hips_affine * finite_affine_inverse(local_affine)?;
+    if !parent_global.is_finite() {
+        return None;
+    }
+    let parent_in_model = root_inverse * parent_global;
+    if !parent_in_model.is_finite() {
+        return None;
+    }
+    let hips_global_position = hips_affine.transform_point3(Vec3::ZERO);
+    let hips_model_position = root_inverse.transform_point3(hips_global_position);
+    if !hips_model_position.is_finite() {
+        return None;
+    }
+    let rest_hips_height = hips_model_position.y;
     let (vertical_amplitude, forward_amplitude) =
-        resolve_breathing_amplitudes(profile, rest_global.translation().y)?;
-    let linear_inverse = parent_linear_inverse(rest_global, rest_local)?;
+        resolve_breathing_amplitudes(profile, rest_hips_height)?;
+    let linear_inverse = finite_linear_inverse(parent_in_model.matrix3)?;
     let up_local = finite_nonzero(linear_inverse.mul_vec3(Vec3::Y))?;
     let forward_local = finite_nonzero(linear_inverse.mul_vec3(Vec3::Z))?;
     Some(BreathingBinding {
         generation,
         hips,
+        root_rest_global,
         ancestors,
         up_local,
         forward_local,
+        rest_hips_height,
         vertical_amplitude,
         forward_amplitude,
     })
 }
 
-/// Derives the inverse of the hips parent's rest linear part from the hips
-/// bone's immutable rest data.
-///
-/// hips_rest_global = parent_rest_global composed with hips_rest_local in the
-/// affine sense, so parent_rest = hips_rest_global composed with the inverse
-/// of hips_rest_local. This works for any ChildOf path (including non-humanoid
-/// intermediate nodes) because the rest global transform already composes the
-/// whole chain. The returned matrix maps model-space translation deltas into
-/// hips-parent-local deltas.
-fn parent_linear_inverse(
-    hips_rest_global: GlobalTransform,
-    hips_rest_local: Transform,
-) -> Option<Mat3A> {
-    let hips_affine = hips_rest_global.affine();
-    let local_affine = hips_rest_local.compute_affine();
-    if !hips_affine.is_finite() || !local_affine.is_finite() {
+/// Returns a finite inverse for a finite affine, treating non-invertible
+/// values as a safe no-op.
+fn finite_affine_inverse(value: Affine3A) -> Option<Affine3A> {
+    if !value.is_finite() {
         return None;
     }
-    let parent_affine = hips_affine * local_affine.inverse();
-    if !parent_affine.is_finite() {
+    let inverse = value.inverse();
+    inverse.is_finite().then_some(inverse)
+}
+
+/// Returns a finite inverse for a finite linear matrix, treating
+/// non-invertible values as a safe no-op.
+fn finite_linear_inverse(value: Mat3A) -> Option<Mat3A> {
+    if !value.is_finite() {
         return None;
     }
-    let inverse = parent_affine.matrix3.inverse();
-    if !inverse.is_finite() {
-        return None;
-    }
-    Some(inverse)
+    let inverse = value.inverse();
+    inverse.is_finite().then_some(inverse)
 }
 
 /// Returns the vector when it is finite and non-degenerate.
@@ -789,6 +823,7 @@ mod tests {
             AvatarGeneration(1),
             hips,
             &profile,
+            Some(GlobalTransform::IDENTITY),
             Some(rest_local),
             Some(rest_global),
             Vec::new(),
@@ -799,10 +834,11 @@ mod tests {
     }
 
     #[test]
-    fn rotated_parent_maps_model_up_through_inverse_rest_rotation() {
+    fn rotated_root_preserves_model_axes_in_parent_local_space() {
         let profile = BreathingProfile::default();
         let hips = entity(1);
-        // Root rest rotation +90 degrees about X: model +Y points at world +Z.
+        // Root rest rotation +90 degrees about X changes world coordinates,
+        // but model/root-space +Y and +Z remain the semantic axes.
         let root_rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
         let rest_local = Transform::from_translation(Vec3::new(0.0, 1.0, 0.0));
         let rest_global = GlobalTransform::from_rotation(root_rotation).mul_transform(rest_local);
@@ -810,22 +846,20 @@ mod tests {
             AvatarGeneration(1),
             hips,
             &profile,
+            Some(GlobalTransform::from_rotation(root_rotation)),
             Some(rest_local),
             Some(rest_global),
             Vec::new(),
         )
         .expect("rotated rest data resolves");
 
-        // Moving model +Y must map to the parent-local direction that the
-        // +90-degree X rotation sends back to world +Y: that is world -Z.
         assert!(
-            binding.up_local.abs_diff_eq(Vec3::NEG_Z, F32_EPSILON),
+            binding.up_local.abs_diff_eq(Vec3::Y, F32_EPSILON),
             "up_local {0}",
             binding.up_local
         );
-        // Moving model +Z maps to world +Y.
         assert!(
-            binding.forward_local.abs_diff_eq(Vec3::Y, F32_EPSILON),
+            binding.forward_local.abs_diff_eq(Vec3::Z, F32_EPSILON),
             "forward_local {0}",
             binding.forward_local
         );
@@ -849,6 +883,7 @@ mod tests {
             AvatarGeneration(1),
             hips,
             &profile,
+            Some(GlobalTransform::IDENTITY),
             Some(rest_local),
             Some(rest_global),
             Vec::new(),
@@ -877,6 +912,7 @@ mod tests {
                 AvatarGeneration(1),
                 hips,
                 &profile,
+                Some(GlobalTransform::IDENTITY),
                 None,
                 Some(GlobalTransform::from(valid_local)),
                 Vec::new(),
@@ -895,6 +931,7 @@ mod tests {
                 AvatarGeneration(1),
                 hips,
                 &profile,
+                Some(GlobalTransform::IDENTITY),
                 Some(zero_scale),
                 Some(GlobalTransform::from(zero_scale)),
                 Vec::new(),
@@ -909,6 +946,7 @@ mod tests {
                 AvatarGeneration(1),
                 hips,
                 &profile,
+                Some(GlobalTransform::IDENTITY),
                 Some(underground),
                 Some(GlobalTransform::from(underground)),
                 Vec::new(),
@@ -922,11 +960,48 @@ mod tests {
                 AvatarGeneration(1),
                 hips,
                 &profile,
+                Some(GlobalTransform::IDENTITY),
                 Some(valid_local),
                 Some(GlobalTransform::from(Transform {
                     translation: Vec3::new(f32::NAN, 1.0, 0.0),
                     ..Transform::IDENTITY
                 })),
+                Vec::new(),
+            )
+            .is_none()
+        );
+
+        // A non-invertible root rest affine must disable breathing without
+        // producing NaN or panicking.
+        let invalid_root = GlobalTransform::from(Transform {
+            scale: Vec3::ZERO,
+            ..Transform::IDENTITY
+        });
+        assert!(
+            resolve_breathing_binding(
+                AvatarGeneration(1),
+                hips,
+                &profile,
+                Some(invalid_root),
+                Some(valid_local),
+                Some(GlobalTransform::from(valid_local)),
+                Vec::new(),
+            )
+            .is_none()
+        );
+
+        let non_finite_root = GlobalTransform::from(Transform {
+            translation: Vec3::new(f32::NAN, 0.0, 0.0),
+            ..Transform::IDENTITY
+        });
+        assert!(
+            resolve_breathing_binding(
+                AvatarGeneration(1),
+                hips,
+                &profile,
+                Some(non_finite_root),
+                Some(valid_local),
+                Some(GlobalTransform::from(valid_local)),
                 Vec::new(),
             )
             .is_none()

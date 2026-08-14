@@ -29,6 +29,7 @@ struct Scene {
     hips: Entity,
     head: Entity,
     spine: Option<Entity>,
+    root_rest_global: GlobalTransform,
     rest_hips_global: GlobalTransform,
     vertical_amplitude: f32,
     forward_amplitude: f32,
@@ -68,6 +69,17 @@ impl Scene {
             .expect("root has BreathingBinding");
         binding.up_local * (self.vertical_amplitude * breath)
             + binding.forward_local * (self.forward_amplitude * breath)
+    }
+
+    fn expected_model_delta(&self, dt: f64, frames: usize) -> Vec3 {
+        let mut elapsed = 0.0;
+        let mut breath = 0.0f64;
+        for _ in 0..frames {
+            breath = breathing_envelope(breathing_phase(elapsed, self.profile.period_seconds));
+            elapsed += dt;
+        }
+        let breath = breath as f32;
+        Vec3::Y * (self.vertical_amplitude * breath) + Vec3::Z * (self.forward_amplitude * breath)
     }
 
     /// Runs frames updates with the given frame time, accumulating phase the
@@ -134,12 +146,27 @@ fn build_scene_with_ancestors(
     base: Vec3,
     with_body_chain: bool,
 ) -> Scene {
+    build_scene_with_root_transform(
+        Transform::from_rotation(root_rotation),
+        ancestor_specs,
+        hips_rest_rotation,
+        base,
+        with_body_chain,
+    )
+}
+
+fn build_scene_with_root_transform(
+    root_transform: Transform,
+    ancestor_specs: &[(Quat, Vec3)],
+    hips_rest_rotation: Quat,
+    base: Vec3,
+    with_body_chain: bool,
+) -> Scene {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins.build().disable::<TimePlugin>())
         .insert_resource(Time::<()>::default())
         .add_systems(PostUpdate, apply_breathing_hips_translation);
 
-    let root_transform = Transform::from_rotation(root_rotation);
     let root = spawn_transform(&mut app, root_transform, GlobalTransform::IDENTITY, None);
 
     let mut ancestors = Vec::with_capacity(ancestor_specs.len());
@@ -215,6 +242,7 @@ fn build_scene_with_ancestors(
         AvatarGeneration(1),
         hips,
         &profile,
+        Some(GlobalTransform::from(root_transform)),
         Some(hips_rest_local),
         Some(rest_hips_global),
         ancestor_path,
@@ -226,6 +254,7 @@ fn build_scene_with_ancestors(
         generation,
         ..binding
     };
+    let rest_hips_height = binding.rest_hips_height;
     app.world_mut().entity_mut(root).insert((
         ActiveAvatar,
         AvatarBinding::head_only(root, head, generation),
@@ -235,7 +264,7 @@ fn build_scene_with_ancestors(
     ));
 
     let (vertical_amplitude, forward_amplitude) =
-        resolve_breathing_amplitudes(&profile, rest_hips_global.translation().y)
+        resolve_breathing_amplitudes(&profile, rest_hips_height)
             .expect("scene hips height is valid");
 
     Scene {
@@ -246,6 +275,7 @@ fn build_scene_with_ancestors(
         hips,
         head,
         spine,
+        root_rest_global: GlobalTransform::from(root_transform),
         rest_hips_global,
         vertical_amplitude,
         forward_amplitude,
@@ -311,6 +341,7 @@ fn invalid_profiles_are_safe_no_ops_at_both_resolution_boundaries() {
                 AvatarGeneration(1),
                 hips,
                 &profile,
+                Some(GlobalTransform::IDENTITY),
                 Some(rest_local),
                 Some(rest_global),
                 Vec::new(),
@@ -433,15 +464,112 @@ fn non_identity_root_parent_and_rest_rotations_preserve_model_space_motion() {
     // Peak inhale after 2.5 seconds.
     scene.advance(dt, 150);
 
-    // The breathing delta is model-space (+Y * vertical) + (+Z * forward) at
-    // peak, independent of the rotated root, intermediate, and hips rest
-    // rotations. The peak envelope is essentially 1.0.
+    // The semantic delta is resolved in model/root space. The world-space
+    // displacement is therefore the cached root-rest linear part applied to
+    // that semantic vector; it must not be the raw world +Y/+Z vector.
     let global_delta = scene.hips_global().translation() - scene.rest_hips_global.translation();
+    let expected_world_delta = scene
+        .root_rest_global
+        .affine()
+        .matrix3
+        .mul_vec3(scene.expected_model_delta(1.0 / 60.0, 150));
     assert!(
-        (global_delta - Vec3::new(0.0, scene.vertical_amplitude, scene.forward_amplitude)).length()
-            < 2.0 * EPSILON,
-        "global delta {global_delta} must equal model-space up/forward at peak"
+        (global_delta - expected_world_delta).length() < 2.0 * EPSILON,
+        "global delta {global_delta} must equal root-rest-linear * model delta {expected_world_delta}"
     );
+}
+
+#[test]
+fn root_translation_and_scale_do_not_change_model_height_amplitudes_or_local_delta() {
+    let root_rotation = Quat::from_euler(EulerRot::XYZ, 0.25, -0.45, 0.2).normalize();
+    let root_a = Transform::from_rotation(root_rotation);
+    let root_b = Transform {
+        translation: Vec3::new(4.0, -3.0, 2.0),
+        ..root_a
+    };
+    let root_c = Transform {
+        translation: Vec3::new(4.0, -3.0, 2.0),
+        scale: Vec3::new(1.4, 0.7, 1.2),
+        ..root_a
+    };
+    let base = Vec3::new(0.1, 1.0, 0.2);
+    let mut scene_a = build_scene_with_root_transform(root_a, &[], identity_quat(), base, false);
+    let mut scene_b = build_scene_with_root_transform(root_b, &[], identity_quat(), base, false);
+    let mut scene_c = build_scene_with_root_transform(root_c, &[], identity_quat(), base, false);
+
+    let height_a = scene_a
+        .app
+        .world()
+        .get::<BreathingBinding>(scene_a.root)
+        .expect("binding A")
+        .rest_hips_height;
+    let height_b = scene_b
+        .app
+        .world()
+        .get::<BreathingBinding>(scene_b.root)
+        .expect("binding B")
+        .rest_hips_height;
+    let height_c = scene_c
+        .app
+        .world()
+        .get::<BreathingBinding>(scene_c.root)
+        .expect("binding C")
+        .rest_hips_height;
+    assert!((height_a - height_b).abs() < EPSILON);
+    assert!((height_a - height_c).abs() < EPSILON);
+    assert!((scene_a.vertical_amplitude - scene_b.vertical_amplitude).abs() < EPSILON);
+    assert!((scene_a.vertical_amplitude - scene_c.vertical_amplitude).abs() < EPSILON);
+    assert!((scene_a.forward_amplitude - scene_b.forward_amplitude).abs() < EPSILON);
+    assert!((scene_a.forward_amplitude - scene_c.forward_amplitude).abs() < EPSILON);
+
+    let dt = Duration::from_secs_f64(1.0 / 60.0);
+    scene_a.advance(dt, 150);
+    scene_b.advance(dt, 150);
+    scene_c.advance(dt, 150);
+    assert!((scene_a.hips_translation() - scene_b.hips_translation()).length() < EPSILON);
+    assert!((scene_a.hips_translation() - scene_c.hips_translation()).length() < EPSILON);
+    assert!(
+        (scene_a.expected_model_delta(1.0 / 60.0, 150)
+            - scene_b.expected_model_delta(1.0 / 60.0, 150))
+        .length()
+            < EPSILON
+    );
+    assert!(
+        (scene_a.expected_model_delta(1.0 / 60.0, 150)
+            - scene_c.expected_model_delta(1.0 / 60.0, 150))
+        .length()
+            < EPSILON
+    );
+}
+
+#[test]
+fn root_rotation_preserves_model_height_even_when_world_y_is_non_positive() {
+    let root_transform = Transform {
+        translation: Vec3::new(0.0, -0.5, 0.0),
+        rotation: Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+        scale: Vec3::ONE,
+    };
+    let mut scene = build_scene_with_root_transform(
+        root_transform,
+        &[],
+        identity_quat(),
+        Vec3::new(0.0, 1.0, 0.0),
+        false,
+    );
+
+    assert!(scene.rest_hips_global.translation().y <= 0.0);
+    let binding = scene
+        .app
+        .world()
+        .get::<BreathingBinding>(scene.root)
+        .expect("binding exists");
+    assert!((binding.rest_hips_height - 1.0).abs() < EPSILON);
+    let expected = resolve_breathing_amplitudes(&scene.profile, 1.0).expect("height is valid");
+    assert!((binding.vertical_amplitude - expected.0).abs() < EPSILON);
+    assert!((binding.forward_amplitude - expected.1).abs() < EPSILON);
+
+    scene.advance(Duration::from_secs_f64(1.0 / 60.0), 150);
+    assert!(scene.hips_translation().is_finite());
 }
 
 #[test]
@@ -456,8 +584,12 @@ fn multiple_intermediate_globals_are_composed_from_root_toward_hips() {
             Vec3::new(-0.15, 0.25, 0.1),
         ),
     ];
-    let mut scene = build_scene_with_ancestors(
-        Quat::from_rotation_y(0.4).normalize(),
+    let mut scene = build_scene_with_root_transform(
+        Transform {
+            translation: Vec3::new(0.7, -0.4, 1.1),
+            rotation: Quat::from_rotation_y(0.4).normalize(),
+            scale: Vec3::ONE,
+        },
         &ancestor_specs,
         Quat::from_rotation_z(-0.3).normalize(),
         Vec3::new(0.1, 1.0, -0.2),
@@ -502,6 +634,17 @@ fn multiple_intermediate_globals_are_composed_from_root_toward_hips() {
             .angle_between(expected_global.rotation())
             < EPSILON,
         "hips global rotation must use root-to-hips order"
+    );
+
+    let actual_delta = actual_global.translation() - scene.rest_hips_global.translation();
+    let expected_delta = scene
+        .root_rest_global
+        .affine()
+        .matrix3
+        .mul_vec3(scene.expected_model_delta(1.0 / 60.0, 150));
+    assert!(
+        (actual_delta - expected_delta).length() < 2.0 * EPSILON,
+        "semantic model-space displacement must follow the non-identity root: actual {actual_delta}, expected {expected_delta}"
     );
 }
 
@@ -715,6 +858,7 @@ fn unload_replacement_clears_state_and_replacement_begins_neutral() {
         generation,
         new_hips,
         &BreathingProfile::default(),
+        Some(GlobalTransform::IDENTITY),
         Some(hips_rest_local),
         Some(rest_hips_global),
         Vec::new(),
@@ -869,14 +1013,13 @@ fn scale_and_rotation_channels_are_never_written() {
 #[test]
 fn root_and_camera_transforms_remain_unchanged() {
     let base = Vec3::new(0.0, 1.0, 0.0);
-    let mut scene = build_scene(
-        identity_quat(),
-        None,
-        Vec3::ZERO,
-        identity_quat(),
-        base,
-        false,
-    );
+    let root_transform = Transform {
+        translation: Vec3::new(0.8, -0.2, 1.4),
+        rotation: Quat::from_euler(EulerRot::XYZ, 0.2, -0.4, 0.3).normalize(),
+        scale: Vec3::new(1.2, 0.8, 0.9),
+    };
+    let mut scene =
+        build_scene_with_root_transform(root_transform, &[], identity_quat(), base, false);
     let camera_transform = Transform::from_translation(Vec3::new(0.0, 0.0, 2.5));
     let camera = scene
         .app

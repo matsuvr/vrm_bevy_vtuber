@@ -2,8 +2,8 @@
 
 Date: 2026-08-14
 Scope: GitHub Issue #20 (always-on procedural idle breathing)
-Code baseline: `a9abcfd` (docs(avatar): finalize default pose validation contract (#19))
-Status: local automated regression PASS; real-model headless motion PASS; windowed visual observation NOT CONFIRMED on this machine
+Code baseline: `d8e7b6790e4f4a22ce644cd23034b4ea0884a6d8` (review blocker repair baseline)
+Status: local automated regression PASS; model/root-space managed compatibility PASS for three local VRM 1.0 files; windowed visual observation NOT CONFIRMED on this machine
 
 ## Environment
 
@@ -33,6 +33,29 @@ Reference rationale: VMagicMirror (pinned malaybaku/VMagicMirror@8c97982) applie
 sin-squared body offset added to the body IK target; its checked-in prefab uses 0.01 m offsets. The
 issue profile deliberately stays at or below those small offsets.
 
+## Model/root-space contract
+
+`RestGlobalTransform` is a global/world-space affine, not VRM model/root
+space. At binding time the implementation caches an immutable root rest/global
+affine `G_root`; when the root has no `RestGlobalTransform`, the root's
+binding-time `GlobalTransform` is cached as the explicit fallback authority.
+It then resolves:
+
+```text
+G_parent = G_hips * inverse(hips RestTransform)
+hips_model_position = inverse(G_root) * G_hips.translation
+rest_hips_height = hips_model_position.y
+parent_in_model = inverse(G_root) * G_parent
+model_to_parent_local = inverse(linear(parent_in_model))
+up_local = model_to_parent_local * +Y
+forward_local = model_to_parent_local * +Z
+```
+
+The cached root authority is never replaced by an animated/current root
+transform. Root rotation, translation, and scale therefore do not change the
+model-space amplitudes or semantic breathing direction. Non-finite or
+non-invertible affines disable breathing as a safe no-op.
+
 ## Real-model headless motion evidence (production plugin path)
 
 The managed compatibility runner now verifies breathing after Ready
@@ -43,9 +66,9 @@ wall-paced frames, and fails unless the hips translation moves more than
 
 | Model | Result | rest_hips_height | vertical | forward | up_local | forward_local |
 |---|---|---|---|---|---|---|
-| tests/fixtures/vrm/inore-vrm1.vrm (36 spring roots) | PASS | ~0.8938 m | 0.008938 m | 0.007151 m | (0,1,0) | (0,0,1) |
-| AvatarSample_C.vrm (23 spring roots) | PASS | ~1.0268 m | 0.010268 m | 0.008214 m | (0,1,0) | (0,0,1) |
-| 1565994099520778586.vrm (36 spring roots) | PASS | ~0.8938 m | 0.008938 m | 0.007151 m | (0,1,0) | (0,0,1) |
+| apps/desktop/assets/models/inore-vrm1.vrm | PASS | 0.893817 m | 0.008938 m | 0.007151 m | (0,1,0) | (0,0,1) |
+| AvatarSample_C.vrm | PASS | 1.026783 m | 0.010268 m | 0.008214 m | (0,1,0) | (0,0,1) |
+| 1565994099520778586.vrm | PASS | 0.893817 m | 0.008938 m | 0.007151 m | (0,1,0) | (0,0,1) |
 
 Command per model:
 
@@ -70,11 +93,16 @@ Pre-existing fixture limitations, unrelated to breathing:
 | 30/60/120 fps equivalence | cargo test -p vtuber-avatar breathing::tests --test breathing | PASS |
 | Amplitude scaling and min/max clamps; invalid geometry rejection | cargo test -p vtuber-avatar breathing::tests | PASS |
 | Profile validation (period, factors, bounds) | cargo test -p vtuber-avatar breathing::tests | PASS |
-| Model-to-parent-local conversion for rotated rest and non-uniform scale | cargo test -p vtuber-avatar breathing::tests | PASS |
+| Model/root-to-parent-local conversion for rotated root/rest and non-uniform scale | cargo test -p vtuber-avatar breathing::tests | PASS |
 | First ready frame exactly equals authored base | cargo test -p vtuber-avatar --test breathing | PASS |
 | No accumulation over 10 s of cycles; exact base at cycle boundaries | cargo test -p vtuber-avatar --test breathing | PASS |
 | Animation-base replacement detected and preserved | cargo test -p vtuber-avatar --test breathing | PASS |
-| Non-identity root/parent/rest rotations preserve model-space up/forward | cargo test -p vtuber-avatar --test breathing | PASS |
+| Non-identity root/parent/rest rotations preserve model-space up/forward; world displacement is root-rest-linear * semantic model delta | cargo test -p vtuber-avatar --test breathing | PASS |
+| Root translation and non-uniform scale do not change model-space height, amplitudes, or local delta | cargo test -p vtuber-avatar --test breathing | PASS |
+| Root rotation preserves model-space height even when world Y is zero/negative | cargo test -p vtuber-avatar --test breathing | PASS |
+| Two non-commuting intermediate nodes plus non-identity root preserve analytic global composition and semantic model displacement | cargo test -p vtuber-avatar --test breathing | PASS |
+| Binding-time root RestGlobalTransform preference and GlobalTransform fallback | cargo test -p vtuber-avatar --test binding | PASS |
+| Non-finite/non-invertible root affine disables breathing without NaN/panic | cargo test -p vtuber-avatar breathing::tests | PASS |
 | Non-humanoid intermediate node; same-frame global consumption by body tracking | cargo test -p vtuber-avatar --test breathing | PASS |
 | No scale/rotation writes; root and camera untouched | cargo test -p vtuber-avatar --test breathing | PASS |
 | Continues without control frame and inactive tracking; transitions do not snap phase | cargo test -p vtuber-avatar --test breathing | PASS |
@@ -82,18 +110,29 @@ Pre-existing fixture limitations, unrelated to breathing:
 | Non-Ready lifecycle stops writing; NaN hips is a bounded no-op | cargo test -p vtuber-avatar --test breathing | PASS |
 | Schedule: after animation, before body tracking/arm pose/gaze/constraints | cargo test -p vtuber-avatar --test schedule | PASS |
 
-Complete local workspace run:
+Complete local run for this repair:
 
 ```text
 cargo fmt --all -- --check            PASS
-cargo test -p vtuber-avatar           PASS (all unit + integration + doctests)
-cargo clippy -p vtuber-avatar --all-targets -- -D warnings   PASS
-cargo test --workspace                PASS
-cargo check -p xtask                  PASS
+cargo check --workspace               PASS
+cargo clippy --workspace --all-targets -- -D warnings PASS
+cargo test --workspace --no-fail-fast PASS
+cargo deny check                      PASS
 git diff --check                      PASS
+cargo test -p vtuber-avatar --test breathing PASS
+cargo test -p vtuber-avatar breathing::tests PASS
+cargo test -p vtuber-avatar --test schedule PASS
+cargo run -p xtask -- vrm-managed-compat apps/desktop/assets/models/inore-vrm1.vrm PASS
+cargo run -p xtask -- vrm-managed-compat AvatarSample_C.vrm PASS
+cargo run -p xtask -- vrm-managed-compat 1565994099520778586.vrm PASS
 ```
 
-No GitHub Actions workflow, trigger, or remote CI result was used.
+`cargo deny check` emitted only existing repository policy/dependency warnings:
+the unmatched `Unicode-DFS-2016` allowance, duplicate transitive crate entries,
+and the existing yanked `wide` advisory. No dependency or lockfile change was
+made by this repair, so no new warning was introduced. Advisory, bans, license,
+and source checks passed. No GitHub Actions workflow, trigger, or remote CI
+result was used.
 
 ## Windowed visual check (attempted, not confirmed)
 
@@ -115,14 +154,16 @@ plugin path and measures real hips displacement directly.
 The requested human visual checks (front, 45 degree, side views; short/chibi
 stylized model with materially different rest rotations) remain NOT RUN. No
 third-party VRM was copied into the repository for this purpose and no visual
-PASS is claimed.
+PASS is claimed. The three managed runs above are headless runtime evidence,
+not human visual acceptance.
 
 ## Files changed
 
-- crates/vtuber-avatar/src/breathing.rs (new): profile, waveform, amplitude
-  resolution, rest-space conversion, runtime compositor, unit tests.
-- crates/vtuber-avatar/src/binding.rs: resolves hips rest data and ancestor
-  path once at binding; inserts BreathingProfile/BreathingBinding/BreathingState.
+- crates/vtuber-avatar/src/breathing.rs: profile, waveform, model/root-space
+  amplitude and direction resolution, runtime compositor, unit tests.
+- crates/vtuber-avatar/src/binding.rs: captures immutable root rest/global
+  authority (with binding-time GlobalTransform fallback), resolves hips rest
+  data and ancestor path once at binding, and inserts the breathing components.
 - crates/vtuber-avatar/src/plugin.rs: registers apply_breathing_hips_translation
   after AnimationSystems and before apply_direct_body_tracking.
 - crates/vtuber-avatar/src/lib.rs: module + re-exports.
@@ -139,7 +180,11 @@ PASS is claimed.
   where the desktop app renders continuously.
 - Non-identity hips-parent rest orientations on real models were not observed
   in the available VRM 1.0 fixtures; that path is covered by synthetic tests
-  (rotated root/intermediate/hips rest, non-uniform parent scale).
+  (rotated root/intermediate/hips rest, non-uniform parent scale, non-identity
+  root rotation/translation/scale).
+- The new model/root-space implementation and managed compatibility output
+  still require rerunning `cargo run -p xtask -- vrm-managed-compat <model.vrm>`
+  for each available VRM 1.0 model after this repair.
 - The desktop app window was observed to present a static frame on this
   machine alongside busy worker threads; this pre-existing behavior is
   unrelated to the breathing change and is left for the camera/orchestrator

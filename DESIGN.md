@@ -1371,8 +1371,8 @@ R_output_local    = R_animated_base_local * R_tracking_delta
 `Ready`状態のアバターは常時、subtleなprocedural breathingを行う。カメラ・control frame・tracking confidenceには依存しない。所有する値はadditive `hips.translation`のみで、head〜spine rotationの唯一のwriterはdirect-pose `BodyTracking`のままとする。
 
 - 波形: `phase_01 = (elapsed / period) mod 1`、`breath_01 = sin(PI * phase_01)^2`。既定periodは5.0秒で、binding直後の最初のframeはphase `0`（neutral、popなし）。phase accumulatorは`f64`。
-- amplitude: immutable rest空間の正のhips高さから `vertical = clamp(0.010 * h, 0.006, 0.0125)` m、`forward = clamp(0.008 * h, 0.004, 0.010)` m。ピーク時のmodel-space offsetは`+Y * vertical + +Z * forward`。
-- 座標変換: `RestGlobalTransform(hips) = parent_rest ∘ RestTransform(hips)`から`parent_linear⁻¹`をbinding時に一度だけ導出し、non-humanoid intermediate nodeを含む実際の`ChildOf`経路でmodel軸の意味を保つ。runtimeはcached ancestor pathでhipsの`GlobalTransform`のみ更新し、full hierarchyを走査しない。
+- amplitude: `RestGlobalTransform`はglobal/world空間なので、binding時にcacheしたroot rest/global affine `G_root`で除去する。`hips_model_position = inverse(G_root) * G_hips.translation` の `y` をVRM model/root-spaceの`rest_hips_height`とし、`vertical = clamp(0.010 * h, 0.006, 0.0125)` m、`forward = clamp(0.008 * h, 0.004, 0.010)` mを求める。ピーク時のsemantic model-space offsetは`+Y * vertical + +Z * forward`であり、rootのrotation、translation、scaleでは振幅が変化しない。
+- 座標変換: `G_parent = G_hips * inverse(hips RestTransform)`、`parent_in_model = inverse(G_root) * G_parent`、`model_to_parent_local = inverse(linear(parent_in_model))`をbinding時に一度だけ導出し、`+Y`／`+Z`をhips-parent-localへ変換する。`RestGlobalTransform`がrootにない場合はbinding成功時のroot `GlobalTransform`をimmutableなroot-rest authorityとしてcacheし、後続frameのanimated/current rootを座標変換へ再利用しない。non-humanoid intermediate nodeを含む実際の`ChildOf`経路でmodel軸の意味を保ち、非finite／非可逆affineはsafe no-opとする。runtimeはcached ancestor pathでhipsの`GlobalTransform`のみ更新し、full hierarchyを走査しない。
 - base合成: `output = base + current_delta`。animationが書いた新しいhips translationをbaseとして捕捉し、自前の前回出力を累積しない。cycle境界でauthored baseへ正確に復帰する。
 - lifecycle: `Ready`の間だけ書き、unload／replacementで状態ごと破棄。replacementはneutral phase `0`から開始する。
 

@@ -325,15 +325,20 @@ pub fn bind_humanoid_bones(
             let arm_pose_blend = ArmPoseBlendState::from_default(&default_arm_pose);
 
             // Breathing geometry is resolved from the hips bone's immutable
-            // rest data exactly once. A failed resolution (pathological rest
-            // geometry) simply omits the breathing components, which disables
-            // the always-on idle motion for that avatar as a safe no-op.
+            // rest data exactly once. RestGlobalTransform is a global/world
+            // affine, so the binding also captures the root's immutable rest
+            // affine to establish VRM model/root space. If bevy_vrm1 did not
+            // provide a root RestGlobalTransform, this binding-time current
+            // GlobalTransform is the explicit immutable fallback authority;
+            // later animated root transforms are never used for conversion.
             let breathing_profile = BreathingProfile::default();
+            let root_rest_global = resolve_root_rest_global(&root_ref);
             let breathing_binding = resolve_avatar_breathing(
                 &breathing_profile,
                 binding.generation,
                 hips,
                 root_entity,
+                root_rest_global,
                 &bone_query,
                 &parents,
             );
@@ -531,18 +536,32 @@ where
     root.get::<T>().map(|reference| **reference)
 }
 
+/// Selects the immutable root affine used by model-space breathing conversion.
+///
+/// `RestGlobalTransform` is authoritative when bevy_vrm1 provides it. Some
+/// VRM roots have only a current `GlobalTransform`, so binding captures that
+/// value once as the fallback authority. The caller must retain the returned
+/// value and never consult an animated root for coordinate conversion.
+fn resolve_root_rest_global(root: &EntityRef<'_>) -> Option<GlobalTransform> {
+    root.get::<RestGlobalTransform>()
+        .map(|rest| rest.0)
+        .or_else(|| root.get::<GlobalTransform>().copied())
+}
+
 /// Resolves the per-avatar breathing geometry from the hips bone's immutable
 /// rest data and the real `ChildOf` ancestor path.
 ///
 /// Returns `None` (disabling the always-on idle motion for this avatar) when
-/// the hips bone or its rest data is missing, the rest hips height is not
-/// positive and finite, the rest affine cannot be inverted, or the ancestor
-/// path does not reach the avatar root.
+/// the hips bone or its rest data is missing, the root rest/global affine is
+/// missing, the model-space rest hips height is not positive and finite, a
+/// rest affine cannot be inverted, or the ancestor path does not reach the
+/// avatar root.
 fn resolve_avatar_breathing(
     profile: &BreathingProfile,
     generation: AvatarGeneration,
     hips: Option<Entity>,
     root: Entity,
+    root_rest_global: Option<GlobalTransform>,
     bone_query: &Query<(
         Option<&Transform>,
         Option<&RestTransform>,
@@ -566,6 +585,7 @@ fn resolve_avatar_breathing(
         generation,
         hips,
         profile,
+        root_rest_global,
         rest_local,
         rest_global,
         ancestors,
@@ -924,6 +944,23 @@ mod tests {
                 RestGlobalTransform(GlobalTransform::IDENTITY),
             ))
             .id()
+    }
+
+    #[test]
+    fn root_rest_global_falls_back_to_binding_time_global_transform() {
+        let mut world = World::new();
+        let current = GlobalTransform::from_translation(Vec3::new(1.0, 2.0, 3.0));
+        let root = world.spawn(current).id();
+        assert_eq!(resolve_root_rest_global(&world.entity(root)), Some(current));
+
+        let authored_rest = GlobalTransform::from_translation(Vec3::new(-1.0, 4.0, 0.5));
+        world
+            .entity_mut(root)
+            .insert(RestGlobalTransform(authored_rest));
+        assert_eq!(
+            resolve_root_rest_global(&world.entity(root)),
+            Some(authored_rest)
+        );
     }
 
     #[test]
