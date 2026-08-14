@@ -16,6 +16,7 @@ use crate::new_type;
 use crate::system_set::VrmSystemSets;
 use crate::vrm::body_tracking::BodyTrackingPlugin;
 use crate::vrm::detach::VrmDetachPlugin;
+use crate::vrm::gltf::extensions::CoordinateBasis;
 use crate::vrm::humanoid_bone::VrmHumanoidBonePlugin;
 use crate::vrm::initialize::VrmInitializePlugin;
 use crate::vrm::loader::{VrmAsset, VrmLoaderPlugin};
@@ -33,8 +34,8 @@ use std::path::PathBuf;
 
 pub mod prelude {
     pub use crate::vrm::{
-        Initialized, RestGlobalTransform, RestTransform, Vrm, VrmBone, VrmExpression, VrmPath,
-        VrmPlugin,
+        Initialized, RestGlobalTransform, RestTransform, Vrm, VrmBone, VrmCoordinateBasis,
+        VrmExpression, VrmPath, VrmPlugin,
         body_tracking::{
             BodyBoneHalfLives, BodyBoneRotationLimits, BodyBoneWeights, BodyTracking,
             BodyTrackingPoseInput, BodyTrackingProfile, BoneRotationLimit, SmoothedGaze,
@@ -80,6 +81,42 @@ pub struct Vrm;
 impl Vrm {
     pub const EXPRESSIONS_ROOT: &'static str = "VRMC_vrm.expressions";
     pub const ROOT_BONE: &'static str = "VRMC_vrm.root_bone";
+}
+
+/// Coordinate basis applied to the loaded model scene.
+#[derive(Debug, Component, Copy, Clone, PartialEq, Eq)]
+pub struct VrmCoordinateBasis(pub CoordinateBasis);
+
+impl VrmCoordinateBasis {
+    /// Returns the one root transform used for the model generation.
+    #[must_use]
+    pub fn transform(self) -> Option<Transform> {
+        match self.0 {
+            CoordinateBasis::Vrm0Y180 => Some(Transform::from_rotation(Quat::from_rotation_y(
+                std::f32::consts::PI,
+            ))),
+            CoordinateBasis::Vrm1Identity => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod coordinate_basis_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_basis_is_the_only_generation_rotation() {
+        let legacy = VrmCoordinateBasis(CoordinateBasis::Vrm0Y180)
+            .transform()
+            .expect("legacy VRM requires a basis transform");
+        let expected = Quat::from_rotation_y(std::f32::consts::PI);
+        assert!(legacy.rotation.dot(expected).abs() > 0.999_999);
+        assert!(
+            VrmCoordinateBasis(CoordinateBasis::Vrm1Identity)
+                .transform()
+                .is_none()
+        );
+    }
 }
 
 /// The path to the VRM file.

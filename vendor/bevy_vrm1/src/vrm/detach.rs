@@ -12,7 +12,9 @@ use crate::vrm::node_constraint::registry::NodeConstraintRegistry;
 use crate::vrm::spring_bone::registry::{
     SpringColliderRegistry, SpringJointPropsRegistry, SpringNodeRegistry,
 };
-use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, Vrm, VrmPath};
+use crate::vrm::{
+    Initialized, RestGlobalTransform, RestTransform, Vrm, VrmCoordinateBasis, VrmPath,
+};
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 
@@ -69,6 +71,7 @@ fn remove_vrm_components(
         .entity(entity)
         // Core
         .try_remove::<Vrm>()
+        .try_remove::<VrmCoordinateBasis>()
         .try_remove::<VrmPath>()
         .try_remove::<Initialized>()
         .try_remove::<VrmHandle>()

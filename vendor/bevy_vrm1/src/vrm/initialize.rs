@@ -10,7 +10,7 @@ use crate::vrm::node_constraint::initialize::RequestInitializeNodeConstraints;
 use crate::vrm::node_constraint::registry::NodeConstraintRegistry;
 use crate::vrm::spring_bone::initialize::RequestInitializeSpringBone;
 use crate::vrm::spring_bone::registry::*;
-use crate::vrm::{Initialized, Vrm, VrmPath};
+use crate::vrm::{Initialized, Vrm, VrmCoordinateBasis, VrmPath};
 use crate::vrma::Vrma;
 use crate::vrma::animation::animation_graph::RequestUpdateAnimationGraph;
 use bevy::app::{App, Update};
@@ -67,9 +67,11 @@ fn spawn_vrm(
                 continue;
             }
         };
+        let coordinate_basis = extensions.runtime_descriptor.coordinate_basis;
         let mut cmd = commands.entity(vrm_handle_entity);
         cmd.insert((
             Vrm,
+            VrmCoordinateBasis(coordinate_basis),
             Name::new(extensions.name().unwrap_or_else(|| "VRM".to_string())),
             WorldAssetRoot(scene),
             VrmcMaterialRegistry::new(&vrm.gltf, vrm.images.clone(), &asset_server),
@@ -86,6 +88,9 @@ fn spawn_vrm(
                 &vrm.gltf.nodes,
             ),
         ));
+        if let Some(transform) = VrmCoordinateBasis(coordinate_basis).transform() {
+            cmd.insert(transform);
+        }
 
         if let Some(spring_bone) = extensions.vrmc_spring_bone.as_ref() {
             cmd.insert((
