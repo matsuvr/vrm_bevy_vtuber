@@ -1,8 +1,8 @@
 # Bevy + bevy_vrm1によるフルRust VTuberアプリ 詳細設計書
 
-文書版: 2.0
-基準日: 2026-08-04
-対象VRM: VRM 1.0のみ
+文書版: 2.1
+基準日: 2026-08-14
+対象VRM: VRM 0.xおよびVRM 1.0
 対象OS: Windows 11 x86_64、macOS 13以降
 描画基盤: Bevy 0.19.0
 VRMランタイム: `bevy_vrm1` 0.9.1相当、Git revision固定
@@ -13,7 +13,7 @@ VRMランタイム: `bevy_vrm1` 0.9.1相当、Git revision固定
 
 ## 1. 文書の目的
 
-本書は、Webカメラから一人分の顔を追跡し、その結果でVRM 1.0モデルの頭、首、眼、まばたき、口形状を動かす基本的なVTuberアプリを、WindowsおよびmacOS向けに原則Rustだけで構築するための実装契約である。
+本書は、Webカメラから一人分の顔を追跡し、その結果でVRM 0.xまたはVRM 1.0モデルの頭、首、眼、まばたき、口形状を動かす基本的なVTuberアプリを、WindowsおよびmacOS向けに原則Rustだけで構築するための実装契約である。
 
 本書は概念説明ではなく、AI_AGENTが段階的に実装し、各段階をテスト可能な単位で完了させるための詳細設計として扱う。次を明確に定義する。
 
@@ -30,7 +30,7 @@ VRMランタイム: `bevy_vrm1` 0.9.1相当、Git revision固定
 - テスト、性能計測、パッケージング
 - AI_AGENT向けの実装順序と受入条件
 
-VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡結果を同crateの公開APIとBevy ECSへ適用するアダプター、モデル取込前の軽量なVRM 1.0検査、および互換性試験に限定する。独自のVRMローダー、Humanoidランタイム、MToon、Expression、SpringBone、Node Constraintは実装しない。
+VRM処理は既存の`bevy_vrm1`実行系へ集約する。VRM 0.xについては、vendor互換レイヤーが`extensions.VRM`を共通runtime descriptorへ正規化してから同じregistry、scene初期化、Humanoid、Expression、MToon、SpringBone、Node Constraint経路へ渡す。アプリ固有コードは、顔追跡結果を同crateの公開APIとBevy ECSへ適用するアダプター、モデル取込前の世代非依存preflight、および互換性試験に限定する。別のVRMローダー、別アバター実行系、Humanoid runtime、MToon、Expression、SpringBone、Node Constraintは実装しない。
 
 ---
 
@@ -39,10 +39,10 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 本プロジェクトは次の構成を採用する。
 
 1. Bevy 0.19.0を描画、ECS、アセット、ウィンドウ、入力、UI統合の基盤とする。
-2. VRM 1.0のロード、Humanoid bone、MToon、Expression、SpringBone、Node Constraint、First Personは`bevy_vrm1`へ委譲する。
+2. VRM 0.xとVRM 1.0のglTF/scene/imageロードは既存のBevy `GltfLoader`経路を利用し、Humanoid bone、MToon、Expression、SpringBone、Node Constraint、First Personは正規化後に`bevy_vrm1`へ委譲する。
 3. `bevy_vrm1`はGit revision `f9593fd78136fb9e0507bcae111e09291ec9b82a`へ固定して開始する。このrevisionはcrate内version 0.9.1でBevy 0.19を利用する。
 4. VRM処理の依存は`bevy_vrm1`へ一本化し、別のVRM parserまたはruntimeを追加しない。
-5. ファイル取込時に`VRMC_vrm` root extensionと`specVersion`を検査する。`VRMC_vrm`欠落は`MODEL_NOT_VRM1`、`specVersion != "1.0"`は`MODEL_UNSUPPORTED_VERSION`として拒否する。
+5. ファイル取込時にroot extensionの`VRM`または`VRMC_vrm`を厳密に判定する。VRM 0.xは`extensions.VRM`, VRM 1.0は`extensions.VRMC_vrm`としてsummaryへ正規化し、どちらもないファイルまたは未知世代はtyped errorで拒否する。
 6. 顔追跡はカメラワーカー、推論ワーカー、Bevyメインスレッドの三領域に分離する。
 7. ワーカー間は容量無制限のqueueで接続しない。最新値一件だけを保持する`LatestSlot<T>`を利用し、古いフレームを捨てて遅延の累積を防ぐ。
 8. WindowsとmacOSのカメラ取得には`nokhwa 0.10.11`を第一候補とし、WindowsではMedia Foundation、macOSではAVFoundation backendを明示的に有効化する。
@@ -53,6 +53,20 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 13. head poseとeye gazeは推定／filter入力として分離するが、適用時のgazeは現在のhead姿勢へhead-relativeなeye-in-head deltaとして合成する。`Q2-06-002`のdirect LookAtはworld targetを作らず、モデル作者のBone／Expression種別とVRM range mapを尊重する。
 14. MToon、SpringBone、Node Constraintをアプリ側で再実装しない。互換性問題が発生した場合は対象モデルの回帰テストを追加し、必要最小限のupstream patchまたは一時forkで対処する。
 15. Windowsを最初の縦断MVPとし、その後macOSで同一機能を完成させる。macOSは後付け移植ではなく、初期workspaceとローカル検証手順のcompile対象に含める。
+
+### 2.1 VRM世代互換レイヤーの固定契約
+
+VRM 0.x対応は、既存`bevy_vrm1`の実行系を二重化せず、次の境界で一度だけ行う。
+
+| 入力 | 判定 | 正規化先 | 座標処理 |
+| --- | --- | --- | --- |
+| `extensions.VRM` | VRM 0.x | 共通`VrmRuntimeDescriptor`、既存registry | scene root直下のbasis entityへ`Y = pi` |
+| `extensions.VRMC_vrm`かつ`specVersion == "1.0"` | VRM 1.0 | 同じ共通descriptor、既存registry | 追加回転なし |
+| その他 | 非対応 | typed import error | loadしない |
+
+preflightは軽量なJSON抽出だけを担当し、vendor parserはruntime descriptorの生成を担当する。descriptorはmeta、Humanoid、FirstPerson、LookAt、Expression、MToon、SpringBoneの世代差を吸収するが、Bevy `Entity`やtracking型を公開しない。VRM 0.x固有の正面`-Z`からアプリ契約の正面`+Z`への変換はbasis entityだけに閉じ込め、tracking、gaze、camera、default pose、breathingへ世代別符号を持ち込まない。
+
+VRM 0.xの`blendShapeMaster`, `materialProperties`, `secondaryAnimation`はそれぞれ既存のExpression accumulator、MToon renderer、SpringBone solverへ変換する。secondaryAnimationの末端には7 cmのsynthetic terminal jointを一度だけ追加し、branchingや重複node名でwriterが重複しないよう、解決済みnode indexをキーにdeduplicateする。
 
 ---
 
@@ -134,7 +148,7 @@ VRM処理は`bevy_vrm1`へ集約する。アプリ固有コードは、顔追跡
 Windows MVPは次を満たす。
 
 - ローカルのVRM 1.0ファイルを選択またはdrag and dropできる。
-- `VRMC_vrm`を持たないファイルを`MODEL_NOT_VRM1`、`specVersion != "1.0"`を`MODEL_UNSUPPORTED_VERSION`で拒否する。
+- `VRM`または`VRMC_vrm`を持たないファイル、両方を持つファイル、未知世代をtyped errorで拒否する。VRM 1.0の`specVersion != "1.0"`は`MODEL_UNSUPPORTED_VERSION`で拒否する。
 - VRM 1.0モデルをMToonで表示できる。
 - カメラ一覧から一台を選択し、開始・停止・再開始できる。
 - 一人の顔を追跡する。
@@ -261,7 +275,7 @@ bevy_vrm1 = {
 }
 ```
 
-このrevisionで確認される公開機能:
+このrevisionで確認される公開機能と、本Epicで追加する互換境界:
 
 - VRM 1.0 load
 - MToon
@@ -273,6 +287,7 @@ bevy_vrm1 = {
 - First Person
 - direct Expression control API
 - Bevy 0.19対応
+- VRM 0.x `extensions.VRM`の共通runtime descriptor正規化（ADR-011のvendor patch）
 
 ただしREADMEはearly stageでbreaking changeの可能性を明記している。アプリ側はこれを安定APIとみなさず、adapter境界とcompatibility testで保護する。
 
@@ -290,11 +305,11 @@ stock `BodyTracking`の`LookAt`入力は、顔の向きと眼球視線を混同�
 
 一部のVRM extension fieldが厳格にdeserializeされるため、valid exporter差でload失敗する可能性がある。対象モデルをcompatibility matrixへ登録し、失敗時は次の順に対処する。
 
-1. modelがVRM 1.0 spec上validか確認する。
+1. modelが対象世代のVRM spec上validか確認する。
 2. minimal reproducerをfixture化する。
 3. upstream issue / PRを作る。
 4. 修正が必要なら一時forkをexact revisionで固定する。
-5. アプリ側へ独自VRM parserを増設しない。
+5. アプリ側へ独自VRM runtimeやAssetLoaderを増設しない。VRM 0.xのpure parserはvendor互換レイヤーに限定する。
 
 #### malformed humanoid
 
@@ -1489,11 +1504,11 @@ new model失敗時はold modelを維持する。
 
 ---
 
-## 17. VRM 1.0 import / inspection
+## 17. VRM 0.x / 1.0 import / inspection
 
 ### 17.1 目的
 
-`bevy_vrm1`へ渡す前に、panicし得る明白な不正と非対応versionを除外し、UIへmodel情報を出す。
+`bevy_vrm1`へ渡す前に、panicし得る明白な不正と非対応generationを除外し、UIへ世代非依存のmodel情報を出す。
 
 ### 17.2 実装方針
 
@@ -1505,7 +1520,8 @@ new model失敗時はold modelを維持する。
 - GLB validity
 - file size（default上限256 MiB、設定可能上限1 GiB）
 - root extension list
-- `VRMC_vrm.specVersion`
+- root extensionの厳密なgeneration（`VRM`または`VRMC_vrm`）
+- `VRMC_vrm.specVersion`（VRM 1.0の場合）
 - model name
 - authors
 - license URL
@@ -1520,14 +1536,15 @@ new model失敗時はold modelを維持する。
 
 - file extensionが`.vrm`でない
 - GLBとしてparseできない
-- `VRMC_vrm`がない
-- legacy `VRM` extensionだけがある
+- `VRMC_vrm`とlegacy `VRM`の両方がある、またはどちらもない
 - `specVersion`が既知の1.0でない
 - humanoid `hips`または`head`がない
 - node indexが範囲外
 - file sizeが設定上限を超える
 - 設定上限がhard capの1 GiBを超える
 - external buffer / image URIを含む
+
+VRM 0.xでは`extensions.VRM`の`meta`, `humanoid`, `firstPerson`, `lookAtMaster`, `blendShapeMaster`, `materialProperties`, `secondaryAnimation`をpreflight summaryへ抽出する。runtime descriptorへの変換とECS registry接続は`vtuber-avatar`のvendor境界で行い、app crateは`bevy_vrm1`型を参照しない。
 
 ### 17.4 import cache
 

@@ -2,7 +2,7 @@
 
 ## Mission
 
-Implement the application described by `DESIGN.md` and `AI_AGENT_TASKS.md`: a full-Rust, desktop-only VTuber application for VRM 1.0 using Bevy 0.19 and `bevy_vrm1`, with webcam face tracking on Windows and macOS.
+Implement the application described by `DESIGN.md` and `AI_AGENT_TASKS.md`: a full-Rust, desktop-only VTuber application for VRM 0.x and VRM 1.0 using Bevy 0.19 and the existing `bevy_vrm1` execution system, with webcam face tracking on Windows and macOS.
 
 Work on exactly one task ID from `AI_AGENT_TASKS.md` at a time.
 
@@ -23,7 +23,7 @@ When code and design disagree, do not silently preserve code. Report the mismatc
 
 Supported:
 
-- VRM 1.0 only
+- VRM 0.x and VRM 1.0 user models
 - Windows 11 x86_64
 - macOS 13+; Apple Silicon is Tier 1
 - Bevy 0.19.0
@@ -31,7 +31,7 @@ Supported:
 
 Explicitly unsupported:
 
-- VRM 0.x
+- VRM generations other than 0.x and 1.0
 - Android
 - iOS
 - Linux product support
@@ -58,7 +58,7 @@ Do not add abstraction, feature flags, crates, CI jobs, manifests, or documentat
 - Isolate all `bevy_vrm1` dependencies in `vtuber-avatar`.
 - Do not expose `bevy_vrm1` types through `vtuber-core` or `vtuber-tracking` APIs.
 - Pin `bevy_vrm1` to the exact approved revision. Upgrade only in a dependency-only task or ADR.
-- Do not fork `bevy_vrm1` without a target-model reproducer, regression test, spec citation, and ADR. `Q2-06-001` and `Q2-06-002` are the approved exceptions for source-derived vendored patches limited respectively to direct-pose `BodyTracking` and direct head-relative LookAt; preserve the upstream license and base revision and keep the dependency immutable.
+- Do not fork or extend `bevy_vrm1` without a target-model reproducer, regression test, spec citation, and ADR. `Q2-06-001`, `Q2-06-002`, and the VRM 0.x compatibility work in ADR-011 are the approved source-derived vendored patches. The legacy patch may parse `extensions.VRM` and normalize it into the existing VRM runtime descriptor/registry contract; it must not create a second ECS runtime. Preserve the upstream license and base revision and keep the dependency immutable.
 
 ## bevy_vrm1 known-path restrictions
 
@@ -67,7 +67,10 @@ Until a task explicitly changes these rules:
 - Do not insert a cursor/target `bevy_vrm1::LookAt` for webcam gaze. Use the `Q2-06-002` direct head-relative LookAt input; it must not create a synthetic world-space target.
 - Use the `Q2-06-001` direct-pose extension of `bevy_vrm1::BodyTracking` as the sole writer for tracked head, neck, upper-chest, chest, and spine rotation.
 - Feed calibrated yaw, pitch, and roll directly to `BodyTracking`; do not create a synthetic `LookAt` target for face pose.
-- Inspect a model before loading it. Reject missing `VRMC_vrm`, non-1.0 VRM, missing hips, missing head, invalid node indices, and external URIs.
+- Inspect a model before loading it. Detect `extensions.VRM` and `extensions.VRMC_vrm` strictly, reject unknown VRM generations, missing hips, missing head, invalid node indices, and external URIs, and return a generation-independent summary.
+- Normalize VRM 0.x exactly once at the `bevy_vrm1` adapter/vendor boundary. Do not scatter legacy coordinate signs through tracking, gaze, camera, pose, or breathing code.
+- Put the VRM 0.x scene below one adapter-owned basis entity rotated `Y = pi`; keep tracking and canonical VRM 1.0 values unmirrored and generation-independent.
+- Map VRM 0.x `blendShapeMaster`, `materialProperties`, and `secondaryAnimation` into the existing expression, MToon, and SpringBone registries. Do not add a replacement loader, replacement solver, or new application crate.
 - Use `ExpressionEntityMap` to build expression capabilities.
 - Use `ModifyExpressions` for procedural expression updates.
 - Let `bevy_vrm1` resolve binary and override behavior.
@@ -213,7 +216,7 @@ Mandatory classes over the project lifecycle:
 - Kabsch synthetic rotations
 - filter time invariance
 - tracking lost/recovery
-- VRM 1.0 inspection and non-VRM-1.0 rejection
+- VRM 0.x/1.0 inspection and unknown-generation rejection
 - avatar binding retry and timeout
 - head/neck pose mapping
 - expression capability fallback

@@ -4,9 +4,39 @@
 subtask細分化改訂日: 2026-08-07
 Windows縦断再計画改訂日: 2026-08-09
 M1-08-013 blocker突破計画改訂日: 2026-08-11
-対象: Windows 11を現在の開発・受入対象、macOSを保留中の次期対象、VRM 1.0、Bevy 0.19.0、`bevy_vrm1`
+Epic 22追加日: 2026-08-14
+対象: Windows 11を現在の開発・受入対象、macOSを保留中の次期対象、VRM 0.x/1.0、Bevy 0.19.0、`bevy_vrm1`
 
 このファイルは`DESIGN.md`を実装単位へ分割する。親task ID（`G0-XX`、`M1-XX`、`Q2-XX`、`R3-XX`）は既存の進捗・PR・履歴を維持するため変更しない。実際のコーディングエージェントへの委嘱単位は、通常は`M1-02-001`、correctness blockerのrepair branchでは`M1-08-013-001`のようなleaf subtask IDとする。
+
+---
+
+## Epic 22: VRM 0.xを既存bevy_vrm1実行系へ正規化して対応する
+
+このEpicは既存のVRM 1.0 runtime、lifecycle、writer ownershipを維持した
+まま、VRM 0.xの`extensions.VRM`をvendor互換レイヤーで共通runtime
+descriptorへ正規化する。新しいAssetLoader、別avatar runtime、新crate、
+Python/Unity変換、GitHub Actionsは追加しない。仕様参照は
+`vrm-c/vrm-specification@821c11b250d8c70d5804ee13431e42bee56ea9c0`、
+公式参照実装は`vrm-c/UniVRM@52e1250813f370783351788b5c4cd0332e59c9c3`へ
+固定する。
+
+| Issue | 範囲 | 依存 |
+| --- | --- | --- |
+| #23 | 方針、ADR、設計、作業規約の整合 | 最初 |
+| #24 | 世代判定と世代非依存preflight summary | #23; #25と並行可 |
+| #25 | VRM 0.x core parserと共通runtime descriptor | #23; #24と並行可 |
+| #26 | scene/Humanoid/LookAt初期化とbasis変換 | #25 |
+| #27 | BlendShapeGroupからExpression runtimeへの変換 | #25/#26 |
+| #28 | materialPropertiesから既存MToonへの変換 | #25/#26 |
+| #29 | secondaryAnimationから既存SpringBoneへの変換 | #25/#26 |
+| #30 | production load/replace/unload統合 | #24/#26-#29 |
+| #31 | 実モデル互換性gate、回帰、最終ADR | #30 |
+
+実装順は`#23 -> (#24,#25) -> #26 -> (#27,#28,#29) -> #30 -> #31`とし、
+各Issueは独立branch、draft PR単位で証跡を残す。start/end SHA、変更file、
+仕様変換、ローカル検証command、Windows/macOS実機結果（未実施は
+`NOT RUN`）を記録する。VRM 1.0回帰は全てのlegacy変更で必須である。
 
 ---
 

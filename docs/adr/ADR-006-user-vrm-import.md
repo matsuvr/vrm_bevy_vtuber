@@ -23,8 +23,8 @@ Date: 2026-08-04
 - `.vrm` extension
 - size limit
 - GLB parse
-- `VRMC_vrm`存在
-- `specVersion == "1.0"`
+- `VRM`または`VRMC_vrm`のどちらか一方が存在すること
+- `VRMC_vrm`の場合は`specVersion == "1.0"`
 - required `hips`／`head`
 - humanoid node index範囲と重複
 - external buffer／image URIなし
@@ -33,11 +33,11 @@ Date: 2026-08-04
 
 ## Error mapping
 
-- missing `VRMC_vrm`: `MODEL_NOT_VRM1`
+- missing or ambiguous VRM generation: `MODEL_NOT_VRM`
 - unsupported specVersion: `MODEL_UNSUPPORTED_VERSION`
 - missing required bone: `MODEL_MISSING_REQUIRED_BONE`
 - invalid GLB／index／URI: `MODEL_FILE_INVALID`
 
 ## Consequences
 
-import時に一回copyが発生するが、load path、recent list、hash-based cache、transactional replacementが安定する。preflightは安全gateであり、VRM runtimeを再実装しない。
+import時に一回copyが発生するが、load path、recent list、hash-based cache、transactional replacementが安定する。preflightは安全gateであり、VRM runtimeを再実装しない。VRM 0.xはADR-011のvendor互換レイヤーへ渡すため、cache metadataにはgenerationを保存する。

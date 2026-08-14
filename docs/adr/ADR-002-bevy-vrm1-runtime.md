@@ -1,6 +1,6 @@
 # ADR-002: VRM 1.0 runtimeとしてbevy_vrm1を採用する
 
-Status: Accepted
+Status: Superseded in format scope by ADR-011; runtime decision retained
 Date: 2026-08-04
 
 ## Context
@@ -11,7 +11,7 @@ VRM 1.0モデルをBevyで実用的に扱うには、glTF loadだけでなくHum
 
 ## Decision
 
-- 対象formatはVRM 1.0だけとする。
+- `bevy_vrm1`を唯一のVRM execution systemとする。対象formatの世代判定とVRM 0.x extension normalizationはADR-011へ委譲する。
 - Bevyを`=0.19.0`へ固定する。
 - `bevy_vrm1`を次のGit revisionへ固定する。
 
@@ -23,6 +23,8 @@ f9593fd78136fb9e0507bcae111e09291ec9b82a
 - app側で`.vrm` AssetLoader、Humanoid runtime、MToon、SpringBone、Node Constraint、Expression accumulatorを実装しない。
 - `bevy_vrm1`への直接依存は`vtuber-avatar`へ隔離する。
 - model取込前の検査は安全性と互換性gateに限定し、VRM runtime schemaの複製にしない。
+
+ADR-011はこのruntime選定を変更せず、legacy `extensions.VRM`を同じregistry contractへ入れるvendor境界だけを追加する。
 
 ## Public integration surface
 
