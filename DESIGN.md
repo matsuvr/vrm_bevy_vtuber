@@ -1273,13 +1273,21 @@ pub struct AvatarBinding {
 
 `Entity`はadapter内部componentに留める。
 
-### 16.4.1 default relaxed-arm pose
+### 16.4.1 model-adaptive default arm pose
 
-VRMがT-poseをrest poseとして提供しても、avatarを`Ready`へ遷移させる同じbinding transaction内で、存在する`leftUpperArm`と`rightUpperArm`の表示用local transformを左右対称に55°下げる。これは既定表示だけのone-shot操作であり、追跡入力ではない。
+VRMがT-poseをrest poseとして提供しても、binding transactionでは`Transform`へ既定姿勢を書き込まない。Issue #14で各sideの`upperArm`／`lowerArm`／`hand`の完全chainを解決し、`RestTransform`／`RestGlobalTransform`からimmutableなrest-space位置、global／local回転、骨長をcacheする。shoulderとfingerはoptional capabilityとして保持し、完全chainがないsideのenhanced default poseだけを無効にする。avatar自体は`Ready`へ進める。
 
-`RestTransform`／`RestGlobalTransform`は変更しない。したがって`BodyTracking`は従来どおりhead、neck、upperChest、chest、spineの唯一の追跡姿勢writerであり、Node Constraint、SpringBone、および将来のanimation baseはモデル作者のrest poseを正本として扱う。腕がないモデルはそのまま`Ready`にし、lower armやhandへ個別writerは追加しない。
+Issue #15のpure analytic two-bone IKが、モデルごとのrest geometryからtyped `DefaultArmPose`を一度だけ解決する。既定profileはarm drop 70°、reach 0.99、forward hand offset 0.081 total（VRM model-space `+Z`）、rearward elbow pole offset 0.05 total（`-Z`）であり、unreachable target、near-zero pole、finite quaternionを安全に処理する。
 
-glTF/VRM model軸ではleft upper armは概ね`+X`、right upper armは概ね`-X`へ伸びるため、local Z回転はleft `-55°`、right `+55°`とする。再読み込み・replacement時だけ再適用し、frameごとにdeltaを重ねない。
+Issue #16のcompositorは`AnimationSystems`とdirect-pose `BodyTracking`の後、direct head-relative gaze／`VrmSystemSets::GazeControl`および`VrmSystemSets::Constraints`の前に毎frame実行する。保存したupper／lowerのrest-relative deltaをanimation baseへ`base * delta`で加算し、前frameのcomposed outputと比較してdeltaを累積させない。実際の`ChildOf`経路を上位から再計算し、非Humanoid中間nodeを含む影響subtreeの`GlobalTransform`を更新する。
+
+`RestTransform`／`RestGlobalTransform`は変更しない。`BodyTracking`はhead、neck、upperChest、chest、spineの唯一の追跡姿勢writerであり、default arm poseはupper／lower armとoptional shoulder／fingerのlocal Transformだけを対象とする。generation不一致、avatar replacement、欠損／退化geometryは安全なno-opとし、handへworld transformを直接書き込まない。
+
+Issue #17では、解決upper displacementから肩へ18%だけ追従させ、肩deltaを最大5°に制限する。利用可能なfinger jointには、各jointのrest-global axisへ変換した10°の弱いcurlを適用する。wrist／handには固定角度を書かず、lower armの解決回転を実際の`ChildOf`経路で伝播して、モデル作者のrest wrist orientationを保つ。optional boneの欠損は各補正のno-opとする。
+
+Issue #18では、既定profileの各値をversion 1のbounded overrideとして`AvatarAssetId`（import時のcontent hash）ごとに保持する。`ArmPoseOverrideStore`はbinding前に検証済みprofileだけを参照し、未知version、非finite値、範囲外値は無視する。`entries`／`import_entries`をアプリ設定層の保存・復元境界とし、resourceはavatar unload／reloadをまたいで同じmodel IDの調整を再利用する。`reset`後はgeometry-derived defaultへ戻る。
+
+default poseの初回適用とdefaultへの復帰は、左右独立の`ArmPoseBlendState`で行う。通常遷移は0.25秒、復帰は0.6秒とし、`dt`に基づくshortest-arc quaternion slerpで30／60／120 FPSの結果を一致させる。generationが変わるavatar replacementでは新しいstateを作り、前avatarのblendを持ち越さない。全てのblendはfiniteな時間入力だけを受け、pose deltaを累積しない。
 
 ### 16.5 system order
 
@@ -1288,7 +1296,9 @@ VRM更新順に合わせ、tracking applyを次へ配置する。
 ```text
 PostUpdate:
   Bevy AnimationSystems
+  -> apply_breathing_hips_translation
   -> direct-pose bevy_vrm1 BodyTracking
+  -> model-adaptive DefaultArmPose
   -> direct head-relative LookAt / GazeControl
   -> expression update and apply
   -> bevy_vrm1 VrmSystemSets::Constraints
@@ -1308,9 +1318,17 @@ app.add_systems(
 
 app.add_systems(
     PostUpdate,
+    apply_default_arm_pose
+        .after(apply_direct_body_tracking_pose)
+        .before(update_direct_look_at_input)
+        .before(VrmSystemSets::Constraints),
+);
+
+app.add_systems(
+    PostUpdate,
     update_direct_look_at_input
         .in_set(VrmSystemSets::GazeControl)
-        .after(apply_direct_body_tracking_pose)
+        .after(apply_default_arm_pose)
         .before(VrmSystemSets::Expressions),
 );
 ```
@@ -1347,6 +1365,16 @@ R_output_local    = R_animated_base_local * R_tracking_delta
 ```
 
 各frameでanimation systemが書いたbase姿勢を検出し、そのbaseへrest-relative tracking deltaを加算する。前frameのtracking deltaを再度乗算してはならない。tracking喪失時はtarget角を0へ戻し、同じbone別half-lifeでanimated baseへ復帰する。汎用Bevy Animationとの加算合成を自動検証するが、VRMA playback自体は固定scopeどおり未サポートであり、実機互換性を合格扱いしない。
+
+### 16.6a Always-on idle breathing (Issue #20)
+
+`Ready`状態のアバターは常時、subtleなprocedural breathingを行う。カメラ・control frame・tracking confidenceには依存しない。所有する値はadditive `hips.translation`のみで、head〜spine rotationの唯一のwriterはdirect-pose `BodyTracking`のままとする。
+
+- 波形: `phase_01 = (elapsed / period) mod 1`、`breath_01 = sin(PI * phase_01)^2`。既定periodは5.0秒で、binding直後の最初のframeはphase `0`（neutral、popなし）。phase accumulatorは`f64`。
+- amplitude: `RestGlobalTransform`はglobal/world空間なので、binding時にcacheしたroot rest/global affine `G_root`で除去する。`hips_model_position = inverse(G_root) * G_hips.translation` の `y` をVRM model/root-spaceの`rest_hips_height`とし、`vertical = clamp(0.010 * h, 0.006, 0.0125)` m、`forward = clamp(0.008 * h, 0.004, 0.010)` mを求める。ピーク時のsemantic model-space offsetは`+Y * vertical + +Z * forward`であり、rootのrotation、translation、scaleでは振幅が変化しない。
+- 座標変換: `G_parent = G_hips * inverse(hips RestTransform)`、`parent_in_model = inverse(G_root) * G_parent`、`model_to_parent_local = inverse(linear(parent_in_model))`をbinding時に一度だけ導出し、`+Y`／`+Z`をhips-parent-localへ変換する。`RestGlobalTransform`がrootにない場合はbinding成功時のroot `GlobalTransform`をimmutableなroot-rest authorityとしてcacheし、後続frameのanimated/current rootを座標変換へ再利用しない。non-humanoid intermediate nodeを含む実際の`ChildOf`経路でmodel軸の意味を保ち、非finite／非可逆affineはsafe no-opとする。runtimeはcached ancestor pathでhipsの`GlobalTransform`のみ更新し、full hierarchyを走査しない。
+- base合成: `output = base + current_delta`。animationが書いた新しいhips translationをbaseとして捕捉し、自前の前回出力を累積しない。cycle境界でauthored baseへ正確に復帰する。
+- lifecycle: `Ready`の間だけ書き、unload／replacementで状態ごと破棄。replacementはneutral phase `0`から開始する。
 
 ### 16.7 range limit
 

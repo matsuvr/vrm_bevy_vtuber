@@ -6,12 +6,23 @@
 //! the result in an [`AvatarBinding`] component. Systems that drive the avatar
 //! read that cache instead of re-querying root components every frame.
 
+use bevy::ecs::world::EntityRef;
 use bevy::log::warn;
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 use std::time::{Duration, Instant};
 
+use crate::arm::{
+    ArmChainBinding, ArmChainReferences, ArmRestGeometry, ArmSide, FingerJointReferences,
+    FingerJointRestBinding, FingerJointRestReferences, FingerReferences, FingerRestReferences,
+    RestSpaceBonePose,
+};
+use crate::arm_pose::{ArmPoseBlendState, ArmPoseOverrideStore, DefaultArmPose};
 use crate::bind::BindTriggered;
+use crate::breathing::{
+    BreathingBinding, BreathingProfile, BreathingState, collect_hips_ancestor_path,
+    resolve_breathing_binding,
+};
 use crate::capabilities::{
     AvatarCapabilities, BonePresence, DeclaredLookAtType, ExpressionCapabilities,
     SelectedGazeBackend,
@@ -20,21 +31,16 @@ use crate::gaze::fallback_look_at_properties;
 use crate::lifecycle::{
     ActiveAvatar, AvatarGeneration, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
 };
+use crate::load::AvatarAssetId;
 
 /// Maximum time to wait for transient bone components after entering `Binding`.
 const BIND_TIMEOUT: Duration = Duration::from_secs(2);
-/// Downward rotation from a VRM T-pose to the default relaxed arm pose.
-///
-/// VRM/glTF uses +Y for up. A left upper arm along +X therefore lowers with
-/// a negative local Z rotation, while a right upper arm along -X lowers with
-/// a positive local Z rotation.
-const RELAXED_ARM_DROP_RADIANS: f32 = 55.0_f32.to_radians();
 
 /// Cached humanoid bone bindings for a single active avatar.
 ///
 /// This component is inserted on the avatar root once binding succeeds. Later
 /// systems read it instead of performing root-component lookups each frame.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct AvatarBinding {
     /// Avatar root entity.
     pub root: Entity,
@@ -52,6 +58,10 @@ pub struct AvatarBinding {
     pub left_upper_arm: Option<Entity>,
     /// Optional right upper-arm bone entity.
     pub right_upper_arm: Option<Entity>,
+    /// Validated left arm chain and immutable rest-space geometry.
+    pub left_arm: Option<ArmChainBinding>,
+    /// Validated right arm chain and immutable rest-space geometry.
+    pub right_arm: Option<ArmChainBinding>,
     /// Optional left eye bone entity.
     pub left_eye: Option<Entity>,
     /// Optional right eye bone entity.
@@ -73,6 +83,8 @@ impl AvatarBinding {
             spine: None,
             left_upper_arm: None,
             right_upper_arm: None,
+            left_arm: None,
+            right_arm: None,
             left_eye: None,
             right_eye: None,
             generation,
@@ -199,20 +211,12 @@ pub fn bind_humanoid_bones(
     mut commands: Commands,
     mut lifecycle: ResMut<AvatarLifecycle>,
     roots: Query<
+        EntityRef,
         (
-            Entity,
-            Option<&HeadBoneEntity>,
-            Option<&NeckBoneEntity>,
-            Option<&UpperChestBoneEntity>,
-            Option<&ChestBoneEntity>,
-            Option<&SpineBoneEntity>,
-            Option<&LeftUpperArmBoneEntity>,
-            Option<&RightUpperArmBoneEntity>,
-            Option<&LeftEyeBoneEntity>,
-            Option<&RightEyeBoneEntity>,
-            Option<&LookAtProperties>,
+            With<ActiveAvatar>,
+            With<BindTriggered>,
+            Without<AvatarLifecycle>,
         ),
-        (With<ActiveAvatar>, With<BindTriggered>),
     >,
     bone_query: Query<(
         Option<&Transform>,
@@ -223,6 +227,7 @@ pub fn bind_humanoid_bones(
     expression_maps: Query<Option<&ExpressionEntityMap>>,
     spring_roots: Query<Entity, With<SpringRoot>>,
     parents: Query<&ChildOf>,
+    arm_pose_overrides: Option<Res<ArmPoseOverrideStore>>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Binding {
         return;
@@ -232,8 +237,8 @@ pub fn bind_humanoid_bones(
         return;
     };
 
-    let root_data = match roots.get(root) {
-        Ok(data) => data,
+    let root_ref = match roots.get(root) {
+        Ok(root_ref) => root_ref,
         Err(_) => {
             // The tracked root is not a valid active bind target. Treat this as
             // a missing required head so the lifecycle does not stall.
@@ -247,19 +252,30 @@ pub fn bind_humanoid_bones(
         }
     };
 
-    let (
-        root_entity,
-        head,
-        neck,
-        upper_chest,
-        chest,
-        spine,
-        left_upper_arm,
-        right_upper_arm,
-        left_eye,
-        right_eye,
-        look_at_properties,
-    ) = root_data;
+    let root_entity = root_ref.id();
+    let head = entity_reference::<HeadBoneEntity>(&root_ref);
+    let hips = entity_reference::<HipsBoneEntity>(&root_ref);
+    let neck = entity_reference::<NeckBoneEntity>(&root_ref);
+    let upper_chest = entity_reference::<UpperChestBoneEntity>(&root_ref);
+    let chest = entity_reference::<ChestBoneEntity>(&root_ref);
+    let spine = entity_reference::<SpineBoneEntity>(&root_ref);
+    let left_arm = ArmChainReferences {
+        shoulder: entity_reference::<LeftShoulderBoneEntity>(&root_ref),
+        upper_arm: entity_reference::<LeftUpperArmBoneEntity>(&root_ref),
+        lower_arm: entity_reference::<LeftLowerArmBoneEntity>(&root_ref),
+        hand: entity_reference::<LeftHandBoneEntity>(&root_ref),
+        fingers: left_finger_references(&root_ref),
+    };
+    let right_arm = ArmChainReferences {
+        shoulder: entity_reference::<RightShoulderBoneEntity>(&root_ref),
+        upper_arm: entity_reference::<RightUpperArmBoneEntity>(&root_ref),
+        lower_arm: entity_reference::<RightLowerArmBoneEntity>(&root_ref),
+        hand: entity_reference::<RightHandBoneEntity>(&root_ref),
+        fingers: right_finger_references(&root_ref),
+    };
+    let left_eye = entity_reference::<LeftEyeBoneEntity>(&root_ref);
+    let right_eye = entity_reference::<RightEyeBoneEntity>(&root_ref);
+    let look_at_properties = root_ref.get::<LookAtProperties>();
 
     let deadline = match deadlines.get(root_entity) {
         Ok(BindingDeadline(deadline)) => *deadline,
@@ -279,8 +295,8 @@ pub fn bind_humanoid_bones(
         upper_chest,
         chest,
         spine,
-        left_upper_arm,
-        right_upper_arm,
+        left_arm,
+        right_arm,
         left_eye,
         right_eye,
         &bone_query,
@@ -292,7 +308,40 @@ pub fn bind_humanoid_bones(
             // instance was accepted. Frames targeting any other generation are
             // rejected as stale.
             binding.generation = lifecycle.current_generation();
-            apply_default_relaxed_arm_pose(&mut commands, &binding, &bone_query);
+            let profile = root_ref
+                .get::<AvatarAssetId>()
+                .and_then(|model_id| {
+                    arm_pose_overrides
+                        .as_deref()
+                        .and_then(|overrides| overrides.profile_for(model_id))
+                })
+                .unwrap_or_default();
+            let default_arm_pose = DefaultArmPose::from_chains_with_profile(
+                binding.generation,
+                binding.left_arm,
+                binding.right_arm,
+                profile,
+            );
+            let arm_pose_blend = ArmPoseBlendState::from_default(&default_arm_pose);
+
+            // Breathing geometry is resolved from the hips bone's immutable
+            // rest data exactly once. RestGlobalTransform is a global/world
+            // affine, so the binding also captures the root's immutable rest
+            // affine to establish VRM model/root space. If bevy_vrm1 did not
+            // provide a root RestGlobalTransform, this binding-time current
+            // GlobalTransform is the explicit immutable fallback authority;
+            // later animated root transforms are never used for conversion.
+            let breathing_profile = BreathingProfile::default();
+            let root_rest_global = resolve_root_rest_global(&root_ref);
+            let breathing_binding = resolve_avatar_breathing(
+                &breathing_profile,
+                binding.generation,
+                hips,
+                root_entity,
+                root_rest_global,
+                &bone_query,
+                &parents,
+            );
 
             let expression_map = expression_maps.get(root_entity).ok().flatten();
             let expression_caps = ExpressionCapabilities::from_map(expression_map);
@@ -330,11 +379,20 @@ pub fn bind_humanoid_bones(
 
             commands.entity(root_entity).insert((
                 binding,
+                default_arm_pose,
+                arm_pose_blend,
                 BodyTracking::default(),
                 BodyTrackingPoseInput::default(),
                 BodyTrackingProfile::default(),
                 Visibility::Inherited,
             ));
+            if let Some(breathing_binding) = breathing_binding {
+                commands.entity(root_entity).insert((
+                    breathing_profile,
+                    breathing_binding,
+                    BreathingState::default(),
+                ));
+            }
             if capabilities.gaze_backend != SelectedGazeBackend::None {
                 let effective_properties =
                     effective_look_at_properties(look_at_properties, capabilities.gaze_backend);
@@ -426,32 +484,32 @@ impl AvatarBindError {
 #[allow(clippy::too_many_arguments)]
 fn resolve_binding(
     root: Entity,
-    head: Option<&HeadBoneEntity>,
-    neck: Option<&NeckBoneEntity>,
-    upper_chest: Option<&UpperChestBoneEntity>,
-    chest: Option<&ChestBoneEntity>,
-    spine: Option<&SpineBoneEntity>,
-    left_upper_arm: Option<&LeftUpperArmBoneEntity>,
-    right_upper_arm: Option<&RightUpperArmBoneEntity>,
-    left_eye: Option<&LeftEyeBoneEntity>,
-    right_eye: Option<&RightEyeBoneEntity>,
+    head: Option<Entity>,
+    neck: Option<Entity>,
+    upper_chest: Option<Entity>,
+    chest: Option<Entity>,
+    spine: Option<Entity>,
+    left_arm: ArmChainReferences,
+    right_arm: ArmChainReferences,
+    left_eye: Option<Entity>,
+    right_eye: Option<Entity>,
     bone_query: &Query<(
         Option<&Transform>,
         Option<&RestTransform>,
         Option<&RestGlobalTransform>,
     )>,
 ) -> Result<AvatarBinding, AvatarBindError> {
-    let head = resolve_required_bone("head", head.map(|h| **h), bone_query)?;
-    let neck = resolve_optional_bone("neck", neck.map(|n| **n), bone_query);
-    let upper_chest = resolve_optional_bone("upperChest", upper_chest.map(|b| **b), bone_query);
-    let chest = resolve_optional_bone("chest", chest.map(|b| **b), bone_query);
-    let spine = resolve_optional_bone("spine", spine.map(|b| **b), bone_query);
-    let left_upper_arm =
-        resolve_optional_bone("leftUpperArm", left_upper_arm.map(|b| **b), bone_query);
-    let right_upper_arm =
-        resolve_optional_bone("rightUpperArm", right_upper_arm.map(|b| **b), bone_query);
-    let left_eye = resolve_optional_bone("leftEye", left_eye.map(|e| **e), bone_query);
-    let right_eye = resolve_optional_bone("rightEye", right_eye.map(|e| **e), bone_query);
+    let head = resolve_required_bone("head", head, bone_query)?;
+    let neck = resolve_optional_bone("neck", neck, bone_query);
+    let upper_chest = resolve_optional_bone("upperChest", upper_chest, bone_query);
+    let chest = resolve_optional_bone("chest", chest, bone_query);
+    let spine = resolve_optional_bone("spine", spine, bone_query);
+    let left_upper_arm = resolve_optional_bone("leftUpperArm", left_arm.upper_arm, bone_query);
+    let right_upper_arm = resolve_optional_bone("rightUpperArm", right_arm.upper_arm, bone_query);
+    let left_arm = resolve_arm_chain(ArmSide::Left, left_arm, bone_query);
+    let right_arm = resolve_arm_chain(ArmSide::Right, right_arm, bone_query);
+    let left_eye = resolve_optional_bone("leftEye", left_eye, bone_query);
+    let right_eye = resolve_optional_bone("rightEye", right_eye, bone_query);
 
     Ok(AvatarBinding {
         root,
@@ -462,6 +520,8 @@ fn resolve_binding(
         spine,
         left_upper_arm,
         right_upper_arm,
+        left_arm,
+        right_arm,
         left_eye,
         right_eye,
         // Stamped with the lifecycle generation once binding succeeds.
@@ -469,60 +529,300 @@ fn resolve_binding(
     })
 }
 
-/// Applies the one-time default relaxed-arm offset during successful binding.
-///
-/// The original `RestTransform` remains immutable: tracking, constraints, and
-/// future animation continue to use the model-authored rest pose. The current
-/// local transform is reset to its rest transform plus this display-default
-/// offset only while making the avatar visible, so it cannot accumulate over
-/// frames or survive avatar replacement.
-fn apply_default_relaxed_arm_pose(
-    commands: &mut Commands,
-    binding: &AvatarBinding,
-    bone_query: &Query<(
-        Option<&Transform>,
-        Option<&RestTransform>,
-        Option<&RestGlobalTransform>,
-    )>,
-) {
-    set_relaxed_arm_transform(
-        commands,
-        binding.left_upper_arm,
-        -RELAXED_ARM_DROP_RADIANS,
-        bone_query,
-    );
-    set_relaxed_arm_transform(
-        commands,
-        binding.right_upper_arm,
-        RELAXED_ARM_DROP_RADIANS,
-        bone_query,
-    );
+fn entity_reference<T>(root: &EntityRef<'_>) -> Option<Entity>
+where
+    T: Component + std::ops::Deref<Target = Entity>,
+{
+    root.get::<T>().map(|reference| **reference)
 }
 
-fn set_relaxed_arm_transform(
-    commands: &mut Commands,
-    bone: Option<Entity>,
-    drop_radians: f32,
+/// Selects the immutable root affine used by model-space breathing conversion.
+///
+/// `RestGlobalTransform` is authoritative when bevy_vrm1 provides it. Some
+/// VRM roots have only a current `GlobalTransform`, so binding captures that
+/// value once as the fallback authority. The caller must retain the returned
+/// value and never consult an animated root for coordinate conversion.
+fn resolve_root_rest_global(root: &EntityRef<'_>) -> Option<GlobalTransform> {
+    root.get::<RestGlobalTransform>()
+        .map(|rest| rest.0)
+        .or_else(|| root.get::<GlobalTransform>().copied())
+}
+
+/// Resolves the per-avatar breathing geometry from the hips bone's immutable
+/// rest data and the real `ChildOf` ancestor path.
+///
+/// Returns `None` (disabling the always-on idle motion for this avatar) when
+/// the hips bone or its rest data is missing, the root rest/global affine is
+/// missing, the model-space rest hips height is not positive and finite, a
+/// rest affine cannot be inverted, or the ancestor path does not reach the
+/// avatar root.
+fn resolve_avatar_breathing(
+    profile: &BreathingProfile,
+    generation: AvatarGeneration,
+    hips: Option<Entity>,
+    root: Entity,
+    root_rest_global: Option<GlobalTransform>,
     bone_query: &Query<(
         Option<&Transform>,
         Option<&RestTransform>,
         Option<&RestGlobalTransform>,
     )>,
-) {
-    let Some(bone) = bone else {
-        return;
+    parents: &Query<&ChildOf>,
+) -> Option<BreathingBinding> {
+    let hips = hips?;
+    let rest_local = bone_query.get(hips).ok()?.1.map(|rest| rest.0);
+    let rest_global = bone_query.get(hips).ok()?.2.map(|rest| rest.0);
+    let ancestors = match collect_hips_ancestor_path(hips, root, |entity| {
+        parents.get(entity).ok().map(ChildOf::parent)
+    }) {
+        Some(ancestors) => ancestors,
+        None => {
+            warn!("hips ancestor path does not reach the avatar root; breathing is disabled");
+            return None;
+        }
     };
-    let Ok((_, Some(rest), _)) = bone_query.get(bone) else {
-        return;
+    resolve_breathing_binding(
+        generation,
+        hips,
+        profile,
+        root_rest_global,
+        rest_local,
+        rest_global,
+        ancestors,
+    )
+}
+
+fn left_finger_references(root: &EntityRef<'_>) -> FingerReferences {
+    FingerReferences {
+        thumb: FingerJointReferences {
+            metacarpal: entity_reference::<LeftThumbMetacarpalBoneEntity>(root),
+            proximal: entity_reference::<LeftThumbProximalBoneEntity>(root),
+            intermediate: None,
+            distal: entity_reference::<LeftThumbDistalBoneEntity>(root),
+        },
+        index: FingerJointReferences {
+            proximal: entity_reference::<LeftIndexProximalBoneEntity>(root),
+            intermediate: entity_reference::<LeftIndexIntermediateBoneEntity>(root),
+            distal: entity_reference::<LeftIndexDistalBoneEntity>(root),
+            ..default()
+        },
+        middle: FingerJointReferences {
+            proximal: entity_reference::<LeftMiddleProximalBoneEntity>(root),
+            intermediate: entity_reference::<LeftMiddleIntermediateBoneEntity>(root),
+            distal: entity_reference::<LeftMiddleDistalBoneEntity>(root),
+            ..default()
+        },
+        ring: FingerJointReferences {
+            proximal: entity_reference::<LeftRingProximalBoneEntity>(root),
+            intermediate: entity_reference::<LeftRingIntermediateBoneEntity>(root),
+            distal: entity_reference::<LeftRingDistalBoneEntity>(root),
+            ..default()
+        },
+        little: FingerJointReferences {
+            proximal: entity_reference::<LeftLittleProximalBoneEntity>(root),
+            intermediate: entity_reference::<LeftLittleIntermediateBoneEntity>(root),
+            distal: entity_reference::<LeftLittleDistalBoneEntity>(root),
+            ..default()
+        },
+    }
+}
+
+fn right_finger_references(root: &EntityRef<'_>) -> FingerReferences {
+    FingerReferences {
+        thumb: FingerJointReferences {
+            metacarpal: entity_reference::<RightThumbMetacarpalBoneEntity>(root),
+            proximal: entity_reference::<RightThumbProximalBoneEntity>(root),
+            intermediate: None,
+            distal: entity_reference::<RightThumbDistalBoneEntity>(root),
+        },
+        index: FingerJointReferences {
+            proximal: entity_reference::<RightIndexProximalBoneEntity>(root),
+            intermediate: entity_reference::<RightIndexIntermediateBoneEntity>(root),
+            distal: entity_reference::<RightIndexDistalBoneEntity>(root),
+            ..default()
+        },
+        middle: FingerJointReferences {
+            proximal: entity_reference::<RightMiddleProximalBoneEntity>(root),
+            intermediate: entity_reference::<RightMiddleIntermediateBoneEntity>(root),
+            distal: entity_reference::<RightMiddleDistalBoneEntity>(root),
+            ..default()
+        },
+        ring: FingerJointReferences {
+            proximal: entity_reference::<RightRingProximalBoneEntity>(root),
+            intermediate: entity_reference::<RightRingIntermediateBoneEntity>(root),
+            distal: entity_reference::<RightRingDistalBoneEntity>(root),
+            ..default()
+        },
+        little: FingerJointReferences {
+            proximal: entity_reference::<RightLittleProximalBoneEntity>(root),
+            intermediate: entity_reference::<RightLittleIntermediateBoneEntity>(root),
+            distal: entity_reference::<RightLittleDistalBoneEntity>(root),
+            ..default()
+        },
+    }
+}
+
+fn resolve_arm_chain(
+    side: ArmSide,
+    references: ArmChainReferences,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+) -> Option<ArmChainBinding> {
+    let upper_arm = resolve_optional_bone("upperArm", references.upper_arm, bone_query);
+    let lower_arm = resolve_optional_bone("lowerArm", references.lower_arm, bone_query);
+    let hand = resolve_optional_bone("hand", references.hand, bone_query);
+    let (Some(upper_arm), Some(lower_arm), Some(hand)) = (upper_arm, lower_arm, hand) else {
+        return None;
     };
 
-    let mut transform = rest.0;
-    transform.rotation *= Quat::from_rotation_z(drop_radians);
-    if !transform.rotation.is_finite() {
-        warn!("skipped non-finite default relaxed-arm pose for {bone:?}");
-        return;
+    let shoulder = resolve_optional_bone("shoulder", references.shoulder, bone_query)
+        .and_then(|entity| rest_space_pose(entity, bone_query).map(|_| entity));
+    let rest = ArmRestGeometry {
+        shoulder: shoulder.and_then(|entity| rest_space_pose(entity, bone_query)),
+        upper_arm: rest_space_pose(upper_arm, bone_query)?,
+        elbow: rest_space_pose(lower_arm, bone_query)?,
+        wrist: rest_space_pose(hand, bone_query)?,
+        upper_arm_length: 0.0,
+        forearm_length: 0.0,
+        total_arm_length: 0.0,
+    };
+    let upper_arm_length = rest.upper_arm.position.distance(rest.elbow.position);
+    let forearm_length = rest.elbow.position.distance(rest.wrist.position);
+    let total_arm_length = upper_arm_length + forearm_length;
+    if !valid_length(upper_arm_length)
+        || !valid_length(forearm_length)
+        || !valid_length(total_arm_length)
+    {
+        warn!("{side:?} arm rest geometry is degenerate; enhanced default arm pose is unavailable");
+        return None;
     }
-    commands.entity(bone).insert(transform);
+
+    let (fingers, finger_rest) = resolve_finger_references(references.fingers, bone_query);
+    let capabilities = crate::arm::ArmChainCapabilities {
+        has_shoulder: rest.shoulder.is_some(),
+        has_fingers: finger_rest.has_any(),
+    };
+
+    Some(ArmChainBinding {
+        side,
+        shoulder,
+        upper_arm,
+        lower_arm,
+        hand,
+        fingers,
+        finger_rest,
+        rest: ArmRestGeometry {
+            upper_arm_length,
+            forearm_length,
+            total_arm_length,
+            ..rest
+        },
+        capabilities,
+    })
+}
+
+fn resolve_finger_references(
+    references: FingerReferences,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+) -> (FingerReferences, FingerRestReferences) {
+    let fingers = FingerReferences {
+        thumb: resolve_finger_joints("thumb", references.thumb, bone_query),
+        index: resolve_finger_joints("index", references.index, bone_query),
+        middle: resolve_finger_joints("middle", references.middle, bone_query),
+        ring: resolve_finger_joints("ring", references.ring, bone_query),
+        little: resolve_finger_joints("little", references.little, bone_query),
+    };
+    let rest = FingerRestReferences {
+        thumb: resolve_finger_rest_joints(fingers.thumb, bone_query),
+        index: resolve_finger_rest_joints(fingers.index, bone_query),
+        middle: resolve_finger_rest_joints(fingers.middle, bone_query),
+        ring: resolve_finger_rest_joints(fingers.ring, bone_query),
+        little: resolve_finger_rest_joints(fingers.little, bone_query),
+    };
+    (fingers, rest)
+}
+
+fn resolve_finger_joints(
+    name: &'static str,
+    references: FingerJointReferences,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+) -> FingerJointReferences {
+    FingerJointReferences {
+        metacarpal: resolve_optional_bone(name, references.metacarpal, bone_query),
+        proximal: resolve_optional_bone(name, references.proximal, bone_query),
+        intermediate: resolve_optional_bone(name, references.intermediate, bone_query),
+        distal: resolve_optional_bone(name, references.distal, bone_query),
+    }
+}
+
+fn resolve_finger_rest_joints(
+    references: FingerJointReferences,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+) -> FingerJointRestReferences {
+    let rest = |entity: Option<Entity>| {
+        entity.and_then(|entity| {
+            rest_space_pose(entity, bone_query)
+                .map(|pose| FingerJointRestBinding { entity, rest: pose })
+        })
+    };
+    FingerJointRestReferences {
+        metacarpal: rest(references.metacarpal),
+        proximal: rest(references.proximal),
+        intermediate: rest(references.intermediate),
+        distal: rest(references.distal),
+    }
+}
+
+fn rest_space_pose(
+    entity: Entity,
+    bone_query: &Query<(
+        Option<&Transform>,
+        Option<&RestTransform>,
+        Option<&RestGlobalTransform>,
+    )>,
+) -> Option<RestSpaceBonePose> {
+    let Ok((_, Some(rest), Some(rest_global))) = bone_query.get(entity) else {
+        return None;
+    };
+    let (scale, global_rotation, position) = rest_global.0.to_scale_rotation_translation();
+    let local_rotation = rest.0.rotation;
+    if !position.is_finite()
+        || !scale.is_finite()
+        || !local_rotation.is_finite()
+        || !global_rotation.is_finite()
+        || scale.x.abs() <= f32::EPSILON
+        || scale.y.abs() <= f32::EPSILON
+        || scale.z.abs() <= f32::EPSILON
+        || local_rotation.length_squared() <= f32::EPSILON
+        || global_rotation.length_squared() <= f32::EPSILON
+    {
+        return None;
+    }
+
+    Some(RestSpaceBonePose {
+        position,
+        global_rotation: global_rotation.normalize(),
+        local_rotation: local_rotation.normalize(),
+    })
+}
+
+fn valid_length(length: f32) -> bool {
+    length.is_finite() && length > 1.0e-5
 }
 
 fn resolve_required_bone(
@@ -644,6 +944,23 @@ mod tests {
                 RestGlobalTransform(GlobalTransform::IDENTITY),
             ))
             .id()
+    }
+
+    #[test]
+    fn root_rest_global_falls_back_to_binding_time_global_transform() {
+        let mut world = World::new();
+        let current = GlobalTransform::from_translation(Vec3::new(1.0, 2.0, 3.0));
+        let root = world.spawn(current).id();
+        assert_eq!(resolve_root_rest_global(&world.entity(root)), Some(current));
+
+        let authored_rest = GlobalTransform::from_translation(Vec3::new(-1.0, 4.0, 0.5));
+        world
+            .entity_mut(root)
+            .insert(RestGlobalTransform(authored_rest));
+        assert_eq!(
+            resolve_root_rest_global(&world.entity(root)),
+            Some(authored_rest)
+        );
     }
 
     #[test]

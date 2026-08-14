@@ -31,9 +31,10 @@ fn avatar_schedule_has_no_synthetic_look_at_api() {
 /// 2. despawn_unloading_avatar (Update, chained)
 /// 3. bind_humanoid_bones (Update, chained)
 /// 4. direct-pose BodyTracking (PostUpdate)
-/// 5. VrmSystemSets::Constraints (PostUpdate, bevy_vrm1 internal)
-/// 6. VrmSystemSets::Expressions (PostUpdate, bevy_vrm1 internal)
-/// 7. VrmSystemSets::SpringBone (PostUpdate, bevy_vrm1 internal)
+/// 5. model-adaptive default arm pose compositor (PostUpdate)
+/// 6. VrmSystemSets::Constraints (PostUpdate, bevy_vrm1 internal)
+/// 7. VrmSystemSets::Expressions (PostUpdate, bevy_vrm1 internal)
+/// 8. VrmSystemSets::SpringBone (PostUpdate, bevy_vrm1 internal)
 #[test]
 fn avatar_schedule_ordering_matches_design() {
     use bevy::app::AnimationSystems;
@@ -111,6 +112,18 @@ fn avatar_schedule_ordering_matches_design() {
                     "update_body_tracking_pose_input",
                     "apply_direct_body_tracking",
                 ),
+                ("trace_animation", "apply_breathing_hips_translation"),
+                (
+                    "apply_breathing_hips_translation",
+                    "apply_direct_body_tracking",
+                ),
+                ("apply_breathing_hips_translation", "apply_default_arm_pose"),
+                (
+                    "apply_breathing_hips_translation",
+                    "update_direct_look_at_input",
+                ),
+                ("apply_direct_body_tracking", "apply_default_arm_pose"),
+                ("apply_default_arm_pose", "update_direct_look_at_input"),
                 ("apply_direct_body_tracking", "update_direct_look_at_input"),
                 ("update_direct_look_at_input", "trace_gaze"),
                 ("trace_gaze", "apply_tracked_expressions"),

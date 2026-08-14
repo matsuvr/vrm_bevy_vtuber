@@ -31,6 +31,21 @@ use super::diagnostics::render_diagnostics_screen;
 use super::live::render_live_screen;
 use super::setup::render_setup_screen;
 
+const CONTROL_WINDOW_WIDTH: f32 = 350.0;
+const CONTROL_WINDOW_HEIGHT: f32 = 600.0;
+
+fn control_window() -> bevy_egui::egui::Window<'static> {
+    // `default_width`/`default_height` only apply before egui has a Resize
+    // state for this Id. The state survives hiding and showing the window, so
+    // a resizable window would make the Controls panel depend on an earlier
+    // drag or on the previous screen's content measurement.
+    bevy_egui::egui::Window::new("Controls")
+        .id(bevy_egui::egui::Id::new("control_window"))
+        .fixed_size([CONTROL_WINDOW_WIDTH, CONTROL_WINDOW_HEIGHT])
+        .collapsible(false)
+        .movable(true)
+}
+
 /// Plugin that sets up the egui-based UI shell.
 ///
 /// Requires `EguiPlugin` to be installed before this plugin.
@@ -250,49 +265,45 @@ fn ui_render_system(
         let mut visible = true;
         let mut hide_requested = false;
 
-        // Main control window (left side, 350px wide).
-        bevy_egui::egui::Window::new("Controls")
-            .id(bevy_egui::egui::Id::new("control_window"))
-            .open(&mut visible)
-            .default_width(350.0)
-            .default_height(600.0)
-            .resizable(true)
-            .collapsible(false)
-            .movable(true)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button("Hide Controls").clicked() {
-                        hide_requested = true;
-                    }
-                    ui.small("F1 toggles controls");
-                });
-                ui.separator();
+        // Main control window. Its size is part of the session UI contract;
+        // the scroll area below must absorb content growth instead of
+        // feeding it back into the outer window geometry.
+        control_window().open(&mut visible).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Hide Controls").clicked() {
+                    hide_requested = true;
+                }
+                ui.small("F1 toggles controls");
+            });
+            ui.separator();
 
-                // Navigation tabs at the top.
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(view_model.screen == Screen::Setup, "Setup")
-                        .clicked()
-                    {
-                        ui_state.emit(UiAction::SwitchScreen(Screen::Setup));
-                    }
-                    if ui
-                        .selectable_label(view_model.screen == Screen::Live, "Live")
-                        .clicked()
-                    {
-                        ui_state.emit(UiAction::SwitchScreen(Screen::Live));
-                    }
-                    if ui
-                        .selectable_label(view_model.screen == Screen::Diagnostics, "Diagnostics")
-                        .clicked()
-                    {
-                        ui_state.emit(UiAction::SwitchScreen(Screen::Diagnostics));
-                    }
-                });
-                ui.separator();
+            // Navigation tabs at the top.
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(view_model.screen == Screen::Setup, "Setup")
+                    .clicked()
+                {
+                    ui_state.emit(UiAction::SwitchScreen(Screen::Setup));
+                }
+                if ui
+                    .selectable_label(view_model.screen == Screen::Live, "Live")
+                    .clicked()
+                {
+                    ui_state.emit(UiAction::SwitchScreen(Screen::Live));
+                }
+                if ui
+                    .selectable_label(view_model.screen == Screen::Diagnostics, "Diagnostics")
+                    .clicked()
+                {
+                    ui_state.emit(UiAction::SwitchScreen(Screen::Diagnostics));
+                }
+            });
+            ui.separator();
 
-                // Screen content in a scroll area.
-                bevy_egui::egui::ScrollArea::vertical().show(ui, |ui| match view_model.screen {
+            // Screen content in a scroll area.
+            bevy_egui::egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .show(ui, |ui| match view_model.screen {
                     Screen::Setup => {
                         render_setup_screen(ui, &view_model, &mut ui_state, &mut file_dialog)
                     }
@@ -307,7 +318,7 @@ fn ui_render_system(
                     ),
                     Screen::Diagnostics => render_diagnostics_screen(ui, &view_model, &diagnostics),
                 });
-            });
+        });
         ui_state.control_window.visible = visible && !hide_requested;
     }
 
@@ -406,5 +417,95 @@ mod tests {
 
         state.toggle();
         assert!(state.visible);
+    }
+
+    #[test]
+    fn control_window_replaces_a_large_resizable_state_with_fixed_geometry() {
+        let ctx = bevy_egui::egui::Context::default();
+        let screen_rect = bevy_egui::egui::Rect::from_min_size(
+            bevy_egui::egui::Pos2::ZERO,
+            bevy_egui::egui::vec2(1920.0, 1080.0),
+        );
+
+        // Reproduce the old implementation after a user/content-driven
+        // expansion. Resize state is persisted by egui for this Id.
+        for _ in 0..2 {
+            let _ = ctx.run_ui(
+                bevy_egui::egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    bevy_egui::egui::Window::new("Controls")
+                        .id(bevy_egui::egui::Id::new("control_window"))
+                        .default_size([CONTROL_WINDOW_WIDTH, CONTROL_WINDOW_HEIGHT])
+                        .resizable(true)
+                        .show(ui.ctx(), |window_ui| {
+                            window_ui.allocate_space(bevy_egui::egui::vec2(1500.0, 700.0));
+                        });
+                },
+            );
+        }
+
+        let legacy_rect = ctx
+            .memory(|memory| memory.area_rect(bevy_egui::egui::Id::new("control_window")))
+            .expect("legacy control window should have a remembered rect");
+        assert!(legacy_rect.width() > CONTROL_WINDOW_WIDTH);
+
+        // The current builder must clamp that stale in-session state and keep
+        // oversized content inside the scrollable fixed viewport.
+        let _ = ctx.run_ui(
+            bevy_egui::egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ui| {
+                control_window().show(ui.ctx(), |window_ui| {
+                    bevy_egui::egui::ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .show(window_ui, |window_ui| {
+                            window_ui.allocate_space(bevy_egui::egui::vec2(1500.0, 700.0));
+                        });
+                });
+            },
+        );
+
+        let fixed_rect = ctx
+            .memory(|memory| memory.area_rect(bevy_egui::egui::Id::new("control_window")))
+            .expect("fixed control window should remain visible");
+        assert_eq!(
+            fixed_rect.size(),
+            bevy_egui::egui::vec2(CONTROL_WINDOW_WIDTH, CONTROL_WINDOW_HEIGHT)
+        );
+
+        // Hiding the window must not make its next appearance depend on the
+        // previous content pass either.
+        let _ = ctx.run_ui(
+            bevy_egui::egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |_ui| {},
+        );
+        let _ = ctx.run_ui(
+            bevy_egui::egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ui| {
+                control_window().show(ui.ctx(), |window_ui| {
+                    bevy_egui::egui::ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .show(window_ui, |window_ui| {
+                            window_ui.label("reopened");
+                        });
+                });
+            },
+        );
+
+        let reopened_rect = ctx
+            .memory(|memory| memory.area_rect(bevy_egui::egui::Id::new("control_window")))
+            .expect("reopened control window should remain visible");
+        assert_eq!(reopened_rect.size(), fixed_rect.size());
     }
 }

@@ -2,7 +2,7 @@
 
 Status: Accepted  
 Date: 2026-08-04
-Amended: 2026-08-13
+Amended: 2026-08-14 (Issue #20: always-on idle breathing)
 
 ## Context
 
@@ -52,9 +52,14 @@ blink left/right -> swap
 
 ```text
 AnimationSystems
+ -> ApplyBreathingHipsTranslation
  -> DirectPoseBodyTracking
+ -> ModelAdaptiveDefaultArmPose
+ -> DirectHeadRelativeLookAt / GazeControl
+ -> Expressions
  -> VrmSystemSets::Constraints
  -> PropagateAfterConstraints
+ -> SpringBone
 ```
 
 VRM 1.0はbone local rotationがidentityとは限らない。model-space deltaを各boneのrest orientationへ共役変換する。
@@ -69,9 +74,53 @@ R_output_local    = R_bone_rest_local * R_delta_local
 
 tracking喪失時はtarget yaw／pitch／rollを0へ戻し、bone別half-lifeでanimated baseへ復帰する。汎用Bevy Animationへの加算合成はこのADRの対象だが、VRMA playbackの製品サポートを追加するものではない。
 
-### Default relaxed-arm pose
+### Model-adaptive default arm pose
 
-binding成功時、存在するupper armだけをmodel-authored `RestTransform`から左右対称に55°下げてからavatarを表示する。これはT-pose表示を避けるone-shot defaultであり、head、neck、upperChest、chest、spineを対象とするdirect `BodyTracking`のwriter所有権を変更しない。`RestTransform`と`RestGlobalTransform`は不変とし、lower arm、hand、world transformには直接書き込まない。モデルreplacementでは新しいbindingにだけ再適用する。
+binding成功時は`Transform`へ固定角度を書き込まず、completeなupper arm／lower arm／hand chainのrest-space geometryをcacheする。shoulderとfingerはoptional capabilityとして保持し、欠損または退化したchainはそのsideのenhanced poseだけを無効にする。純粋なanalytic two-bone IKでtyped `DefaultArmPose`をgeneration付きで解決し、既定値はarm drop 70°、reach 0.99、forward hand offset 0.081 total（VRM model-space `+Z`）、rearward elbow pole offset 0.05 total（`-Z`）とする。
+
+`DefaultArmPose`は`AnimationSystems`とdirect-pose `BodyTracking`の後、direct head-relative gaze／`VrmSystemSets::GazeControl`および`VrmSystemSets::Constraints`の前に毎frame適用する。animation baseへrest-relative upper／lower deltaを`base * delta`で加算し、前frameのcomposed outputを基準にして累積を防ぐ。実際の`ChildOf`経路を通じて中間nodeを含む影響subtreeの`GlobalTransform`を更新する。`RestTransform`／`RestGlobalTransform`は不変で、generation不一致、replacement、欠損geometryはno-opとする。
+
+このcompositorはhead、neck、upperChest、chest、spineを追跡するdirect `BodyTracking`のwriter所有権を変更せず、eye gaze、Node Constraint、SpringBoneのwriter競合も導入しない。
+
+Issue #17の二次補正は、解決upper displacementの18%を肩へ追従させ、肩回転を5°以内にclampする。finger jointには各jointのrest-global axisを用いた10°の弱いcurlを適用する。wrist／handへ固定角度を直接書かず、lower armの解決回転を実階層へ伝播してauthored wrist orientationを保持する。shoulder／fingerがないモデルでは該当補正だけを無効にする。
+
+Issue #18のmodel-specific tuningは、import content hashを`AvatarAssetId`としてversion 1のbounded `ArmPoseProfileOverride`へ対応付ける。bindingは`ArmPoseOverrideStore`から検証済み値だけを読み、未知version、非finite値、範囲外値は既定profileへfallbackする。storeの`entries`／`import_entries`がアプリ設定層との保存境界であり、同一session内のmodel unload／reloadではresourceが値を保持する。明示的なresetはgeometry-derived defaultへ戻す。
+
+初回default適用は0.25秒、defaultへ戻す操作は0.6秒の左右独立blendとする。blendはdelta quaternionをshortest arcでslerpし、経過時間を`Time::delta_secs`で進めるため固定FPS依存にならない。invalid timeは状態を進めず、generationごとに新規stateを作ることでreplacement間のpose transition漏れを防ぐ。
+
+### Always-on procedural idle breathing (Issue #20)
+
+`Ready`状態のアバターには常時、subtleなprocedural breathingを適用する。カメラ・control frame・`BodyTrackingPoseInput.active`・confidenceには依存せず、tracking loss／hold中も継続する。
+
+- **所有する値**: additive `hips.translation` のみ。head〜spineのrotation writerであるdirect-pose `BodyTracking`、arm、eye、scale、scene root、cameraは一切書かない。
+- **波形**: 真の周期を使う `phase_01 = (elapsed_seconds / period_seconds) mod 1`、`breath_01 = sin(PI * phase_01)^2`。位相はbinding直後の最初のframeでphase `0`（完全にneutral、popなし）になるよう評価してから進める。phase accumulatorは`f64`で、最終的なbounded値だけを`f32`へ変換する。frame-rate非依存で、同じphaseの再評価は同じ出力になる。
+- **プロファイル既定値**: `period_seconds = 5.0`。`RestGlobalTransform`はglobal/world空間であるため、binding時にcacheしたroot rest/global affine `G_root`を除去して得たmodel/root-space hips heightを使う。`hips_model_position = inverse(G_root) * G_hips.translation` の `y` から `vertical = clamp(0.010 * rest_hips_height, 0.006 m, 0.0125 m)`、`forward = clamp(0.008 * rest_hips_height, 0.004 m, 0.010 m)`を求める。VMagicMirror（pinned `malaybaku/VMagicMirror@8c97982`）のsmall body offset（prefab 0.01 m）以下に抑えた。
+- **座標変換**: ピーク吸入時のsemantic model-space offsetは `+Y * vertical + +Z * forward`。`G_parent = G_hips * inverse(hips RestTransform)`、`parent_in_model = inverse(G_root) * G_parent`、`model_to_parent_local = inverse(linear(parent_in_model))`をbinding時に一度だけ導出する。rootに`RestGlobalTransform`がなければbinding成功時のroot `GlobalTransform`をimmutableなroot-rest authorityとしてcacheし、animated/current rootを後続frameの座標変換基準にしない。rootのrotation、translation、scaleはmodel-spaceの高さ・振幅・semantic方向を変えず、non-humanoid intermediate nodeを含む実際の`ChildOf`経路でもmodel軸の意味が保たれる。非finite／非可逆affineはsafe no-opとする。runtimeはcached ancestor pathでhips自身の`GlobalTransform`だけを更新し、full hierarchyを毎frame走査しない。
+- **base合成と非累積**: `output = base + current_delta`。animationがhips translationを書いたら新しい値をbaseとして捕捉し、自前の前回出力を累積しない。cycle境界でauthored/animated baseへ正確に復帰する。
+- **lifecycle**: `Ready`の間だけ書き、unload／replacementで全状態を破棄する（componentはroot entityと共にdespawn）。replacementはneutral phase `0`から開始する。
+
+このcompositorはhead、neck、upperChest、chest、spineを追跡するdirect `BodyTracking`のwriter所有権を変更せず、eye gaze、Node Constraint、SpringBoneのwriter競合も導入しない。
+
+### Final control-order contract (Issue #19, amended by Issue #20)
+
+Issue #19で実装が所有するwriterと制御順を確定し、Issue #20でbreathingのhips-translation writerを追記した。
+
+| 順序 | writer / system | 所有する値 | 禁止事項 |
+|---|---|---|---|
+| 1 | Bevy `AnimationSystems` | animation base `Transform` | — |
+| 2 | `apply_breathing_hips_translation` | additive `hips.translation`（idle breathing） | torso/arm/eye回転、scale、scene root、cameraの書き込み |
+| 3 | `bevy_vrm1` direct-pose `BodyTracking` | spine〜headのtracked body rotation | arm、eye、world targetの書き込み |
+| 4 | `apply_default_arm_pose` | upper/lower arm、optional shoulder/fingerのrest-relative local delta | handの直接world transform、head〜spineの上書き |
+| 5 | direct head-relative LookAt / `VrmSystemSets::GazeControl` | eye-in-head gaze delta | synthetic world-space cursor/target |
+| 6 | `ModifyExpressions` / `VrmSystemSets::Expressions` | supported expression weights | unsupported presetへの書き込み |
+| 7 | `VrmSystemSets::Constraints` → propagation → SpringBone | VRM runtime constraints and physics | constraints／SpringBoneの無効化 |
+
+Default-arm pose is a resolved generation-scoped state. It reads immutable
+`RestTransform`／`RestGlobalTransform`, composes onto the current animation base,
+and refreshes only the affected `ChildOf` subtrees. A missing or degenerate arm
+side is a safe no-op; the avatar remains eligible for required head binding.
+The local automated and manual-validation status for this contract is recorded
+in `docs/DEFAULT_ARM_POSE_VALIDATION_2026-08-14.md`.
 
 ### Gaze
 

@@ -6,8 +6,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod arm;
+pub mod arm_pose;
 pub mod bind;
 pub mod binding;
+pub mod breathing;
 pub mod capabilities;
 pub mod compatibility;
 pub mod expression;
@@ -21,8 +24,27 @@ pub mod plugin;
 pub mod pose;
 pub mod unload;
 
+pub use arm::{
+    ARM_POSE_PROFILE_OVERRIDE_VERSION, ArmChainBinding, ArmChainCapabilities, ArmChainReferences,
+    ArmIkError, ArmIkInput, ArmIkSolution, ArmIkTarget, ArmPoseProfile, ArmPoseProfileOverride,
+    ArmPoseProfileOverrideError, ArmRestGeometry, ArmSide, FingerJointReferences,
+    FingerJointRestBinding, FingerJointRestReferences, FingerReferences, FingerRestReferences,
+    RestSpaceBonePose, default_arm_target, solve_two_bone_arm,
+};
+pub use arm_pose::{
+    ArmPoseBlendSide, ArmPoseBlendState, ArmPoseOverrideStore, ArmPoseOverrideStoreError,
+    DEFAULT_ARM_RETURN_SECONDS, DEFAULT_ARM_TRANSITION_SECONDS, DefaultArmPose, ResolvedArmPose,
+    ResolvedBoneDelta, ResolvedFingerJointPose, ResolvedFingerPose, apply_default_arm_pose,
+};
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};
+pub use breathing::{
+    BreathingBinding, BreathingProfile, BreathingProfileError, BreathingState,
+    DEFAULT_BREATHING_PERIOD_SECONDS, DEFAULT_FORWARD_HEIGHT_FACTOR,
+    DEFAULT_VERTICAL_HEIGHT_FACTOR, FORWARD_AMPLITUDE_MAX_METERS, FORWARD_AMPLITUDE_MIN_METERS,
+    VERTICAL_AMPLITUDE_MAX_METERS, VERTICAL_AMPLITUDE_MIN_METERS, apply_breathing_hips_translation,
+    breathing_envelope, breathing_phase, resolve_breathing_amplitudes, resolve_breathing_binding,
+};
 pub use capabilities::{
     AvatarCapabilities, BlinkMode, BonePresence, DeclaredLookAtType, EmotionSet,
     ExpressionCapabilities, GazeFallbackReason, LookDirectionSet, MouthMode, SelectedGazeBackend,

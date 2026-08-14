@@ -9,8 +9,11 @@ use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
 
+use crate::arm_pose::ArmPoseOverrideStore;
+use crate::arm_pose::apply_default_arm_pose;
 use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
+use crate::breathing::apply_breathing_hips_translation;
 use crate::expression::apply_tracked_expressions;
 use crate::framing::fixed_fov_fit::FIXED_VERTICAL_FOV;
 use crate::framing::{AvatarViewportCamera, frame_avatar_camera};
@@ -39,6 +42,7 @@ impl Plugin for VtuberAvatarPlugin {
         app.add_plugins(VrmPlugin)
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
+            .init_resource::<ArmPoseOverrideStore>()
             .init_resource::<ActiveControlFrame>()
             .init_resource::<AvatarMotionMirror>()
             .init_resource::<PoseApplyMetrics>()
@@ -78,8 +82,24 @@ impl Plugin for VtuberAvatarPlugin {
             )
             .add_systems(
                 PostUpdate,
+                apply_breathing_hips_translation
+                    .after(AnimationSystems)
+                    .before(apply_direct_body_tracking)
+                    .before(VrmSystemSets::Constraints),
+            )
+            .add_systems(
+                PostUpdate,
+                apply_default_arm_pose
+                    .after(apply_direct_body_tracking)
+                    .before(update_direct_look_at_input)
+                    .before(VrmSystemSets::GazeControl)
+                    .before(VrmSystemSets::Constraints),
+            )
+            .add_systems(
+                PostUpdate,
                 update_direct_look_at_input
                     .after(apply_direct_body_tracking)
+                    .after(apply_default_arm_pose)
                     .before(VrmSystemSets::GazeControl),
             )
             .add_systems(

@@ -2,12 +2,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bevy::app::{App, PluginGroup, Startup};
 use bevy::asset::io::{AssetSourceBuilder, AssetSourceBuilders};
 use bevy::asset::{AssetServer, LoadState};
-use bevy::prelude::{DefaultPlugins, Entity, MessageWriter, Res, Resource, Visibility};
+use bevy::prelude::{DefaultPlugins, Entity, MessageWriter, Res, Resource, Transform, Visibility};
 use bevy::render::RenderPlugin;
 use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::utils::default;
@@ -15,8 +15,8 @@ use bevy::window::{ExitCondition, WindowPlugin};
 use bevy_vrm1::prelude::{VrmAsset, VrmHandle};
 use vtuber_app::import::{self, DEFAULT_SIZE_LIMIT};
 use vtuber_avatar::{
-    AvatarAssetId, AvatarLifecycle, AvatarLifecycleState, ImportedAvatar,
-    LoadImportedAvatarRequest, UserAssetPath, VtuberAvatarPlugin,
+    AvatarAssetId, AvatarLifecycle, AvatarLifecycleState, BreathingBinding, BreathingProfile,
+    BreathingState, ImportedAvatar, LoadImportedAvatarRequest, UserAssetPath, VtuberAvatarPlugin,
 };
 
 const MAX_COMPAT_FRAMES: usize = 1_200;
@@ -110,6 +110,7 @@ fn run_with_root(path: &Path, managed_root: &Path) -> Result<(), String> {
                     return Err(format!("Ready root {root:?} remains Visibility::Hidden"));
                 }
                 println!("managed avatar reached Ready: root={root:?} visibility={visibility:?}");
+                verify_breathing(&mut app, root)?;
                 return Ok(());
             }
             AvatarLifecycleState::Failed => {
@@ -129,6 +130,83 @@ fn run_with_root(path: &Path, managed_root: &Path) -> Result<(), String> {
     Err(format!(
         "managed avatar did not reach Ready within {MAX_COMPAT_FRAMES} frames"
     ))
+}
+
+/// Verifies that the always-on breathing feature is bound and moving on a
+/// Ready avatar: the typed profile/binding/state components must exist, the
+/// hips translation must move away from its initial value, and it must stay
+/// finite. Wall-clock frames are paced so the 5-second cycle advances enough
+/// to observe a visible displacement.
+fn verify_breathing(app: &mut App, root: Entity) -> Result<(), String> {
+    const BREATHING_FRAMES: usize = 150;
+    const BREATHING_FRAME_PACE: Duration = Duration::from_millis(16);
+    const MIN_HIPS_DISPLACEMENT: f32 = 1.0e-4;
+
+    let (profile, binding, has_state) = {
+        let world = app.world();
+        let profile = world
+            .get::<BreathingProfile>(root)
+            .copied()
+            .ok_or_else(|| format!("Ready root {root:?} has no BreathingProfile"))?;
+        let binding = world
+            .get::<BreathingBinding>(root)
+            .cloned()
+            .ok_or_else(|| format!("Ready root {root:?} has no BreathingBinding"))?;
+        let has_state = world.get::<BreathingState>(root).is_some();
+        (profile, binding, has_state)
+    };
+    if !has_state {
+        return Err(format!("Ready root {root:?} has no BreathingState"));
+    }
+
+    let initial = app
+        .world()
+        .get::<Transform>(binding.hips)
+        .ok_or_else(|| format!("hips entity {:?} has no Transform", binding.hips))?
+        .translation;
+    if !initial.is_finite() {
+        return Err(format!(
+            "hips entity {:?} has non-finite initial translation",
+            binding.hips
+        ));
+    }
+
+    let mut moved = false;
+    for _ in 0..BREATHING_FRAMES {
+        std::thread::sleep(BREATHING_FRAME_PACE);
+        app.update();
+        let current = app
+            .world()
+            .get::<Transform>(binding.hips)
+            .ok_or_else(|| format!("hips entity {:?} lost its Transform", binding.hips))?
+            .translation;
+        if !current.is_finite() {
+            return Err(format!(
+                "hips entity {:?} received a non-finite translation",
+                binding.hips
+            ));
+        }
+        if (current - initial).length() > MIN_HIPS_DISPLACEMENT {
+            moved = true;
+        }
+    }
+    if !moved {
+        return Err(format!(
+            "breathing did not move the hips by {MIN_HIPS_DISPLACEMENT} m within {BREATHING_FRAMES} frames"
+        ));
+    }
+
+    println!(
+        "breathing verified: hips={:?} period={}s rest_hips_height={:.6}m vertical={:.6}m forward={:.6}m up_local={:?} forward_local={:?}",
+        binding.hips,
+        profile.period_seconds,
+        binding.rest_hips_height,
+        binding.vertical_amplitude,
+        binding.forward_amplitude,
+        binding.up_local,
+        binding.forward_local,
+    );
+    Ok(())
 }
 
 #[derive(Resource)]
