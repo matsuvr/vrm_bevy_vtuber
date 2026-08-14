@@ -10,14 +10,16 @@ pub use runtime_descriptor::{
 };
 
 use crate::error::AppResult;
-use crate::vrm::gltf::extensions::vrmc_spring_bone::VRMCSpringBone;
+use crate::vrm::gltf::extensions::vrmc_spring_bone::{
+    Collider, ColliderGroup, Sphere, Spring, SpringJoint, VRMCSpringBone,
+};
 use crate::vrm::gltf::extensions::vrmc_vrm::{
     Expressions, FirstPerson, FirstPersonFlag, Humanoid, LookAtProperties, LookAtType, Meta,
     MorphTargetBind, RangeMap, VrmPreset, VrmcVrm,
 };
 use anyhow::Context;
 use bevy::gltf::Gltf;
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -46,10 +48,10 @@ impl VrmExtensions {
                 json.get("VRM").context("Not found VRM extension")?,
             ),
         };
-        let vrmc_spring_bone = obtain_vrmc_springs(json)
-            .ok()
-            .map(serde_json::from_value)
-            .transpose()?;
+        let vrmc_spring_bone = match json.get("VRMC_springBone") {
+            Some(value) => Some(serde_json::from_value(value.clone())?),
+            None => json.get("VRM").and_then(normalized_legacy_spring_bone),
+        };
         Ok(Self {
             runtime_descriptor,
             vrmc_vrm,
@@ -230,6 +232,178 @@ fn normalized_legacy_expression_name(group: &Value) -> Option<String> {
     )
 }
 
+fn normalized_legacy_spring_bone(legacy: &Value) -> Option<VRMCSpringBone> {
+    let secondary = legacy.get("secondaryAnimation")?;
+    let mut colliders = Vec::new();
+    let mut collider_groups = Vec::new();
+
+    for group in secondary
+        .get("colliderGroups")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(node) = group.get("node").and_then(node_index) else {
+            collider_groups.push(ColliderGroup {
+                name: None,
+                colliders: Vec::new(),
+            });
+            continue;
+        };
+        let group_colliders = group
+            .get("colliders")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|collider| {
+                let offset = collider
+                    .get("offset")
+                    .and_then(vector3)
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                let radius = collider
+                    .get("radius")
+                    .and_then(finite_f32)
+                    .map(|radius| radius.max(0.0))?;
+                let index = colliders.len() as u64;
+                colliders.push(Collider {
+                    node,
+                    shape: crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape::Sphere(
+                        Sphere { offset, radius },
+                    ),
+                });
+                Some(index)
+            })
+            .collect();
+        collider_groups.push(ColliderGroup {
+            name: None,
+            colliders: group_colliders,
+        });
+    }
+
+    let springs = secondary
+        .get("boneGroups")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, group)| {
+            let joints = group
+                .get("bones")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(node_index)
+                .map(|node| SpringJoint {
+                    node,
+                    drag_force: Some(
+                        group
+                            .get("dragForce")
+                            .and_then(finite_f32)
+                            .unwrap_or(0.0)
+                            .clamp(0.0, 1.0),
+                    ),
+                    gravity_dir: Some(
+                        group
+                            .get("gravityDir")
+                            .and_then(vector3)
+                            .map(legacy_gravity_direction)
+                            .unwrap_or([0.0, -1.0, 0.0]),
+                    ),
+                    gravity_power: Some(
+                        group
+                            .get("gravityPower")
+                            .and_then(finite_f32)
+                            .unwrap_or(0.0)
+                            .max(0.0),
+                    ),
+                    hit_radius: Some(
+                        group
+                            .get("hitRadius")
+                            .and_then(finite_f32)
+                            .unwrap_or(0.0)
+                            .max(0.0),
+                    ),
+                    stiffness: Some(
+                        group
+                            .get("stiffiness")
+                            .or_else(|| group.get("stiffness"))
+                            .and_then(finite_f32)
+                            .unwrap_or(0.0)
+                            .clamp(0.0, 1.0),
+                    ),
+                })
+                .collect::<Vec<_>>();
+            if joints.is_empty() {
+                return None;
+            }
+            let collider_groups =
+                group
+                    .get("colliderGroups")
+                    .and_then(Value::as_array)
+                    .map(|groups| {
+                        groups
+                            .iter()
+                            .filter_map(|group| {
+                                group.as_u64().and_then(|index| index.try_into().ok())
+                            })
+                            .filter(|index: &usize| *index < collider_groups.len())
+                            .collect()
+                    });
+            Some(Spring {
+                name: format!("legacy-spring-{index}"),
+                joints,
+                collider_groups,
+                center: group.get("center").and_then(node_index),
+                terminal_length: Some(0.07),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut claimed_nodes = HashSet::<usize>::default();
+    let springs = springs
+        .into_iter()
+        .filter_map(|mut spring| {
+            spring
+                .joints
+                .retain(|joint| claimed_nodes.insert(joint.node));
+            (!spring.joints.is_empty()).then_some(spring)
+        })
+        .collect();
+    Some(VRMCSpringBone {
+        spec_version: "1.0".into(),
+        colliders,
+        collider_groups,
+        springs,
+    })
+}
+
+fn node_index(value: &Value) -> Option<usize> {
+    value.as_u64()?.try_into().ok()
+}
+
+fn finite_f32(value: &Value) -> Option<f32> {
+    value
+        .as_f64()
+        .map(|value| value as f32)
+        .filter(|value| value.is_finite())
+}
+
+fn vector3(value: &Value) -> Option<[f32; 3]> {
+    let object = value.as_object()?;
+    Some([
+        finite_f32(object.get("x")?)?,
+        finite_f32(object.get("y")?)?,
+        finite_f32(object.get("z")?)?,
+    ])
+}
+
+fn legacy_gravity_direction([x, y, z]: [f32; 3]) -> [f32; 3] {
+    // VRM 0.x faces -Z while the normalized runtime basis faces +Z. The
+    // scene basis rotates node transforms; gravity is a world-space vector,
+    // so it receives the same Y=pi conversion exactly once here.
+    [-x, y, -z]
+}
+
 /// Represents a node in the glTF file.
 #[derive(Serialize, Deserialize, Clone, Debug, Copy)]
 pub struct VrmNode {
@@ -253,15 +427,6 @@ pub(crate) fn obtain_vrmc_vrm(
         .get("VRMC_vrm")
         .or_else(|| json.get("VRMC_vrm_animation"))
         .context("Not found VRMC_vrm or VRMC_vrm_animation")?
-        .clone())
-}
-
-pub(crate) fn obtain_vrmc_springs(
-    json: &serde_json::map::Map<String, serde_json::Value>
-) -> AppResult<serde_json::Value> {
-    Ok(json
-        .get("VRMC_springBone")
-        .context("Not found VRMC_springBone")?
         .clone())
 }
 
@@ -354,5 +519,69 @@ mod tests {
         ] {
             assert!(expressions.preset.contains_key(name), "missing {name}");
         }
+    }
+
+    #[test]
+    fn normalizes_legacy_secondary_animation_with_terminal_and_gravity_basis() {
+        let legacy = json!({
+            "secondaryAnimation": {
+                "colliderGroups": [{
+                    "node": 2,
+                    "colliders": [{
+                        "offset": {"x": 0.1, "y": 0.2, "z": 0.3},
+                        "radius": 0.04
+                    }]
+                }],
+                "boneGroups": [{
+                    "stiffiness": 0.8,
+                    "gravityPower": 0.5,
+                    "gravityDir": {"x": 1.0, "y": -1.0, "z": 0.25},
+                    "dragForce": 0.2,
+                    "center": 0,
+                    "hitRadius": 0.02,
+                    "bones": [4, 5],
+                    "colliderGroups": [0]
+                }]
+            }
+        });
+        let spring = normalized_legacy_spring_bone(&legacy).expect("spring should parse");
+        assert_eq!(spring.springs.len(), 1);
+        assert_eq!(spring.springs[0].joints.len(), 2);
+        assert_eq!(spring.springs[0].terminal_length, Some(0.07));
+        assert_eq!(
+            spring.springs[0].joints[0].gravity_dir,
+            Some([-1.0, -1.0, -0.25])
+        );
+        assert_eq!(spring.colliders.len(), 1);
+        assert_eq!(spring.spring_colliders(&[0, 9]).len(), 1);
+    }
+
+    #[test]
+    fn drops_duplicate_legacy_joint_writers() {
+        let legacy = json!({
+            "secondaryAnimation": {
+                "boneGroups": [
+                    {"bones": [4, 5]},
+                    {"bones": [5, 6]}
+                ]
+            }
+        });
+        let spring = normalized_legacy_spring_bone(&legacy).expect("spring should parse");
+        assert_eq!(
+            spring.springs[0]
+                .joints
+                .iter()
+                .map(|joint| joint.node)
+                .collect::<Vec<_>>(),
+            [4, 5]
+        );
+        assert_eq!(
+            spring.springs[1]
+                .joints
+                .iter()
+                .map(|joint| joint.node)
+                .collect::<Vec<_>>(),
+            [6]
+        );
     }
 }

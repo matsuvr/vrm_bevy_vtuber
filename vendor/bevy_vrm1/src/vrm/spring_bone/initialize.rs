@@ -96,6 +96,7 @@ fn apply_initialize_spring_roots(
                 })
                 .collect(),
         ),
+        terminal_length: spring.terminal_length,
     }) {
         let Some(root) = spring_root.joints.first() else {
             continue;
@@ -138,6 +139,35 @@ fn init_spring_joint_states(
             };
             par_commands.command_scope(|mut commands| {
                 commands.entity(head_entity).insert(state);
+            });
+        }
+        if let (Some(&last_entity), Some(terminal_length)) =
+            (root.joints.last(), root.terminal_length)
+            && let (Ok(last_tf), Ok(last_gtf)) =
+                (joints.get(last_entity), global_transforms.get(last_entity))
+        {
+            let terminal_global =
+                last_gtf.translation() + last_gtf.rotation().mul_vec3(Vec3::Y * terminal_length);
+            let terminal_tail = root
+                .center_node
+                .and_then(|center| global_transforms.get(center).ok())
+                .map(|center_gtf| {
+                    center_gtf
+                        .to_matrix()
+                        .inverse()
+                        .transform_point3(terminal_global)
+                })
+                .unwrap_or(terminal_global);
+            let state = SpringJointState {
+                prev_tail: terminal_tail,
+                current_tail: terminal_tail,
+                bone_axis: Vec3::Y,
+                bone_length: terminal_length,
+                initial_local_matrix: last_tf.to_matrix(),
+                initial_local_rotation: last_tf.rotation,
+            };
+            par_commands.command_scope(|mut commands| {
+                commands.entity(last_entity).insert(state);
             });
         }
     });

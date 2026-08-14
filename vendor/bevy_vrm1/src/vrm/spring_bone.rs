@@ -51,6 +51,10 @@ pub struct SpringRoot {
     /// If the spring chain has a center node,
     /// The inertia of the spring bone is evaluated in the [`Center Space`](https://github.com/vrm-c/vrm-specification/tree/master/specification/VRMC_springBone-1.0#center-space).
     pub center_node: SpringCenterNode,
+
+    /// Optional terminal length for a legacy chain whose final bone has no
+    /// glTF child node.
+    pub terminal_length: Option<f32>,
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Default, Deref, Reflect)]

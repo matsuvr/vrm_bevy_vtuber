@@ -6,7 +6,7 @@ use bevy::app::App;
 use bevy::asset::{Assets, Handle};
 use bevy::gltf::GltfNode;
 use bevy::math::Vec3;
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 pub(super) struct SpringBoneRegistryPlugin;
@@ -34,12 +34,19 @@ impl SpringColliderRegistry {
         node_assets: &Assets<GltfNode>,
         nodes: &[Handle<GltfNode>],
     ) -> Self {
+        let unique_names = unique_node_names(node_assets, nodes);
+        let mut claimed_names = HashSet::<String>::default();
         Self(
             colliders
                 .iter()
                 .filter_map(|collider| {
                     let node_handle = nodes.get(collider.node)?;
                     let node = node_assets.get(node_handle)?;
+                    if !unique_names.contains(&node.name)
+                        || !claimed_names.insert(node.name.clone())
+                    {
+                        return None;
+                    }
                     Some((Name::new(node.name.clone()), collider.shape))
                 })
                 .collect(),
@@ -59,12 +66,19 @@ impl SpringJointPropsRegistry {
         node_assets: &Assets<GltfNode>,
         nodes: &[Handle<GltfNode>],
     ) -> Self {
+        let unique_names = unique_node_names(node_assets, nodes);
+        let mut claimed_names = HashSet::<String>::default();
         Self(
             joints
                 .iter()
                 .filter_map(|joint| {
                     let node_handle = nodes.get(joint.node)?;
                     let node = node_assets.get(node_handle)?;
+                    if !unique_names.contains(&node.name)
+                        || !claimed_names.insert(node.name.clone())
+                    {
+                        return None;
+                    }
                     let dir = joint.gravity_dir?;
                     Some((
                         Name::new(node.name.clone()),
@@ -90,6 +104,7 @@ pub(crate) struct SpringNode {
     pub center: Option<Name>,
     pub joints: Vec<Name>,
     pub colliders: Vec<(Name, ColliderShape)>,
+    pub terminal_length: Option<f32>,
 }
 
 #[derive(Component, Deref, Default, Reflect)]
@@ -104,20 +119,40 @@ impl SpringNodeRegistry {
         node_assets: &Assets<GltfNode>,
         nodes: &[Handle<GltfNode>],
     ) -> Self {
+        let unique_names = unique_node_names(node_assets, nodes);
+        let mut claimed_joints = HashSet::<usize>::default();
         Self(
             spring_bone
                 .springs
                 .iter()
-                .map(|spring| SpringNode {
-                    joints: spring
+                .filter_map(|spring| {
+                    let joints = spring
                         .joints
                         .iter()
-                        .filter_map(|joint| get_node_name(joint.node, node_assets, nodes))
-                        .collect(),
-                    colliders: obtain_colliders(spring_bone, spring, node_assets, nodes),
-                    center: spring
-                        .center
-                        .and_then(|index| get_node_name(index, node_assets, nodes)),
+                        .filter_map(|joint| {
+                            let name = get_node_name(joint.node, node_assets, nodes)?;
+                            unique_names
+                                .contains(name.as_str())
+                                .then_some((joint.node, name))
+                        })
+                        .filter(|(node, _)| claimed_joints.insert(*node))
+                        .map(|(_, name)| name)
+                        .collect::<Vec<_>>();
+                    (!joints.is_empty()).then_some(SpringNode {
+                        joints,
+                        colliders: obtain_colliders(
+                            spring_bone,
+                            spring,
+                            node_assets,
+                            nodes,
+                            &unique_names,
+                        ),
+                        center: spring
+                            .center
+                            .and_then(|index| get_node_name(index, node_assets, nodes))
+                            .filter(|name| unique_names.contains(name.as_str())),
+                        terminal_length: spring.terminal_length,
+                    })
                 })
                 .collect(),
         )
@@ -129,6 +164,7 @@ fn obtain_colliders(
     spring: &Spring,
     node_assets: &Assets<GltfNode>,
     nodes: &[Handle<GltfNode>],
+    unique_names: &HashSet<String>,
 ) -> Vec<(Name, ColliderShape)> {
     let Some(collider_groups) = spring.collider_groups.as_ref() else {
         return vec![];
@@ -138,8 +174,27 @@ fn obtain_colliders(
         .iter()
         .flat_map(|collider| {
             let name = get_node_name(collider.node, node_assets, nodes)?;
+            if !unique_names.contains(name.as_str()) {
+                return None;
+            }
             Some((name, collider.shape))
         })
+        .collect()
+}
+
+fn unique_node_names(
+    node_assets: &Assets<GltfNode>,
+    nodes: &[Handle<GltfNode>],
+) -> HashSet<String> {
+    let mut counts = HashMap::<String, usize>::new();
+    for handle in nodes {
+        if let Some(node) = node_assets.get(handle) {
+            *counts.entry(node.name.clone()).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(name, count)| (count == 1).then_some(name))
         .collect()
 }
 
