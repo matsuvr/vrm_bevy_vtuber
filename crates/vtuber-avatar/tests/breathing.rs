@@ -25,6 +25,7 @@ struct Scene {
     app: App,
     root: Entity,
     intermediate: Option<Entity>,
+    ancestors: Vec<Entity>,
     hips: Entity,
     head: Entity,
     spine: Option<Entity>,
@@ -113,6 +114,26 @@ fn build_scene(
     base: Vec3,
     with_body_chain: bool,
 ) -> Scene {
+    let ancestor_specs = intermediate_rotation
+        .map(|rotation| (rotation, intermediate_translation))
+        .into_iter()
+        .collect::<Vec<_>>();
+    build_scene_with_ancestors(
+        root_rotation,
+        &ancestor_specs,
+        hips_rest_rotation,
+        base,
+        with_body_chain,
+    )
+}
+
+fn build_scene_with_ancestors(
+    root_rotation: Quat,
+    ancestor_specs: &[(Quat, Vec3)],
+    hips_rest_rotation: Quat,
+    base: Vec3,
+    with_body_chain: bool,
+) -> Scene {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins.build().disable::<TimePlugin>())
         .insert_resource(Time::<()>::default())
@@ -121,27 +142,20 @@ fn build_scene(
     let root_transform = Transform::from_rotation(root_rotation);
     let root = spawn_transform(&mut app, root_transform, GlobalTransform::IDENTITY, None);
 
-    let intermediate_global = GlobalTransform::from(root_transform);
-    let intermediate = intermediate_rotation.map(|rotation| {
-        spawn_transform(
-            &mut app,
-            Transform {
-                translation: intermediate_translation,
-                rotation,
-                scale: Vec3::ONE,
-            },
-            intermediate_global,
-            Some(root),
-        )
-    });
-    let hips_parent = intermediate.unwrap_or(root);
-    let hips_parent_global = intermediate.map_or(intermediate_global, |_| {
-        intermediate_global.mul_transform(Transform {
-            translation: intermediate_translation,
-            rotation: intermediate_rotation.expect("intermediate exists"),
+    let mut ancestors = Vec::with_capacity(ancestor_specs.len());
+    let mut hips_parent = root;
+    let mut hips_parent_global = GlobalTransform::from(root_transform);
+    for &(rotation, translation) in ancestor_specs {
+        let transform = Transform {
+            translation,
+            rotation,
             scale: Vec3::ONE,
-        })
-    });
+        };
+        let ancestor = spawn_transform(&mut app, transform, hips_parent_global, Some(hips_parent));
+        ancestors.push(ancestor);
+        hips_parent = ancestor;
+        hips_parent_global = hips_parent_global.mul_transform(transform);
+    }
 
     let hips_rest_local = Transform {
         translation: base,
@@ -196,14 +210,14 @@ fn build_scene(
     }
 
     let profile = BreathingProfile::default();
-    let ancestors = intermediate.into_iter().collect::<Vec<_>>();
+    let ancestor_path = ancestors.iter().rev().copied().collect::<Vec<_>>();
     let binding = resolve_breathing_binding(
         AvatarGeneration(1),
         hips,
         &profile,
         Some(hips_rest_local),
         Some(rest_hips_global),
-        ancestors,
+        ancestor_path,
     )
     .expect("scene rest data resolves");
 
@@ -227,7 +241,8 @@ fn build_scene(
     Scene {
         app,
         root,
-        intermediate,
+        intermediate: ancestors.first().copied(),
+        ancestors,
         hips,
         head,
         spine,
@@ -241,6 +256,71 @@ fn build_scene(
 fn identity_quat() -> Quat {
     Quat::IDENTITY
 }
+
+#[test]
+fn invalid_profiles_are_safe_no_ops_at_both_resolution_boundaries() {
+    let hips = Entity::from_raw_u32(1).expect("test entity index is valid");
+    let rest_local = Transform::from_translation(Vec3::new(0.0, 1.0, 0.0));
+    let rest_global = GlobalTransform::from(rest_local);
+    let invalid_profiles = [
+        (
+            "reversed vertical bounds",
+            BreathingProfile {
+                vertical_min_meters: 1.0,
+                vertical_max_meters: 0.0,
+                ..BreathingProfile::default()
+            },
+        ),
+        (
+            "NaN lower bound",
+            BreathingProfile {
+                vertical_min_meters: f32::NAN,
+                ..BreathingProfile::default()
+            },
+        ),
+        (
+            "NaN upper bound",
+            BreathingProfile {
+                forward_max_meters: f32::NAN,
+                ..BreathingProfile::default()
+            },
+        ),
+        (
+            "NaN factor",
+            BreathingProfile {
+                vertical_height_factor: f32::NAN,
+                ..BreathingProfile::default()
+            },
+        ),
+        (
+            "infinite factor",
+            BreathingProfile {
+                forward_height_factor: f32::INFINITY,
+                ..BreathingProfile::default()
+            },
+        ),
+    ];
+
+    for (label, profile) in invalid_profiles {
+        assert!(
+            resolve_breathing_amplitudes(&profile, 1.0).is_none(),
+            "{label}: amplitude resolution must be a safe no-op"
+        );
+        assert!(
+            resolve_breathing_binding(
+                AvatarGeneration(1),
+                hips,
+                &profile,
+                Some(rest_local),
+                Some(rest_global),
+                Vec::new(),
+            )
+            .is_none(),
+            "{label}: binding resolution must be a safe no-op"
+        );
+    }
+}
+
 // --- transform composition ---
 
 #[test]
@@ -361,6 +441,67 @@ fn non_identity_root_parent_and_rest_rotations_preserve_model_space_motion() {
         (global_delta - Vec3::new(0.0, scene.vertical_amplitude, scene.forward_amplitude)).length()
             < 2.0 * EPSILON,
         "global delta {global_delta} must equal model-space up/forward at peak"
+    );
+}
+
+#[test]
+fn multiple_intermediate_globals_are_composed_from_root_toward_hips() {
+    let ancestor_specs = [
+        (
+            Quat::from_euler(EulerRot::XYZ, 0.35, -0.2, 0.15).normalize(),
+            Vec3::new(0.2, -0.1, 0.3),
+        ),
+        (
+            Quat::from_euler(EulerRot::ZYX, -0.45, 0.25, 0.55).normalize(),
+            Vec3::new(-0.15, 0.25, 0.1),
+        ),
+    ];
+    let mut scene = build_scene_with_ancestors(
+        Quat::from_rotation_y(0.4).normalize(),
+        &ancestor_specs,
+        Quat::from_rotation_z(-0.3).normalize(),
+        Vec3::new(0.1, 1.0, -0.2),
+        false,
+    );
+
+    // Use a non-neutral phase so the hips output is part of the composed
+    // chain, not just the authored rest transform.
+    scene.advance(Duration::from_secs_f64(1.0 / 60.0), 150);
+
+    let root_global = *scene
+        .app
+        .world()
+        .get::<GlobalTransform>(scene.root)
+        .expect("root global");
+    let mut expected_global = root_global;
+    for &ancestor in &scene.ancestors {
+        let transform = *scene
+            .app
+            .world()
+            .get::<Transform>(ancestor)
+            .expect("ancestor transform");
+        expected_global = expected_global.mul_transform(transform);
+    }
+    let hips_transform = *scene
+        .app
+        .world()
+        .get::<Transform>(scene.hips)
+        .expect("hips transform");
+    expected_global = expected_global.mul_transform(hips_transform);
+
+    let actual_global = scene.hips_global();
+    assert!(
+        (actual_global.translation() - expected_global.translation()).length() < EPSILON,
+        "hips global translation must use root-to-hips order: actual {}, expected {}",
+        actual_global.translation(),
+        expected_global.translation()
+    );
+    assert!(
+        actual_global
+            .rotation()
+            .angle_between(expected_global.rotation())
+            < EPSILON,
+        "hips global rotation must use root-to-hips order"
     );
 }
 

@@ -227,6 +227,7 @@ pub fn resolve_breathing_amplitudes(
     profile: &BreathingProfile,
     rest_hips_height: f32,
 ) -> Option<(f32, f32)> {
+    profile.validate().ok()?;
     if !rest_hips_height.is_finite() || rest_hips_height <= 0.0 {
         return None;
     }
@@ -333,6 +334,7 @@ pub fn resolve_breathing_binding(
     hips_rest_global: Option<GlobalTransform>,
     ancestors: Vec<Entity>,
 ) -> Option<BreathingBinding> {
+    profile.validate().ok()?;
     let rest_local = hips_rest_local?;
     let rest_global = hips_rest_global?;
     let (vertical_amplitude, forward_amplitude) =
@@ -514,7 +516,9 @@ pub fn apply_breathing_hips_translation(
             .unwrap_or(GlobalTransform::IDENTITY);
         let mut parent_global = root_global;
         let mut chain_fresh = true;
-        for &ancestor in &geometry.ancestors {
+        // The cached path is nearest-first (hips parent toward the root), so
+        // compose it in the opposite direction from root_global toward hips.
+        for &ancestor in geometry.ancestors.iter().rev() {
             let Ok((ancestor_transform, mut ancestor_global)) = transforms.get_mut(ancestor) else {
                 chain_fresh = false;
                 break;
@@ -931,22 +935,23 @@ mod tests {
 
     // --- ancestor path resolution ---
 
-    fn ancestor_world() -> (World, Entity, Entity, Entity) {
+    fn ancestor_world() -> (World, Entity, Entity, Entity, Entity) {
         let mut world = World::new();
         let root = world.spawn_empty().id();
-        let mid = world.spawn(ChildOf(root)).id();
-        let hips = world.spawn(ChildOf(mid)).id();
-        (world, root, mid, hips)
+        let a = world.spawn(ChildOf(root)).id();
+        let b = world.spawn(ChildOf(a)).id();
+        let hips = world.spawn(ChildOf(b)).id();
+        (world, root, a, b, hips)
     }
 
     #[test]
-    fn ancestor_path_collects_intermediate_nodes_nearest_first() {
-        let (world, root, mid, hips) = ancestor_world();
+    fn ancestor_path_collects_multiple_intermediate_nodes_nearest_first() {
+        let (world, root, a, b, hips) = ancestor_world();
         let path = collect_hips_ancestor_path(hips, root, |entity| {
             world.get::<ChildOf>(entity).map(ChildOf::parent)
         })
         .expect("path reaches root");
-        assert_eq!(path, vec![mid]);
+        assert_eq!(path, vec![b, a]);
     }
 
     #[test]
