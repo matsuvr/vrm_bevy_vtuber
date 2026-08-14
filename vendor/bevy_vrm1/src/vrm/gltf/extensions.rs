@@ -13,7 +13,7 @@ use crate::error::AppResult;
 use crate::vrm::gltf::extensions::vrmc_spring_bone::VRMCSpringBone;
 use crate::vrm::gltf::extensions::vrmc_vrm::{
     Expressions, FirstPerson, FirstPersonFlag, Humanoid, LookAtProperties, LookAtType, Meta,
-    RangeMap, VrmcVrm,
+    MorphTargetBind, RangeMap, VrmPreset, VrmcVrm,
 };
 use anyhow::Context;
 use bevy::gltf::Gltf;
@@ -41,7 +41,10 @@ impl VrmExtensions {
         let runtime_descriptor = parse_runtime_descriptor(&root)?;
         let vrmc_vrm = match json.get("VRMC_vrm") {
             Some(vrmc) => serde_json::from_value(vrmc.clone())?,
-            None => normalized_legacy_vrm(&runtime_descriptor),
+            None => normalized_legacy_vrm(
+                &runtime_descriptor,
+                json.get("VRM").context("Not found VRM extension")?,
+            ),
         };
         let vrmc_spring_bone = obtain_vrmc_springs(json)
             .ok()
@@ -67,7 +70,10 @@ impl VrmExtensions {
     }
 }
 
-fn normalized_legacy_vrm(descriptor: &VrmRuntimeDescriptor) -> VrmcVrm {
+fn normalized_legacy_vrm(
+    descriptor: &VrmRuntimeDescriptor,
+    legacy: &Value,
+) -> VrmcVrm {
     let human_bones = descriptor
         .humanoid
         .human_bones
@@ -119,7 +125,7 @@ fn normalized_legacy_vrm(descriptor: &VrmRuntimeDescriptor) -> VrmcVrm {
     });
 
     VrmcVrm {
-        expressions: None::<Expressions>,
+        expressions: normalized_legacy_expressions(legacy),
         first_person,
         humanoid: Humanoid { human_bones },
         look_at,
@@ -142,6 +148,86 @@ fn normalized_legacy_vrm(descriptor: &VrmRuntimeDescriptor) -> VrmcVrm {
         }),
         spec_version: "1.0".into(),
     }
+}
+
+fn normalized_legacy_expressions(legacy: &Value) -> Option<Expressions> {
+    let groups = legacy
+        .get("blendShapeMaster")
+        .and_then(|master| master.get("blendShapeGroups"))
+        .and_then(Value::as_array)?;
+    let mut preset = HashMap::default();
+    for group in groups {
+        let Some(name) = normalized_legacy_expression_name(group) else {
+            continue;
+        };
+        if preset.contains_key(&name) {
+            continue;
+        }
+        let morph_target_binds = group.get("binds").and_then(Value::as_array).map(|binds| {
+            binds
+                .iter()
+                .filter_map(|bind| {
+                    let node = bind.get("mesh")?.as_u64()?.try_into().ok()?;
+                    let index = bind.get("index")?.as_u64()?.try_into().ok()?;
+                    let weight = bind.get("weight")?.as_f64()? as f32 / 100.0;
+                    Some(MorphTargetBind {
+                        index,
+                        node,
+                        weight: if weight.is_finite() {
+                            weight.clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        },
+                    })
+                })
+                .collect()
+        });
+        preset.insert(
+            name,
+            VrmPreset {
+                is_binary: group
+                    .get("isBinary")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                morph_target_binds,
+                override_blink: "none".into(),
+                override_look_at: "none".into(),
+                override_mouth: "none".into(),
+            },
+        );
+    }
+    Some(Expressions { preset })
+}
+
+fn normalized_legacy_expression_name(group: &Value) -> Option<String> {
+    let preset = group.get("presetName").and_then(Value::as_str);
+    let name = group.get("name").and_then(Value::as_str);
+    let source = preset
+        .filter(|value| !value.is_empty() && *value != "unknown")
+        .or(name)
+        .filter(|value| !value.is_empty())?;
+    Some(
+        match source {
+            "A" => "aa",
+            "I" => "ih",
+            "U" => "ou",
+            "E" => "ee",
+            "O" => "oh",
+            "Blink" => "blink",
+            "Blink_L" => "blinkLeft",
+            "Blink_R" => "blinkRight",
+            "LookUp" => "lookUp",
+            "LookDown" => "lookDown",
+            "LookLeft" => "lookLeft",
+            "LookRight" => "lookRight",
+            "Joy" => "joy",
+            "Angry" => "angry",
+            "Sorrow" => "sorrow",
+            "Fun" => "fun",
+            other => other,
+        }
+        .into(),
+    )
 }
 
 /// Represents a node in the glTF file.
@@ -192,6 +278,12 @@ mod tests {
                 "humanoid": {"humanBones": [
                     {"bone": "hips", "node": 0}, {"bone": "head", "node": 1}
                 ]},
+                "blendShapeMaster": {"blendShapeGroups": [
+                    {"name": "vowel-a", "presetName": "A", "binds": [
+                        {"mesh": 3, "index": 4, "weight": 50.0}
+                    ]},
+                    {"name": "left-blink", "presetName": "Blink_L", "isBinary": true}
+                ]},
                 "firstPerson": {"meshAnnotations": [
                     {"mesh": 2, "firstPersonFlag": "Both"}
                 ]},
@@ -215,6 +307,17 @@ mod tests {
         assert_eq!(normalized.name().as_deref(), Some("legacy"));
         assert_eq!(normalized.vrmc_vrm.spec_version, "1.0");
         assert_eq!(normalized.vrmc_vrm.humanoid.human_bones["head"].node, 1);
+        let expressions = normalized.vrmc_vrm.expressions.as_ref().unwrap();
+        assert!(expressions.preset.contains_key("aa"));
+        assert!(expressions.preset.contains_key("blinkLeft"));
+        let bind = &expressions.preset["aa"]
+            .morph_target_binds
+            .as_ref()
+            .unwrap()[0];
+        assert_eq!(bind.node, 3);
+        assert_eq!(bind.index, 4);
+        assert_eq!(bind.weight, 0.5);
+        assert!(expressions.preset["blinkLeft"].is_binary);
         assert_eq!(
             normalized
                 .vrmc_vrm
@@ -229,5 +332,27 @@ mod tests {
             normalized.vrmc_vrm.look_at.as_ref().unwrap().r#type,
             LookAtType::Bone
         );
+    }
+
+    #[test]
+    fn canonicalizes_legacy_expression_preset_names() {
+        let groups = json!([
+            {"name": "a", "presetName": "A"},
+            {"name": "i", "presetName": "I"},
+            {"name": "u", "presetName": "U"},
+            {"name": "e", "presetName": "E"},
+            {"name": "o", "presetName": "O"},
+            {"name": "blink", "presetName": "Blink"},
+            {"name": "joy", "presetName": "Joy"},
+            {"name": "look-up", "presetName": "LookUp"},
+            {"name": "custom", "presetName": "unknown"}
+        ]);
+        let legacy = json!({"blendShapeMaster": {"blendShapeGroups": groups}});
+        let expressions = normalized_legacy_expressions(&legacy).expect("groups should parse");
+        for name in [
+            "aa", "ih", "ou", "ee", "oh", "blink", "joy", "lookUp", "custom",
+        ] {
+            assert!(expressions.preset.contains_key(name), "missing {name}");
+        }
     }
 }
