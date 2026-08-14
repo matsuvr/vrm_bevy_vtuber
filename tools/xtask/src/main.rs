@@ -43,7 +43,8 @@ fn main() {
                     let mut failed = 0;
                     for result in &results {
                         print_result(result);
-                        if result.preflight.is_err()
+                        if result.runner_error.is_some()
+                            || result.preflight.is_err()
                             || result.runtime.as_ref().is_some_and(|r| !r.is_mvp_capable())
                         {
                             failed += 1;
@@ -162,6 +163,7 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
     match &result.preflight {
         Ok(summary) => {
             println!("  preflight: ok");
+            println!("    generation: {:?}", summary.generation);
             println!("    name: {}", summary.name);
             println!("    specVersion: {}", summary.spec_version);
             println!("    expressions: {:?}", summary.expression_presets);
@@ -173,6 +175,7 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
     if let Some(report) = &result.runtime {
         println!("  runtime:");
         println!("    initialized: {}", report.initialized);
+        println!("    generation: {:?}", report.generation);
         println!("    head: {}", report.has_head);
         println!("    neck: {}", report.has_neck);
         println!("    leftEye: {}", report.has_left_eye);
@@ -181,5 +184,8 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
         println!("    mvp capable: {}", report.is_mvp_capable());
     } else {
         println!("  runtime: skipped");
+    }
+    if let Some(error) = &result.runner_error {
+        println!("  runner: FAIL ({error})");
     }
 }

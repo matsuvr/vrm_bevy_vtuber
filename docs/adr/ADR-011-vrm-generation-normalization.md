@@ -64,3 +64,13 @@ The pinned specification references for this work are:
 - Scattering a 180-degree correction through each feature: makes tracking and
   avatar semantics generation-dependent and prevents reliable regression
   tests.
+
+## Verification record (2026-08-14)
+
+The local headless compatibility runner initialized at least three valid VRM
+0.x models and two valid VRM 1.0 models, and all passed the MVP capability
+gate. Two additional ignored fixture paths contained HTML documents rather
+than GLB payloads and were rejected at preflight; three other legacy artifacts
+hit the bounded initialization timeout. The 20 real-model replacements,
+bounded physical SpringBone soak, and macOS evidence remain pending; see
+`docs/compatibility/vrm-0x-1x-2026-08-14.md`.
