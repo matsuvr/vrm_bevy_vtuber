@@ -4,11 +4,12 @@ mod setup;
 
 use crate::error::vrm_error;
 use crate::prelude::*;
-use crate::vrm::gltf::materials::VrmcMaterialsExtensitions;
+use crate::vrm::gltf::materials::{VrmcMaterialsExtensitions, convert_legacy_material_properties};
 use crate::vrm::mtoon::outline_pass::MToonOutlinePlugin;
 use crate::vrm::mtoon::setup::MToonMaterialSetupPlugin;
 use bevy::asset::{AssetId, load_internal_asset, uuid_handle};
 use bevy::prelude::*;
+use serde_json::Value;
 use std::collections::HashMap;
 
 pub mod prelude {
@@ -86,26 +87,66 @@ impl VrmcMaterialRegistry {
         // name, so duplicates collapse to a single entry and any meshes bound
         // to the overwritten materials skip the MToon conversion entirely,
         // rendering with the default `StandardMaterial` instead.
-        let materials = gltf
-            .source
-            .as_ref()?
-            .materials()
-            .flat_map(|m| {
-                let index = m.index()?;
-                let gltf_material_path = gltf.materials.get(index)?.path()?;
-                let std_label = format!("{}/std", gltf_material_path.label()?);
-                let std_path = gltf_material_path.clone().with_label(std_label);
-                let asset_id = asset_server.load::<StandardMaterial>(std_path).id();
-                let extensions = m.extensions()?;
-                match serde_json::from_value(extensions.get("VRMC_materials_mtoon")?.clone()) {
-                    Ok(properties) => Some((asset_id, properties)),
-                    Err(e) => {
-                        vrm_error!("Failed to parse VRMC_materials_mtoon", e);
+        let source = gltf.source.as_ref()?;
+        let mut legacy_properties = HashMap::<String, Vec<Value>>::new();
+        if let Some(properties) = source
+            .extensions()
+            .and_then(|extensions| extensions.get("VRM"))
+            .and_then(|vrm| vrm.get("materialProperties"))
+            .and_then(Value::as_array)
+        {
+            for property in properties {
+                if let Some(name) = property.get("name").and_then(Value::as_str) {
+                    legacy_properties
+                        .entry(name.to_string())
+                        .or_default()
+                        .push(property.clone());
+                }
+            }
+        }
+        let mut legacy_occurrences = HashMap::<String, usize>::new();
+        let mut materials = HashMap::new();
+        for material in source.materials() {
+            let Some(index) = material.index() else {
+                continue;
+            };
+            let Some(gltf_material_path) = gltf.materials.get(index).and_then(|m| m.path()) else {
+                continue;
+            };
+            let Some(label) = gltf_material_path.label() else {
+                continue;
+            };
+            let std_path = gltf_material_path
+                .clone()
+                .with_label(format!("{label}/std"));
+            let asset_id = asset_server.load::<StandardMaterial>(std_path).id();
+            let modern = material
+                .extensions()
+                .and_then(|extensions| extensions.get("VRMC_materials_mtoon"))
+                .cloned();
+            let legacy = material.name().and_then(|name| {
+                let occurrence = legacy_occurrences.entry(name.to_string()).or_default();
+                let value = legacy_properties
+                    .get(name)
+                    .and_then(|values| values.get(*occurrence))
+                    .cloned();
+                *occurrence += 1;
+                value
+            });
+            let Some(properties) = modern
+                .and_then(|value| match serde_json::from_value(value) {
+                    Ok(properties) => Some(properties),
+                    Err(error) => {
+                        vrm_error!("Failed to parse VRMC_materials_mtoon", error);
                         None
                     }
-                }
-            })
-            .collect();
+                })
+                .or_else(|| legacy.and_then(|value| convert_legacy_material_properties(&value)))
+            else {
+                continue;
+            };
+            materials.insert(asset_id, properties);
+        }
         Some(Self { materials, images })
     }
 }

@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::vrm::gltf::materials::LegacyAlphaMode;
 use bevy::app::{App, Plugin};
 use bevy::asset::Assets;
 use bevy::prelude::*;
@@ -71,7 +72,14 @@ fn turn_to_mtoon_material(
                     uv_animation: UVAnimation::from(extension),
                     gi_equalization_factor: extension.gi_equalization_factor,
                     double_sided: base.double_sided,
-                    alpha_mode: base.alpha_mode,
+                    alpha_mode: extension
+                        .legacy_alpha_mode
+                        .map(|mode| match mode {
+                            LegacyAlphaMode::Opaque => AlphaMode::Opaque,
+                            LegacyAlphaMode::Mask(cutoff) => AlphaMode::Mask(cutoff),
+                            LegacyAlphaMode::Blend => AlphaMode::Blend,
+                        })
+                        .unwrap_or(base.alpha_mode),
                     depth_bias: base.depth_bias,
                     render_queue_offset: extension.render_queue_offset_number,
                     transparent_with_z_write: extension.transparent_with_z_write,
