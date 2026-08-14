@@ -1,6 +1,13 @@
+pub mod runtime_descriptor;
 pub mod vrmc_node_constraint;
 pub mod vrmc_spring_bone;
 pub mod vrmc_vrm;
+
+pub use runtime_descriptor::{
+    CoordinateBasis, VrmFirstPerson, VrmFirstPersonFlag, VrmGeneration, VrmHumanoid, VrmLookAt,
+    VrmLookAtType, VrmMeshAnnotation, VrmMeta, VrmParseError, VrmRangeMap, VrmRuntimeDescriptor,
+    parse_runtime_descriptor,
+};
 
 use crate::error::AppResult;
 use crate::vrm::gltf::extensions::vrmc_spring_bone::VRMCSpringBone;
