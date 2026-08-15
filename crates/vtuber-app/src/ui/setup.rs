@@ -3,9 +3,11 @@
 use bevy_egui::egui::Ui;
 
 use crate::actions::UiAction;
+use crate::error_presenter::ErrorPresentation;
 use crate::ui_model::{AvatarLifecycleState, UiViewModel};
 use vtuber_avatar::ArmPoseProfileOverride;
 
+use super::error::render_error_panel;
 use super::file_dialog::FileDialogState;
 
 /// Render the Setup screen.
@@ -14,6 +16,7 @@ pub fn render_setup_screen(
     vm: &UiViewModel,
     ui_state: &mut super::UiState,
     file_dialog: &mut FileDialogState,
+    current_error: Option<&ErrorPresentation>,
 ) {
     ui.heading("Setup");
     ui.separator();
@@ -54,6 +57,12 @@ pub fn render_setup_screen(
 
     // Avatar section.
     ui.heading("Avatar");
+    if let Some(presentation) = current_error {
+        ui.heading("Current error");
+        render_error_panel(ui, presentation, ui_state);
+        ui.separator();
+    }
+
     if let Some(model) = &vm.avatar.imported_model {
         ui.label(format!("Model: {}", model.name));
         let generation = match model.generation {

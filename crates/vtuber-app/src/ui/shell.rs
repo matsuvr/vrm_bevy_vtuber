@@ -95,7 +95,16 @@ impl Plugin for UiShellPlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, sync_error_presenter.before(inference_bridge_system))
+            // Synchronise the user-facing error after every producer has had a
+            // chance to publish the current frame's error. This keeps import,
+            // avatar lifecycle, camera, and inference failures visible in the
+            // Setup tab without a race against another diagnostics sync.
+            .add_systems(
+                Update,
+                sync_error_presenter
+                    .after(sync_avatar_lifecycle_system)
+                    .after(sync_capture_diagnostics),
+            )
             // Capture bridge: connects orchestrator intent to real camera.
             .add_systems(
                 Update,
@@ -252,6 +261,7 @@ fn ui_render_system(
     view_model: Res<UiViewModel>,
     mut ui_state: ResMut<UiState>,
     diagnostics: Res<DiagnosticsSnapshot>,
+    error_presenter: Res<ErrorPresenter>,
     preview: Res<PreviewState>,
     landmarks: Res<PreviewLandmarkState>,
     avatar_motion_mirror: Res<AvatarMotionMirror>,
@@ -313,9 +323,13 @@ fn ui_render_system(
             bevy_egui::egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, |ui| match view_model.screen {
-                    Screen::Setup => {
-                        render_setup_screen(ui, &view_model, &mut ui_state, &mut file_dialog)
-                    }
+                    Screen::Setup => render_setup_screen(
+                        ui,
+                        &view_model,
+                        &mut ui_state,
+                        &mut file_dialog,
+                        error_presenter.current(),
+                    ),
                     Screen::Live => render_live_screen(
                         ui,
                         &view_model,
@@ -426,6 +440,36 @@ mod tests {
 
         state.toggle();
         assert!(state.visible);
+    }
+
+    #[test]
+    fn sync_error_presenter_exposes_import_error_to_setup_and_diagnostics() {
+        let mut app = App::new();
+        app.init_resource::<Orchestrator>()
+            .init_resource::<ErrorPresenter>()
+            .init_resource::<DiagnosticsSnapshot>()
+            .add_systems(Update, sync_error_presenter);
+
+        app.world_mut()
+            .resource_mut::<Orchestrator>()
+            .set_last_error(Some(crate::orchestrator::OrchestratorError::ImportFailed(
+                "invalid VRM".to_string(),
+            )));
+        app.update();
+
+        let presenter = app.world().resource::<ErrorPresenter>();
+        let presentation = presenter
+            .current()
+            .expect("import failures must produce a UI presentation");
+        assert_eq!(presentation.code, "IMPORT_FAILED");
+        assert!(presentation.user_message.contains("invalid VRM"));
+        assert_eq!(
+            app.world()
+                .resource::<DiagnosticsSnapshot>()
+                .last_error
+                .as_deref(),
+            Some("Import failed: invalid VRM")
+        );
     }
 
     #[test]
