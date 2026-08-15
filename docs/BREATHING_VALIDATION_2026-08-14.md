@@ -1,9 +1,9 @@
 # Always-on idle breathing validation report
 
-Date: 2026-08-14
+Date: 2026-08-15
 Scope: GitHub Issue #20 (always-on procedural idle breathing)
-Code baseline: `d8e7b6790e4f4a22ce644cd23034b4ea0884a6d8` (review blocker repair baseline)
-Status: local automated regression PASS; model/root-space managed compatibility PASS for three local VRM 1.0 files; windowed visual observation NOT CONFIRMED on this machine
+Code baseline: `b2fe9e4`
+Status: normative automated/headless acceptance PASS; model/root-space managed compatibility PASS for three local VRM 1.0 files; optional manual visual observation NOT RUN in this audit
 
 ## Environment
 
@@ -134,7 +134,7 @@ made by this repair, so no new warning was introduced. Advisory, bans, license,
 and source checks passed. No GitHub Actions workflow, trigger, or remote CI
 result was used.
 
-## Windowed visual check (attempted, not confirmed)
+## Historical windowed observation (non-normative; not rerun in this audit)
 
 The product desktop app was launched locally with
 --model tests/fixtures/vrm/inore-vrm1.vrm. The model imported, the VRM
@@ -154,8 +154,9 @@ plugin path and measures real hips displacement directly.
 The requested human visual checks (front, 45 degree, side views; short/chibi
 stylized model with materially different rest rotations) remain NOT RUN. No
 third-party VRM was copied into the repository for this purpose and no visual
-PASS is claimed. The three managed runs above are headless runtime evidence,
-not human visual acceptance.
+PASS is claimed. The three managed runs above are normative headless runtime
+evidence, not human visual acceptance; the historical windowed observation is
+also non-normative.
 
 ## Files changed
 
@@ -182,10 +183,9 @@ not human visual acceptance.
   in the available VRM 1.0 fixtures; that path is covered by synthetic tests
   (rotated root/intermediate/hips rest, non-uniform parent scale, non-identity
   root rotation/translation/scale).
-- The new model/root-space implementation and managed compatibility output
-  still require rerunning `cargo run -p xtask -- vrm-managed-compat <model.vrm>`
-  for each available VRM 1.0 model after this repair.
-- The desktop app window was observed to present a static frame on this
-  machine alongside busy worker threads; this pre-existing behavior is
-  unrelated to the breathing change and is left for the camera/orchestrator
-  tasks.
+- The current audit reran the managed compatibility command for the three
+  representative local VRM 1.0 files listed above; no camera or windowed
+  visual acceptance was performed.
+- The historical desktop observation of a static frame alongside busy worker
+  threads is retained as context only and is unrelated to the breathing
+  contract.
