@@ -91,7 +91,9 @@ pub struct VrmcMaterialsExtensitions {
     #[serde(skip)]
     #[reflect(ignore)]
     pub legacy_double_sided: Option<bool>,
-    /// Legacy `_MainTex_ST` as `[scale_x, scale_y, offset_x, offset_y]`.
+    /// Legacy `_MainTex` converted to Bevy's
+    /// `[scale_x, scale_y, offset_x, offset_y]`; `_MainTex_ST` is a separate
+    /// compatibility alias that is already in this target ordering.
     #[serde(skip)]
     #[reflect(ignore)]
     pub legacy_uv_transform: Option<[f32; 4]>,
@@ -182,6 +184,8 @@ pub fn convert_legacy_material_properties_with_texture_count(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    let shade_toony = floats.get("_ShadeToony").and_then(finite_f32);
+    let shade_shift = floats.get("_ShadeShift").and_then(finite_f32);
     if let Some(render_queue) = value.get("renderQueue").and_then(finite_f32) {
         properties.insert(
             "renderQueueOffsetNumber".into(),
@@ -193,18 +197,6 @@ pub fn convert_legacy_material_properties_with_texture_count(
             continue;
         };
         match name.as_str() {
-            "_ShadeToony" | "_ShadingToonyRate" => {
-                properties.insert("shadingToonyFactor".into(), json!(value));
-            }
-            "_ShadeShift" | "_ShadingShiftRate" => {
-                properties.insert("shadingShiftFactor".into(), json!(value));
-            }
-            "_OutlineWidth" => {
-                properties.insert("outlineWidthFactor".into(), json!(value.max(0.0)));
-                if value > 0.0 {
-                    properties.insert("outlineWidthMode".into(), json!("worldCoordinates"));
-                }
-            }
             "_OutlineLightingMix" => {
                 properties.insert("outlineLightingMixFactor".into(), json!(value));
             }
@@ -220,20 +212,35 @@ pub fn convert_legacy_material_properties_with_texture_count(
             "_GIEqualizationFactor" => {
                 properties.insert("giEqualizationFactor".into(), json!(value));
             }
+            "_IndirectLightIntensity" => {
+                properties.insert("giEqualizationFactor".into(), json!((1.0 - value).clamp(0.0, 1.0)));
+            }
             "_UvAnimRotation" | "_UV_Animation_RotationSpeed" => {
-                properties.insert("uvAnimationRotationSpeedFactor".into(), json!(value));
+                properties.insert(
+                    "uvAnimationRotationSpeedFactor".into(),
+                    json!(value * std::f32::consts::TAU),
+                );
             }
             "_UvAnimScrollX" | "_UV_Animation_ScrollX" => {
                 properties.insert("uvAnimationScrollXSpeedFactor".into(), json!(value));
             }
             "_UvAnimScrollY" | "_UV_Animation_ScrollY" => {
-                properties.insert("uvAnimationScrollYSpeedFactor".into(), json!(value));
+                properties.insert("uvAnimationScrollYSpeedFactor".into(), json!(-value));
             }
             "_ZWrite" => {
                 properties.insert("transparentWithZWrite".into(), json!(value > 0.5));
             }
+            "_BlendMode" => {
+                properties.insert("transparentWithZWrite".into(), json!(value as i32 == 3));
+            }
             "_Cull" => {
                 properties.insert("legacyDoubleSided".into(), json!(value <= 0.5));
+            }
+            "_CullMode" => {
+                // Official MToon 0.x values are Off=0, Front=1, Back=2.
+                // glTF cannot express front-face-only culling, so Off and
+                // Front both become double-sided.
+                properties.insert("legacyDoubleSided".into(), json!(value < 1.5));
             }
             "_ShadingShiftTextureScale" => {
                 properties.insert("shadingShiftTextureScale".into(), json!(value));
@@ -245,13 +252,64 @@ pub fn convert_legacy_material_properties_with_texture_count(
         }
     }
 
+    let shade_toony = shade_toony.unwrap_or(0.9);
+    let shade_shift = shade_shift.unwrap_or(0.0);
+    let range_min = shade_shift;
+    let range_max = 1.0 + (shade_shift - 1.0) * shade_toony;
+    let migrated_shading_toony = ((2.0 - (range_max - range_min)) * 0.5).clamp(0.0, 1.0);
+    let migrated_shading_shift = (-(range_max + range_min) * 0.5).clamp(-1.0, 1.0);
+    properties.insert(
+        "shadingToonyFactor".into(),
+        json!(migrated_shading_toony),
+    );
+    properties.insert(
+        "shadingShiftFactor".into(),
+        json!(migrated_shading_shift),
+    );
+
+    let outline_width = floats.get("_OutlineWidth").and_then(finite_f32).unwrap_or(0.0);
+    let outline_width_mode = floats
+        .get("_OutlineWidthMode")
+        .and_then(finite_f32)
+        .unwrap_or(if outline_width > 0.0 { 1.0 } else { 0.0 });
+    match outline_width_mode as i32 {
+        1 => {
+            properties.insert("outlineWidthMode".into(), json!("worldCoordinates"));
+            properties.insert("outlineWidthFactor".into(), json!(outline_width.max(0.0) * 0.01));
+        }
+        2 => {
+            properties.insert("outlineWidthMode".into(), json!("screenCoordinates"));
+            properties.insert(
+                "outlineWidthFactor".into(),
+                json!(outline_width.max(0.0) * 0.01 * 0.5),
+            );
+        }
+        _ => {
+            properties.insert("outlineWidthMode".into(), json!("none"));
+            properties.insert("outlineWidthFactor".into(), Value::Null);
+        }
+    }
+    if let Some(outline_color_mode) = floats.get("_OutlineColorMode").and_then(finite_f32) {
+        properties.insert(
+            "outlineLightingMixFactor".into(),
+            json!(if outline_color_mode as i32 == 0 {
+                0.0
+            } else {
+                floats
+                    .get("_OutlineLightingMix")
+                    .and_then(finite_f32)
+                    .unwrap_or(0.0)
+            }),
+        );
+    }
+
     let vectors = value
         .get("vectorProperties")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    for (name, value) in vectors {
-        let Some(vector) = finite_array(&value) else {
+    for (name, value) in &vectors {
+        let Some(vector) = finite_array(value) else {
             continue;
         };
         match name.as_str() {
@@ -260,18 +318,26 @@ pub fn convert_legacy_material_properties_with_texture_count(
                     properties.insert("legacyBaseColor".into(), json!(unity_color(&vector)));
                 }
             }
+            "_MainTex" => {
+                if vector.len() >= 4 {
+                    properties.insert(
+                        "legacyUvTransform".into(),
+                        json!(legacy_main_texture_transform(&vector)),
+                    );
+                }
+            }
             "_MainTex_ST" => {
                 if vector.len() >= 4 {
-                    // VRM 0.x migration keeps Unity's [scale.xy, offset.xy]
-                    // ordering. Bevy's glTF UV transform uses the same
-                    // scale/offset convention, so no speculative Y flip is
-                    // applied here.
+                    // Compatibility alias: this non-official key already
+                    // uses Unity's [scale.xy, offset.xy] ordering.
                     properties.insert("legacyUvTransform".into(), json!(&vector[..4]));
                 }
             }
             "_EmissionColor" | "_Emission" => {
                 if vector.len() >= 3 {
-                    properties.insert("legacyEmissive".into(), json!(unity_rgb(&vector[..3])));
+                    // UniVRM's official exporter stores emission as linear
+                    // floats, unlike the sRGB base/shade/rim/outline colors.
+                    properties.insert("legacyEmissive".into(), json!(&vector[..3]));
                 }
             }
             "_ShadeColor" => {
@@ -305,11 +371,23 @@ pub fn convert_legacy_material_properties_with_texture_count(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    let main_texture_transform = vectors
+        .get("_MainTex")
+        .and_then(finite_array)
+        .and_then(|values| {
+            (values.len() >= 4).then(|| legacy_main_texture_transform(&values))
+        })
+        .or_else(|| {
+            vectors
+                .get("_MainTex_ST")
+                .and_then(finite_array)
+                .and_then(|values| (values.len() >= 4).then(|| [values[0], values[1], values[2], values[3]]))
+        });
     for (name, value) in textures {
         let Some(index) = value.as_u64().and_then(|value| usize::try_from(value).ok()) else {
             continue;
         };
-        let texture = texture_with_identity_transform(index);
+        let texture = texture_with_transform(index, main_texture_transform);
         if texture_count.is_some_and(|count| index >= count) {
             #[cfg(feature = "log")]
             bevy::log::warn!(
@@ -330,7 +408,7 @@ pub fn convert_legacy_material_properties_with_texture_count(
             "_RimTexture" | "_RimMultiplyTexture" => {
                 properties.insert("rimMultiplyTexture".into(), texture);
             }
-            "_MatcapTexture" | "_MatCapTex" => {
+            "_SphereAdd" | "_MatcapTexture" | "_MatCapTex" => {
                 properties.insert("matcapTexture".into(), json!({"index": index}));
             }
             "_ShadingShiftTexture" => {
@@ -385,7 +463,7 @@ pub fn convert_legacy_material_properties_with_texture_count(
                 .or_else(|| vectors.get("_Emission"))
         })
         .and_then(finite_array)
-        .and_then(|values| (values.len() >= 3).then(|| unity_rgb(&values[..3])));
+        .and_then(|values| (values.len() >= 3).then(|| [values[0], values[1], values[2]]));
     converted.legacy_emissive_texture = value
         .get("textureProperties")
         .and_then(Value::as_object)
@@ -400,16 +478,30 @@ pub fn convert_legacy_material_properties_with_texture_count(
     converted.legacy_double_sided = value
         .get("floatProperties")
         .and_then(Value::as_object)
-        .and_then(|floats| floats.get("_Cull"))
-        .and_then(finite_f32)
-        .map(|cull| cull <= 0.5);
+        .and_then(|floats| {
+            floats
+                .get("_CullMode")
+                .and_then(finite_f32)
+                .map(|cull| cull < 1.5)
+                .or_else(|| floats.get("_Cull").and_then(finite_f32).map(|cull| cull <= 0.5))
+        });
     converted.legacy_uv_transform = value
         .get("vectorProperties")
         .and_then(Value::as_object)
-        .and_then(|vectors| vectors.get("_MainTex_ST"))
+        .and_then(|vectors| vectors.get("_MainTex").or_else(|| vectors.get("_MainTex_ST")))
         .and_then(finite_array)
         .and_then(|values| {
-            (values.len() >= 4).then(|| [values[0], values[1], values[2], values[3]])
+            (values.len() >= 4).then(|| {
+                if value
+                    .get("vectorProperties")
+                    .and_then(Value::as_object)
+                    .is_some_and(|vectors| vectors.contains_key("_MainTex"))
+                {
+                    legacy_main_texture_transform(&values)
+                } else {
+                    [values[0], values[1], values[2], values[3]]
+                }
+            })
         });
     for name in ["_BumpMap", "_BumpScale"] {
         if value
@@ -444,6 +536,19 @@ fn legacy_alpha_mode(value: &Value) -> Option<LegacyAlphaMode> {
         .and_then(finite_f32)
         .unwrap_or(0.5)
         .clamp(0.0, 1.0);
+    if let Some(blend_mode) = value
+        .get("floatProperties")
+        .and_then(Value::as_object)
+        .and_then(|floats| floats.get("_BlendMode"))
+        .and_then(finite_f32)
+    {
+        return match blend_mode as i32 {
+            0 => Some(LegacyAlphaMode::Opaque),
+            1 => Some(LegacyAlphaMode::Mask(cutoff)),
+            2 | 3 => Some(LegacyAlphaMode::Blend),
+            _ => None,
+        };
+    }
     let name = render_type.or(shader)?;
     if name.contains("TransparentCutout") || name.contains("Cutout") {
         Some(LegacyAlphaMode::Mask(cutoff))
@@ -495,16 +600,21 @@ fn srgb_to_linear(value: f32) -> f32 {
     }
 }
 
-fn texture_with_identity_transform(index: usize) -> Value {
+fn texture_with_transform(index: usize, transform: Option<[f32; 4]>) -> Value {
+    let transform = transform.unwrap_or([1.0, 1.0, 0.0, 0.0]);
     json!({
         "index": index,
         "extensions": {
             "KHR_texture_transform": {
-                "offset": [0.0, 0.0],
-                "scale": [1.0, 1.0]
+                "offset": [transform[2], transform[3]],
+                "scale": [transform[0], transform[1]]
             }
         }
     })
+}
+
+fn legacy_main_texture_transform(values: &[f32]) -> [f32; 4] {
+    [values[2], values[3], values[0], 1.0 - values[1] - values[3]]
 }
 
 #[cfg(test)]
@@ -538,8 +648,9 @@ mod tests {
             "tagMap": {"RenderType": "TransparentCutout"}
         });
         let converted = convert_legacy_material_properties(&value).expect("material should parse");
-        assert_eq!(converted.shading_toony_factor, 0.7);
-        assert_eq!(converted.outline_width_factor, Some(0.02));
+        assert_eq!(converted.shading_toony_factor, 0.85);
+        assert_eq!(converted.shading_shift_factor, -0.15);
+        assert_eq!(converted.outline_width_factor, Some(0.0002));
         assert_eq!(converted.render_queue_offset_number, 500.0);
         assert!(converted.transparent_with_z_write);
         assert_eq!(
@@ -576,7 +687,7 @@ mod tests {
             "vectorProperties": {"_ShadeColor": [0.1, null, 0.3]}
         });
         let converted = convert_legacy_material_properties(&value).expect("defaults should parse");
-        assert_eq!(converted.shading_toony_factor, 0.9);
+        assert_eq!(converted.shading_toony_factor, 0.95);
         assert_eq!(converted.shade_color_factor, [0.0, 0.0, 0.0]);
         assert_eq!(converted.legacy_alpha_mode, None);
     }
@@ -605,6 +716,62 @@ mod tests {
             assert_eq!(converted.legacy_double_sided, Some(true));
             assert_eq!(converted.legacy_uv_transform, Some([0.8, 0.9, 0.1, 0.2]));
         }
+    }
+
+    #[test]
+    fn migrates_official_vrm0_mtoon_source_shape() {
+        let value = json!({
+            "shader": "VRM/MToon",
+            "renderQueue": 2500,
+            "floatProperties": {
+                "_BlendMode": 3.0,
+                "_CullMode": 2.0,
+                "_Cutoff": 0.35,
+                "_ShadeToony": 0.8,
+                "_ShadeShift": 0.1,
+                "_IndirectLightIntensity": 0.25,
+                "_OutlineWidth": 2.0,
+                "_OutlineWidthMode": 2.0,
+                "_OutlineColorMode": 1.0,
+                "_OutlineLightingMix": 0.4,
+                "_UvAnimRotation": 0.25,
+                "_UvAnimScrollX": 0.3,
+                "_UvAnimScrollY": 0.4
+            },
+            "vectorProperties": {
+                "_Color": [0.8, 0.7, 0.6, 1.0],
+                "_ShadeColor": [0.4, 0.3, 0.2, 1.0],
+                "_MainTex": [0.1, 0.2, 0.8, 0.7],
+                "_EmissionColor": [0.2, 0.3, 0.4, 1.0]
+            },
+            "textureProperties": {"_MainTex": 1, "_SphereAdd": 2}
+        });
+        let converted = convert_legacy_material_properties_with_texture_count(&value, Some(3))
+            .expect("official VRM 0.x source shape should parse");
+
+        assert_eq!(converted.legacy_alpha_mode, Some(LegacyAlphaMode::Blend));
+        assert_eq!(converted.legacy_double_sided, Some(false));
+        assert!(converted.transparent_with_z_write);
+        assert_eq!(converted.gi_equalization_factor, 0.75);
+        assert!((converted.shading_toony_factor - 0.91).abs() < 1.0e-6);
+        assert!((converted.shading_shift_factor + 0.19).abs() < 1.0e-6);
+        assert_eq!(converted.outline_width_mode, "screenCoordinates");
+        assert_eq!(converted.outline_width_factor, Some(0.01));
+        assert_eq!(converted.outline_lighting_mix_factor, 0.4);
+        assert_eq!(converted.rim_lighting_mix_factor, 1.0);
+        assert_eq!(
+            converted.uv_animation_rotation_speed_factor,
+            0.25 * std::f32::consts::TAU
+        );
+        assert_eq!(converted.uv_animation_scroll_x_speed_factor, 0.3);
+        assert_eq!(converted.uv_animation_scroll_y_speed_factor, -0.4);
+        let uv = converted.legacy_uv_transform.expect("official MainTex transform");
+        assert!(uv
+            .iter()
+            .zip([0.8, 0.7, 0.1, 0.1])
+            .all(|(actual, expected)| (*actual - expected).abs() < 1.0e-6));
+        assert_eq!(converted.matcap_texture.unwrap().index, 2);
+        assert_eq!(converted.legacy_emissive, Some([0.2, 0.3, 0.4]));
     }
 
     #[test]
@@ -646,9 +813,12 @@ mod tests {
         assert_eq!(converted.parametric_rim_fresnel_power, 3.0);
         assert_eq!(converted.parametric_rim_lift_factor, 0.2);
         assert_eq!(converted.rim_lighting_mix_factor, 0.4);
-        assert_eq!(converted.uv_animation_rotation_speed_factor, 0.5);
+        assert_eq!(
+            converted.uv_animation_rotation_speed_factor,
+            0.5 * std::f32::consts::TAU
+        );
         assert_eq!(converted.uv_animation_scroll_x_speed_factor, 0.6);
-        assert_eq!(converted.uv_animation_scroll_y_speed_factor, 0.7);
+        assert_eq!(converted.uv_animation_scroll_y_speed_factor, -0.7);
         assert!(converted.transparent_with_z_write);
         assert_eq!(converted.legacy_double_sided, Some(true));
         assert_eq!(converted.legacy_emissive_texture, Some(1));
