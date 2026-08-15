@@ -622,7 +622,7 @@ fn legacy_curve_is_linear(curve: &[Value]) -> bool {
     if keys.is_empty() || curve.len() < 8 {
         return true;
     }
-    if curve.len() % 4 != 0 {
+    if !curve.len().is_multiple_of(4) {
         return false;
     }
 
