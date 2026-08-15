@@ -141,13 +141,79 @@ impl VrmcMaterialsExtensitions {
 /// material contract. Legacy values are normalized by name and texture index;
 /// the renderer remains the same `MToon` renderer used for VRM 1.0.
 pub fn convert_legacy_material_properties(value: &Value) -> Option<VrmcMaterialsExtensitions> {
-    convert_legacy_material_properties_with_texture_count(value, None)
+    let planned = plan_legacy_render_queue_offsets(std::slice::from_ref(value));
+    convert_legacy_material_properties_with_render_queue_offset(
+        value,
+        None,
+        planned.first().copied(),
+    )
 }
 
 /// Converts a legacy material while validating all referenced image indices.
 pub fn convert_legacy_material_properties_with_texture_count(
     value: &Value,
     texture_count: Option<usize>,
+) -> Option<VrmcMaterialsExtensitions> {
+    let planned = plan_legacy_render_queue_offsets(std::slice::from_ref(value));
+    convert_legacy_material_properties_with_render_queue_offset(
+        value,
+        texture_count,
+        planned.first().copied(),
+    )
+}
+
+/// Plans the VRM 0.x render-queue offsets using the fixed UniVRM migration.
+///
+/// Transparent materials are ordered from the largest source queue toward
+/// zero, while transparent-with-Z-write materials are ordered from zero
+/// upward. Opaque and cutout materials always use their MToon 1.0 default.
+#[must_use]
+pub fn plan_legacy_render_queue_offsets(values: &[Value]) -> Vec<i32> {
+    let mut modes = Vec::with_capacity(values.len());
+    let mut transparent = std::collections::BTreeSet::new();
+    let mut transparent_z_write = std::collections::BTreeSet::new();
+
+    for value in values {
+        let mode = legacy_render_mode(value);
+        let source_offset = legacy_source_render_queue_offset(value, mode);
+        modes.push((mode, source_offset));
+        match mode {
+            2 => {
+                transparent.insert(source_offset);
+            }
+            3 => {
+                transparent_z_write.insert(source_offset);
+            }
+            _ => {}
+        }
+    }
+
+    let transparent_map = transparent
+        .into_iter()
+        .rev()
+        .enumerate()
+        .map(|(index, source)| (source, -(index as i32).min(9)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let transparent_z_write_map = transparent_z_write
+        .into_iter()
+        .enumerate()
+        .map(|(index, source)| (source, (index as i32).min(9)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    modes
+        .into_iter()
+        .map(|(mode, source)| match mode {
+            2 => transparent_map.get(&source).copied().unwrap_or(0),
+            3 => transparent_z_write_map.get(&source).copied().unwrap_or(0),
+            _ => 0,
+        })
+        .collect()
+}
+
+pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
+    value: &Value,
+    texture_count: Option<usize>,
+    render_queue_offset: Option<i32>,
 ) -> Option<VrmcMaterialsExtensitions> {
     let mut properties = json!({
         "specVersion": "1.0",
@@ -186,10 +252,10 @@ pub fn convert_legacy_material_properties_with_texture_count(
         .unwrap_or_default();
     let shade_toony = floats.get("_ShadeToony").and_then(finite_f32);
     let shade_shift = floats.get("_ShadeShift").and_then(finite_f32);
-    if let Some(render_queue) = value.get("renderQueue").and_then(finite_f32) {
+    if let Some(render_queue_offset) = render_queue_offset {
         properties.insert(
             "renderQueueOffsetNumber".into(),
-            json!(render_queue - 2000.0),
+            json!(render_queue_offset),
         );
     }
     for (name, value) in &floats {
@@ -244,9 +310,6 @@ pub fn convert_legacy_material_properties_with_texture_count(
             }
             "_ShadingShiftTextureScale" => {
                 properties.insert("shadingShiftTextureScale".into(), json!(value));
-            }
-            "_RenderQueue" => {
-                properties.insert("renderQueueOffsetNumber".into(), json!(value - 2000.0));
             }
             _ => {}
         }
@@ -522,6 +585,30 @@ pub fn convert_legacy_material_properties_with_texture_count(
     Some(converted)
 }
 
+fn legacy_render_mode(value: &Value) -> i32 {
+    let mode = value
+        .get("floatProperties")
+        .and_then(Value::as_object)
+        .and_then(|floats| floats.get("_BlendMode"))
+        .and_then(finite_f32)
+        .map(|value| value as i32)
+        .unwrap_or(0);
+    if (0..=3).contains(&mode) { mode } else { 0 }
+}
+
+fn legacy_source_render_queue_offset(value: &Value, mode: i32) -> i32 {
+    let Some(render_queue) = value.get("renderQueue").and_then(finite_i32) else {
+        return 0;
+    };
+    render_queue.saturating_sub(match mode {
+        0 => -1,
+        1 => 2450,
+        2 => 3000,
+        3 => 2501,
+        _ => 0,
+    })
+}
+
 fn legacy_alpha_mode(value: &Value) -> Option<LegacyAlphaMode> {
     let render_type = value
         .get("tagMap")
@@ -550,14 +637,20 @@ fn legacy_alpha_mode(value: &Value) -> Option<LegacyAlphaMode> {
         };
     }
     let name = render_type.or(shader)?;
-    if name.contains("TransparentCutout") || name.contains("Cutout") {
-        Some(LegacyAlphaMode::Mask(cutoff))
-    } else if name.contains("Transparent") {
-        Some(LegacyAlphaMode::Blend)
-    } else if name.contains("Opaque") || name.contains("Texture") || name.contains("MToon") {
-        Some(LegacyAlphaMode::Opaque)
-    } else {
-        None
+    match name {
+        "TransparentCutout" | "Cutout" | "VRM/UnlitCutout" => {
+            Some(LegacyAlphaMode::Mask(cutoff))
+        }
+        "Transparent" | "VRM/UnlitTransparent" | "VRM/UnlitTransparentZWrite" => {
+            Some(LegacyAlphaMode::Blend)
+        }
+        "Opaque"
+        | "VRM/MToon"
+        | "VRM/UnlitTexture"
+        | "VRM_USE_GLTFSHADER"
+        | "Standard"
+        | "UniGLTF/UniUnlit" => Some(LegacyAlphaMode::Opaque),
+        _ => None,
     }
 }
 
@@ -566,6 +659,11 @@ fn finite_f32(value: &Value) -> Option<f32> {
         .as_f64()
         .map(|value| value as f32)
         .filter(|value| value.is_finite())
+}
+
+fn finite_i32(value: &Value) -> Option<i32> {
+    let value = value.as_i64()?;
+    i32::try_from(value).ok()
 }
 
 fn finite_array(value: &Value) -> Option<Vec<f32>> {
@@ -620,6 +718,7 @@ fn legacy_main_texture_transform(values: &[f32]) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vrm::gltf::extensions::{classify_legacy_shader, LegacyShaderKind};
 
     #[test]
     fn converts_legacy_mtoon_properties_to_existing_fields() {
@@ -651,7 +750,7 @@ mod tests {
         assert_eq!(converted.shading_toony_factor, 0.85);
         assert_eq!(converted.shading_shift_factor, -0.15);
         assert_eq!(converted.outline_width_factor, Some(0.0002));
-        assert_eq!(converted.render_queue_offset_number, 500.0);
+        assert_eq!(converted.render_queue_offset_number, 0.0);
         assert!(converted.transparent_with_z_write);
         assert_eq!(
             converted.shade_color_factor,
@@ -722,7 +821,7 @@ mod tests {
     fn migrates_official_vrm0_mtoon_source_shape() {
         let value = json!({
             "shader": "VRM/MToon",
-            "renderQueue": 2500,
+            "renderQueue": 2501,
             "floatProperties": {
                 "_BlendMode": 3.0,
                 "_CullMode": 2.0,
@@ -809,7 +908,7 @@ mod tests {
         let converted = convert_legacy_material_properties_with_texture_count(&value, Some(4))
             .expect("material should parse");
 
-        assert_eq!(converted.render_queue_offset_number, 450.0);
+        assert_eq!(converted.render_queue_offset_number, 0.0);
         assert_eq!(converted.parametric_rim_fresnel_power, 3.0);
         assert_eq!(converted.parametric_rim_lift_factor, 0.2);
         assert_eq!(converted.rim_lighting_mix_factor, 0.4);
@@ -832,6 +931,35 @@ mod tests {
             converted.legacy_alpha_mode,
             Some(LegacyAlphaMode::Blend)
         );
+    }
+
+    #[test]
+    fn plans_render_queue_offsets_like_fixed_univrm_migration() {
+        let values = vec![
+            json!({"shader": "VRM/MToon", "renderQueue": 1999, "floatProperties": {"_BlendMode": 0.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 2450, "floatProperties": {"_BlendMode": 1.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 3020, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 3005, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 3020, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 2507, "floatProperties": {"_BlendMode": 3.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 2501, "floatProperties": {"_BlendMode": 3.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 2507, "floatProperties": {"_BlendMode": 3.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 9999, "floatProperties": {"_BlendMode": 99.0}}),
+        ];
+        assert_eq!(
+            plan_legacy_render_queue_offsets(&values),
+            vec![0, 0, 0, -1, 0, 1, 0, 1, 0]
+        );
+        assert!(plan_legacy_render_queue_offsets(&values)
+            .into_iter()
+            .all(|offset| (-9..=9).contains(&offset)));
+    }
+
+    #[test]
+    fn custom_mtoon_shader_uses_no_legacy_mtoon_conversion() {
+        for shader in ["Custom/MToon", "MyMToonShader", "VRM/MToonExtra"] {
+            assert_eq!(classify_legacy_shader(shader), LegacyShaderKind::Unknown);
+        }
     }
 }
 
