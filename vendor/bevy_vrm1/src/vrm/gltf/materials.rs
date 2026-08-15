@@ -95,6 +95,16 @@ pub struct VrmcMaterialsExtensitions {
     #[serde(skip)]
     #[reflect(ignore)]
     pub legacy_uv_transform: Option<[f32; 4]>,
+    /// True when this entry is an intentional existing `StandardMaterial`
+    /// fallback for one of the supported VRM/Unlit shaders.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub legacy_standard_fallback: bool,
+    /// True when the source requested transparent Z-write, which Bevy's
+    /// `StandardMaterial` cannot express.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub legacy_z_write_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -252,6 +262,10 @@ pub fn convert_legacy_material_properties_with_texture_count(
             }
             "_MainTex_ST" => {
                 if vector.len() >= 4 {
+                    // VRM 0.x migration keeps Unity's [scale.xy, offset.xy]
+                    // ordering. Bevy's glTF UV transform uses the same
+                    // scale/offset convention, so no speculative Y flip is
+                    // applied here.
                     properties.insert("legacyUvTransform".into(), json!(&vector[..4]));
                 }
             }
@@ -565,6 +579,32 @@ mod tests {
         assert_eq!(converted.shading_toony_factor, 0.9);
         assert_eq!(converted.shade_color_factor, [0.0, 0.0, 0.0]);
         assert_eq!(converted.legacy_alpha_mode, None);
+    }
+
+    #[test]
+    fn supports_all_vrm_unlit_alpha_contracts_with_standard_material_inputs() {
+        for (shader, expected) in [
+            ("VRM/UnlitTexture", LegacyAlphaMode::Opaque),
+            ("VRM/UnlitCutout", LegacyAlphaMode::Mask(0.35)),
+            ("VRM/UnlitTransparent", LegacyAlphaMode::Blend),
+            ("VRM/UnlitTransparentZWrite", LegacyAlphaMode::Blend),
+        ] {
+            let value = json!({
+                "shader": shader,
+                "floatProperties": {"_Cutoff": 0.35, "_Cull": 0.0},
+                "vectorProperties": {
+                    "_Color": [0.5, 0.25, 1.0, 0.75],
+                    "_MainTex_ST": [0.8, 0.9, 0.1, 0.2]
+                },
+                "textureProperties": {"_MainTex": 0}
+            });
+            let converted = convert_legacy_material_properties_with_texture_count(&value, Some(1))
+                .expect("supported unlit shader should use the standard fallback contract");
+            assert_eq!(converted.legacy_alpha_mode, Some(expected));
+            assert_eq!(converted.legacy_base_texture, Some(0));
+            assert_eq!(converted.legacy_double_sided, Some(true));
+            assert_eq!(converted.legacy_uv_transform, Some([0.8, 0.9, 0.1, 0.2]));
+        }
     }
 
     #[test]

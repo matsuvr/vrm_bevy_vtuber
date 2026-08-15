@@ -4,6 +4,7 @@ use bevy::app::{App, Plugin};
 use bevy::asset::Assets;
 use bevy::math::{Affine2, Vec2};
 use bevy::prelude::*;
+use bevy::render::render_resource::Face;
 
 pub struct MToonMaterialSetupPlugin;
 
@@ -19,7 +20,7 @@ impl Plugin for MToonMaterialSetupPlugin {
 fn turn_to_mtoon_material(
     mut commands: Commands,
     mut mtoon_materials: ResMut<Assets<MToonMaterial>>,
-    standard_materials: Res<Assets<StandardMaterial>>,
+    mut standard_materials: ResMut<Assets<StandardMaterial>>,
     registries: Query<&VrmcMaterialRegistry>,
     parents: Query<&ChildOf>,
     added_materials: Query<
@@ -35,6 +36,38 @@ fn turn_to_mtoon_material(
         let Some(extension) = registry.materials.get(&handle.id()) else {
             return;
         };
+        if extension.legacy_standard_fallback {
+            if let Some(mut material) = standard_materials.get_mut(handle.id()) {
+                material.unlit = true;
+                material.base_color_texture = extension
+                    .legacy_base_texture
+                    .and_then(|index| registry.images.get(index))
+                    .cloned()
+                    .or_else(|| material.base_color_texture.clone());
+                if let Some(color) = extension.legacy_base_color {
+                    material.base_color = Color::linear_rgba(color[0], color[1], color[2], color[3]);
+                }
+                if let Some(alpha_mode) = extension.legacy_alpha_mode {
+                    material.alpha_mode = match alpha_mode {
+                        LegacyAlphaMode::Opaque => AlphaMode::Opaque,
+                        LegacyAlphaMode::Mask(cutoff) => AlphaMode::Mask(cutoff),
+                        LegacyAlphaMode::Blend => AlphaMode::Blend,
+                    };
+                }
+                if let Some(double_sided) = extension.legacy_double_sided {
+                    material.double_sided = double_sided;
+                    material.cull_mode = if double_sided { None } else { Some(Face::Back) };
+                }
+                if let Some(transform) = extension.legacy_uv_transform {
+                    material.uv_transform = Affine2::from_scale_angle_translation(
+                        Vec2::new(transform[0], transform[1]),
+                        0.0,
+                        Vec2::new(transform[2], transform[3]),
+                    );
+                }
+            }
+            return;
+        }
         let Some(base) = standard_materials.get(handle.id()).cloned() else {
             return;
         };

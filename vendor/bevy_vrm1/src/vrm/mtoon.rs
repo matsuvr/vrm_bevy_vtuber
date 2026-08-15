@@ -125,7 +125,26 @@ impl VrmcMaterialRegistry {
             {
                 let is_mtoon = shader.contains("MToon");
                 let is_unlit = shader.contains("Unlit");
-                if is_unlit || !is_mtoon {
+                let supported_unlit = matches!(
+                    shader,
+                    "VRM/UnlitTexture"
+                        | "VRM/UnlitCutout"
+                        | "VRM/UnlitTransparent"
+                        | "VRM/UnlitTransparentZWrite"
+                );
+                if is_unlit && supported_unlit {
+                    if let Some(mut properties) = convert_legacy_material_properties_with_texture_count(
+                        legacy.as_ref().unwrap_or(&Value::Null),
+                        Some(source.textures().count()),
+                    ) {
+                        properties.legacy_standard_fallback = true;
+                        properties.legacy_z_write_requested =
+                            shader == "VRM/UnlitTransparentZWrite";
+                        materials.insert(asset_id, properties);
+                    }
+                    continue;
+                }
+                if !is_mtoon {
                     #[cfg(feature = "log")]
                     bevy::log::warn!(
                         "VRM 0.x material {index} uses unsupported shader '{shader}'; keeping glTF StandardMaterial fallback"
