@@ -37,14 +37,16 @@ pub enum VrmCompatibilityWarningCode {
     UnknownLegacyShader,
     /// `StandardMaterial` has no equivalent for legacy transparent Z-write.
     UnlitZWriteNotRepresentable,
+    /// A known legacy texture property contains an invalid glTF texture index.
+    InvalidLegacyMaterialTexture,
 }
 
 /// Exact VRM 0.x shader classification shared by diagnostics and migration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LegacyShaderKind {
-    /// The only shader migrated through the MToon path.
+    /// The only shader migrated through the `MToon` path.
     MToon,
-    /// One of the four known StandardMaterial fallbacks.
+    /// One of the four known `StandardMaterial` fallbacks.
     SupportedUnlit,
     /// A known glTF/legacy passthrough shader with no VRM migration.
     Passthrough,
@@ -84,6 +86,7 @@ impl VrmCompatibilityWarningCode {
             Self::ExtraLegacyMaterialProperty => "extra_legacy_material_property",
             Self::UnknownLegacyShader => "unknown_legacy_shader",
             Self::UnlitZWriteNotRepresentable => "unlit_z_write_not_representable",
+            Self::InvalidLegacyMaterialTexture => "invalid_legacy_material_texture",
         }
     }
 }
@@ -472,6 +475,10 @@ pub fn collect_legacy_compatibility_warnings(
             .get("materials")
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
+        let texture_count = root
+            .get("textures")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
         if properties.len() > material_count {
             warnings.push(VrmCompatibilityWarning::new(
                 VrmCompatibilityWarningCode::ExtraLegacyMaterialProperty,
@@ -521,6 +528,23 @@ pub fn collect_legacy_compatibility_warnings(
                         VrmCompatibilityWarningCode::UnknownLegacyMaterialProperty,
                         format!("VRM.materialProperties[{index}].{key}"),
                     ));
+                }
+            }
+            if let Some(textures) = property
+                .get("textureProperties")
+                .and_then(Value::as_object)
+            {
+                for (name, source_index) in textures {
+                    if is_known_legacy_texture_property(name)
+                        && !valid_legacy_texture_index(source_index, texture_count)
+                    {
+                        warnings.push(VrmCompatibilityWarning::new(
+                            VrmCompatibilityWarningCode::InvalidLegacyMaterialTexture,
+                            format!(
+                                "VRM.materialProperties[{index}].textureProperties.{name}={source_index}"
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -635,6 +659,36 @@ fn is_known_legacy_material_property(key: &str) -> bool {
             | "_Cutoff"
             | "_Cull"
     )
+}
+
+fn is_known_legacy_texture_property(key: &str) -> bool {
+    matches!(
+        key,
+        "_MainTex"
+            | "_MainTexture"
+            | "_ShadeTexture"
+            | "_BumpMap"
+            | "_ReceiveShadowTexture"
+            | "_ShadingGradeTexture"
+            | "_EmissionMap"
+            | "_EmissionTexture"
+            | "_OutlineWidthTexture"
+            | "_RimTexture"
+            | "_RimMultiplyTexture"
+            | "_SphereAdd"
+            | "_ShadingShiftTexture"
+            | "_MatcapTexture"
+            | "_MatCapTex"
+            | "_UvAnimMaskTex"
+            | "_UvAnimMaskTexture"
+    )
+}
+
+fn valid_legacy_texture_index(value: &Value, texture_count: usize) -> bool {
+    value
+        .as_u64()
+        .and_then(|index| usize::try_from(index).ok())
+        .is_some_and(|index| index < texture_count)
 }
 
 fn legacy_curve_is_linear(curve: &[Value]) -> bool {
@@ -1701,5 +1755,48 @@ mod tests {
         assert!(warnings.iter().all(|warning| {
             warning.context.chars().count() <= MAX_COMPATIBILITY_WARNING_CONTEXT
         }));
+    }
+
+    #[test]
+    fn invalid_legacy_texture_index_emits_typed_warning() {
+        let mut root = vrm0_root();
+        root["textures"] = json!([{}]);
+        root["extensions"]["VRM"]["materialProperties"] = json!([{
+            "shader": "VRM/MToon",
+            "textureProperties": {
+                "_MainTex": 1,
+                "_ShadeTexture": -1,
+                "_RimTexture": "not-an-index",
+                "_MatcapTexture": 0.5,
+                "_EmissionMap": 0
+            }
+        }]);
+
+        let warnings = collect_legacy_compatibility_warnings(
+            &root,
+            &root["extensions"]["VRM"],
+        );
+        let invalid = warnings
+            .iter()
+            .filter(|warning| {
+                warning.code == VrmCompatibilityWarningCode::InvalidLegacyMaterialTexture
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(invalid.len(), 4);
+        assert!(invalid.iter().any(|warning| {
+            warning.context.contains("textureProperties._MainTex=1")
+        }));
+        assert!(invalid.iter().any(|warning| {
+            warning.context.contains("textureProperties._ShadeTexture=-1")
+        }));
+        assert!(invalid.iter().any(|warning| {
+            warning.context.contains("textureProperties._RimTexture=\"not-an-index\"")
+        }));
+        assert!(invalid.iter().any(|warning| {
+            warning.context.contains("textureProperties._MatcapTexture=0.5")
+        }));
+
+        let descriptor = parse_runtime_descriptor(&root).expect("VRM 0.x should parse");
+        assert_eq!(descriptor.compatibility_warnings, warnings);
     }
 }

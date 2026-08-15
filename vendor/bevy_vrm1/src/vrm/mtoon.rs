@@ -4,7 +4,11 @@ mod setup;
 
 use crate::error::vrm_error;
 use crate::prelude::*;
-use crate::vrm::gltf::materials::{VrmcMaterialsExtensitions, convert_legacy_material_properties};
+use crate::vrm::gltf::extensions::{classify_legacy_shader, LegacyShaderKind};
+use crate::vrm::gltf::materials::{
+    convert_legacy_material_properties_with_render_queue_offset,
+    plan_legacy_render_queue_offsets, VrmcMaterialsExtensitions,
+};
 use crate::vrm::mtoon::outline_pass::MToonOutlinePlugin;
 use crate::vrm::mtoon::setup::MToonMaterialSetupPlugin;
 use bevy::asset::{AssetId, load_internal_asset, uuid_handle};
@@ -95,6 +99,8 @@ impl VrmcMaterialRegistry {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        let render_queue_offsets =
+            plan_legacy_render_queue_offsets(&legacy_properties, source.materials().count());
         let mut materials = HashMap::new();
         for material in source.materials() {
             let Some(index) = material.index() else {
@@ -118,20 +124,38 @@ impl VrmcMaterialRegistry {
             // glTF material index is the only stable identity; names and
             // occurrence order are not.
             let legacy = legacy_properties.get(index).cloned();
+            let render_queue_offset = render_queue_offsets.get(index).copied().flatten();
             if let Some(shader) = legacy
                 .as_ref()
                 .and_then(|value| value.get("shader"))
                 .and_then(Value::as_str)
             {
-                let is_mtoon = shader.contains("MToon");
-                let is_unlit = shader.contains("Unlit");
-                if is_unlit || !is_mtoon {
-                    #[cfg(feature = "log")]
-                    bevy::log::warn!(
-                        "VRM 0.x material {index} uses unsupported shader '{shader}'; keeping glTF StandardMaterial fallback"
-                    );
-                    continue;
+                match classify_legacy_shader(shader) {
+                    LegacyShaderKind::SupportedUnlit => {
+                        if let Some(mut properties) = convert_legacy_material_properties_with_render_queue_offset(
+                            legacy.as_ref().unwrap_or(&Value::Null),
+                            Some(source.textures().count()),
+                            render_queue_offset,
+                        ) {
+                            properties.legacy_standard_fallback = true;
+                            properties.legacy_z_write_requested =
+                                shader == "VRM/UnlitTransparentZWrite";
+                            materials.insert(asset_id, properties);
+                        }
+                        continue;
+                    }
+                    LegacyShaderKind::Passthrough => continue,
+                    LegacyShaderKind::Unknown => {
+                        #[cfg(feature = "log")]
+                        bevy::log::warn!(
+                            "VRM 0.x material {index} uses unsupported shader '{shader}'; keeping glTF StandardMaterial fallback"
+                        );
+                        continue;
+                    }
+                    LegacyShaderKind::MToon => {}
                 }
+            } else if legacy.is_some() {
+                continue;
             }
             let Some(properties) = modern
                 .and_then(|value| match serde_json::from_value(value) {
@@ -143,9 +167,10 @@ impl VrmcMaterialRegistry {
                 })
                 .or_else(|| {
                     legacy.and_then(|value| {
-                        convert_legacy_material_properties_with_texture_count(
+                        convert_legacy_material_properties_with_render_queue_offset(
                             &value,
                             Some(source.textures().count()),
+                            render_queue_offset,
                         )
                     })
                 })
