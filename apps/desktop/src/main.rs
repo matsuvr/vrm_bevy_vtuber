@@ -13,6 +13,7 @@ use bevy_egui::EguiPlugin;
 use vtuber_app::import;
 use vtuber_app::inference_runtime::InferenceProjectRoot;
 use vtuber_app::orchestrator::Orchestrator;
+use vtuber_app::settings::ArmPoseSettings;
 use vtuber_app::ui::UiShellPlugin;
 use vtuber_avatar::{
     AvatarAssetId, ExpectedVrmGeneration, ImportedAvatar, LoadImportedAvatarRequest,
@@ -73,6 +74,7 @@ fn main() {
         ))
         .add_plugins(EguiPlugin::default())
         .add_plugins(VtuberAvatarPlugin)
+        .insert_resource(ArmPoseSettings::load_default())
         .insert_resource(InferenceProjectRoot(resource_root()))
         .add_plugins(UiShellPlugin)
         .insert_resource(Orchestrator::new(managed_root));

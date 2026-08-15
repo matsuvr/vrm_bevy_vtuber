@@ -35,6 +35,9 @@ pub mod model_catalog;
 /// App orchestrator — processes UI actions and manages domain state.
 pub mod orchestrator;
 
+/// User-owned persistent settings, including per-model arm-pose overrides.
+pub mod settings;
+
 /// Placeholder for app subsystem.
 pub mod placeholder;
 

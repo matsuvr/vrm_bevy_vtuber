@@ -43,6 +43,7 @@ impl Plugin for VtuberAvatarPlugin {
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
             .init_resource::<ArmPoseOverrideStore>()
+            .add_message::<crate::arm_pose::ArmPoseProfileChange>()
             .init_resource::<ActiveControlFrame>()
             .init_resource::<AvatarMotionMirror>()
             .init_resource::<PoseApplyMetrics>()

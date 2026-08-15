@@ -7,6 +7,7 @@ use bevy::prelude::Resource;
 use std::path::PathBuf;
 
 use crate::import::VrmGeneration;
+use vtuber_avatar::ArmPoseProfile;
 
 /// Which screen the UI is currently showing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -71,6 +72,15 @@ pub struct AvatarViewModel {
     pub is_ready: bool,
     /// Whether the avatar load/binding failed (recoverable).
     pub load_failed: bool,
+}
+
+/// Settings view model for the active avatar's default arm pose.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ArmPoseViewModel {
+    /// Current validated profile, automatic or model-specific.
+    pub profile: ArmPoseProfile,
+    /// Whether the active model has an explicit persisted override.
+    pub has_override: bool,
 }
 
 /// Summary of an imported model for display.
@@ -163,6 +173,8 @@ pub struct UiViewModel {
     pub camera: CameraViewModel,
     /// Avatar state.
     pub avatar: AvatarViewModel,
+    /// Active model arm-pose settings.
+    pub arm_pose: ArmPoseViewModel,
     /// Calibration state.
     pub calibration: CalibrationViewModel,
     /// Tracking state.

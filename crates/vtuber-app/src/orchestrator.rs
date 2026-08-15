@@ -18,9 +18,13 @@ use crate::actions::UiAction;
 use crate::import::VrmGeneration;
 use crate::import::{self, ImportedModel, ModelImportError};
 use crate::preview::PreviewState;
+use crate::settings::ArmPoseSettings;
 use crate::ui::UiState;
 use crate::ui_model::*;
-use vtuber_avatar::AvatarMotionMirror;
+use vtuber_avatar::{
+    ArmPoseOverrideStore, ArmPoseProfileChange, ArmPoseProfileOverride, AvatarAssetId,
+    AvatarMotionMirror,
+};
 use vtuber_camera::device::CameraDescriptor;
 
 /// A pending avatar load request waiting to be submitted to the lifecycle.
@@ -131,6 +135,8 @@ pub enum OrchestratorError {
     AvatarLoadRejected(String),
     /// The avatar lifecycle entered a failed state while loading or binding.
     AvatarLifecycleFailed(String),
+    /// Persistent avatar pose settings could not be written.
+    ArmPoseSettingsFailed(String),
     /// Camera enumeration, opening, capture, or reconnect failed.
     CameraFailed(String),
     /// Inference model load, execution, or worker failure.
@@ -147,6 +153,7 @@ impl std::fmt::Display for OrchestratorError {
             Self::PipelineNotRunning => write!(f, "Pipeline not running"),
             Self::AvatarLoadRejected(msg) => write!(f, "Avatar load rejected: {msg}"),
             Self::AvatarLifecycleFailed(msg) => write!(f, "Avatar lifecycle failed: {msg}"),
+            Self::ArmPoseSettingsFailed(msg) => write!(f, "Arm-pose settings failed: {msg}"),
             Self::CameraFailed(msg) => write!(f, "Camera failed: {msg}"),
             Self::InferenceFailed(msg) => write!(f, "Inference failed: {msg}"),
         }
@@ -451,6 +458,12 @@ impl Orchestrator {
         self.imported_model.is_some()
     }
 
+    /// Returns the stable ID of the currently imported model, if any.
+    #[must_use]
+    pub fn active_model_id(&self) -> Option<&str> {
+        self.imported_model.as_ref().map(|model| model.id.as_str())
+    }
+
     /// The asset root used for model imports.
     #[must_use]
     pub fn asset_root(&self) -> &PathBuf {
@@ -581,12 +594,16 @@ fn format_import_error(error: &ModelImportError) -> String {
 }
 
 /// System that processes pending UI actions through the orchestrator.
+#[allow(clippy::too_many_arguments)]
 pub fn process_ui_actions_system(
     mut orchestrator: ResMut<Orchestrator>,
     mut ui_state: ResMut<UiState>,
     mut view_model: ResMut<UiViewModel>,
     mut preview: ResMut<PreviewState>,
     mut avatar_motion_mirror: ResMut<AvatarMotionMirror>,
+    mut arm_pose_overrides: Option<ResMut<ArmPoseOverrideStore>>,
+    arm_pose_settings: Option<Res<ArmPoseSettings>>,
+    mut arm_pose_changes: Option<MessageWriter<ArmPoseProfileChange>>,
 ) {
     let actions = ui_state.take_actions();
     for action in &actions {
@@ -594,13 +611,117 @@ pub fn process_ui_actions_system(
             UiAction::TogglePreview => preview.toggle_visible(),
             UiAction::ToggleMirror => preview.toggle_mirrored(),
             UiAction::ToggleAvatarMotionMirror => avatar_motion_mirror.toggle(),
+            UiAction::SetArmPoseProfile { profile } => {
+                apply_arm_pose_profile_action(
+                    &mut orchestrator,
+                    *profile,
+                    &mut arm_pose_overrides,
+                    arm_pose_settings.as_deref(),
+                    &mut arm_pose_changes,
+                    false,
+                );
+            }
+            UiAction::ResetArmPoseProfile => {
+                reset_arm_pose_profile_action(
+                    &mut orchestrator,
+                    &mut arm_pose_overrides,
+                    arm_pose_settings.as_deref(),
+                    &mut arm_pose_changes,
+                );
+            }
             _ => orchestrator.process_action(action),
         }
     }
     orchestrator.update_view_model(&mut view_model);
+    sync_arm_pose_view_model(
+        &orchestrator,
+        &mut view_model,
+        arm_pose_overrides.as_deref(),
+    );
     view_model.preview_visible = preview.visible;
     view_model.mirror_preview = preview.mirrored;
     view_model.mirror_avatar_motion = avatar_motion_mirror.is_enabled();
+}
+
+fn apply_arm_pose_profile_action(
+    orchestrator: &mut Orchestrator,
+    profile: ArmPoseProfileOverride,
+    overrides: &mut Option<ResMut<ArmPoseOverrideStore>>,
+    settings: Option<&ArmPoseSettings>,
+    changes: &mut Option<MessageWriter<ArmPoseProfileChange>>,
+    return_to_default: bool,
+) {
+    let Some(model_id) = orchestrator.active_model_id().map(str::to_owned) else {
+        return;
+    };
+    let Some(store) = overrides.as_deref_mut() else {
+        return;
+    };
+    if let Err(error) = store.set(model_id.clone(), profile) {
+        orchestrator.set_last_error(Some(OrchestratorError::ArmPoseSettingsFailed(
+            error.to_string(),
+        )));
+        return;
+    }
+    if let Some(settings) = settings
+        && let Err(error) = settings.save(store)
+    {
+        orchestrator.set_last_error(Some(OrchestratorError::ArmPoseSettingsFailed(
+            error.to_string(),
+        )));
+    }
+    if let Some(changes) = changes.as_mut() {
+        changes.write(ArmPoseProfileChange {
+            model_id: AvatarAssetId::new(model_id),
+            return_to_default,
+        });
+    }
+}
+
+fn reset_arm_pose_profile_action(
+    orchestrator: &mut Orchestrator,
+    overrides: &mut Option<ResMut<ArmPoseOverrideStore>>,
+    settings: Option<&ArmPoseSettings>,
+    changes: &mut Option<MessageWriter<ArmPoseProfileChange>>,
+) {
+    let Some(model_id) = orchestrator.active_model_id().map(str::to_owned) else {
+        return;
+    };
+    let Some(store) = overrides.as_deref_mut() else {
+        return;
+    };
+    store.reset(&AvatarAssetId::new(&model_id));
+    if let Some(settings) = settings
+        && let Err(error) = settings.save(store)
+    {
+        orchestrator.set_last_error(Some(OrchestratorError::ArmPoseSettingsFailed(
+            error.to_string(),
+        )));
+    }
+    if let Some(changes) = changes.as_mut() {
+        changes.write(ArmPoseProfileChange {
+            model_id: AvatarAssetId::new(model_id),
+            return_to_default: true,
+        });
+    }
+}
+
+fn sync_arm_pose_view_model(
+    orchestrator: &Orchestrator,
+    view_model: &mut UiViewModel,
+    overrides: Option<&ArmPoseOverrideStore>,
+) {
+    let Some(model_id) = orchestrator.active_model_id() else {
+        view_model.arm_pose = ArmPoseViewModel::default();
+        return;
+    };
+    let id = AvatarAssetId::new(model_id);
+    let Some(overrides) = overrides else {
+        view_model.arm_pose = ArmPoseViewModel::default();
+        return;
+    };
+    view_model.arm_pose.profile = overrides.profile_for(&id).unwrap_or_default();
+    view_model.arm_pose.has_override = overrides.profile_for(&id).is_some();
 }
 
 /// Converts the avatar lifecycle's internal state to the UI model's state.
@@ -756,6 +877,70 @@ mod tests {
         assert!(!view_model.preview_visible);
         assert!(!view_model.mirror_preview);
         assert!(!view_model.mirror_avatar_motion);
+    }
+
+    #[test]
+    fn arm_pose_settings_action_updates_runtime_store_and_persists_reset() {
+        let directory = tempfile::tempdir().expect("temporary settings directory");
+        let path = directory.path().join("settings.toml");
+        let model_id = "sha256:active".to_string();
+        let profile = vtuber_avatar::ArmPoseProfile {
+            arm_drop_radians: 0.4,
+            ..Default::default()
+        };
+        let mut app = App::new();
+        app.init_resource::<Orchestrator>()
+            .init_resource::<UiState>()
+            .init_resource::<UiViewModel>()
+            .init_resource::<PreviewState>()
+            .init_resource::<AvatarMotionMirror>()
+            .init_resource::<vtuber_avatar::ArmPoseOverrideStore>()
+            .insert_resource(ArmPoseSettings::empty_at(&path))
+            .add_message::<ArmPoseProfileChange>()
+            .add_systems(Update, process_ui_actions_system);
+
+        app.world_mut()
+            .resource_mut::<Orchestrator>()
+            .imported_model = Some(ImportedModel {
+            id: model_id.clone(),
+            name: "test".to_string(),
+            asset_path: directory.path().join("model.vrm"),
+            meta_path: directory.path().join("import.toml"),
+            summary: crate::import::VrmInspectionSummary::default(),
+            original_path: directory.path().join("original.vrm"),
+            size: 1,
+        });
+        app.world_mut()
+            .resource_mut::<UiState>()
+            .emit(UiAction::SetArmPoseProfile {
+                profile: ArmPoseProfileOverride::from_profile(profile),
+            });
+        app.update();
+
+        let id = vtuber_avatar::AvatarAssetId::new(&model_id);
+        let store = app
+            .world()
+            .resource::<vtuber_avatar::ArmPoseOverrideStore>();
+        assert_eq!(store.profile_for(&id), Some(profile));
+        assert!(path.is_file());
+        assert_eq!(
+            app.world().resource::<UiViewModel>().arm_pose.profile,
+            profile
+        );
+
+        app.world_mut()
+            .resource_mut::<UiState>()
+            .emit(UiAction::ResetArmPoseProfile);
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<vtuber_avatar::ArmPoseOverrideStore>()
+                .profile_for(&id)
+                .is_none()
+        );
+        let restored = crate::settings::load_arm_pose_overrides(&path).expect("reset file");
+        assert!(restored.profile_for(&id).is_none());
     }
 
     #[test]

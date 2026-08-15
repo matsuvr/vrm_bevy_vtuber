@@ -1300,7 +1300,7 @@ Issue #16のcompositorは`AnimationSystems`とdirect-pose `BodyTracking`の後�
 
 Issue #17では、解決upper displacementから肩へ18%だけ追従させ、肩deltaを最大5°に制限する。利用可能なfinger jointには、各jointのrest-global axisへ変換した10°の弱いcurlを適用する。wrist／handには固定角度を書かず、lower armの解決回転を実際の`ChildOf`経路で伝播して、モデル作者のrest wrist orientationを保つ。optional boneの欠損は各補正のno-opとする。
 
-Issue #18では、既定profileの各値をversion 1のbounded overrideとして`AvatarAssetId`（import時のcontent hash）ごとに保持する。`ArmPoseOverrideStore`はbinding前に検証済みprofileだけを参照し、未知version、非finite値、範囲外値は無視する。`entries`／`import_entries`をアプリ設定層の保存・復元境界とし、resourceはavatar unload／reloadをまたいで同じmodel IDの調整を再利用する。`reset`後はgeometry-derived defaultへ戻る。
+Issue #18では、既定profileの各値をversion 1のbounded overrideとして`AvatarAssetId`（import時のcontent hash）ごとに保持する。`vtuber-app`のsettings層はユーザー設定ディレクトリの`settings.toml`へmappingを保存し、起動時に`ArmPoseOverrideStore`へ検証済みprofileだけを復元する。未知version、malformed TOML、非finite値、範囲外値は安全な空storeへfallbackし、破損値をTransformへ流さない。`entries`／`import_entries`をアプリ設定層の保存・復元境界とし、resourceはavatar unload／reloadとプロセス再起動をまたいで同じmodel IDの調整を再利用する。`reset`は選択modelのmappingだけを削除し、geometry-derived defaultへ戻る。設定変更はcached immutable binding geometryから再解決し、既存compositorへ通知する。
 
 default poseの初回適用とdefaultへの復帰は、左右独立の`ArmPoseBlendState`で行う。通常遷移は0.25秒、復帰は0.6秒とし、`dt`に基づくshortest-arc quaternion slerpで30／60／120 FPSの結果を一致させる。generationが変わるavatar replacementでは新しいstateを作り、前avatarのblendを持ち越さない。全てのblendはfiniteな時間入力だけを受け、pose deltaを累積しない。
 
@@ -1658,6 +1658,7 @@ TOMLで保存する。
 - head / neck weights
 - range limits
 - last imported model ID
+- per-model arm-pose override mapping keyed by imported content hash
 - window size / position
 
 保存対象外:

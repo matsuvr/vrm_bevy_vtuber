@@ -4,6 +4,7 @@ use bevy_egui::egui::Ui;
 
 use crate::actions::UiAction;
 use crate::ui_model::{AvatarLifecycleState, UiViewModel};
+use vtuber_avatar::ArmPoseProfileOverride;
 
 use super::file_dialog::FileDialogState;
 
@@ -70,6 +71,8 @@ pub fn render_setup_screen(
             }
         ));
         ui.label(format!("Expressions: {}", model.expression_count));
+
+        render_arm_pose_settings(ui, vm, ui_state);
 
         // Lifecycle status for the avatar.
         match vm.avatar.lifecycle {
@@ -140,4 +143,64 @@ pub fn render_setup_screen(
     if vm.can_stop() && ui.button("Stop").clicked() {
         ui_state.emit(UiAction::Stop);
     }
+}
+
+fn render_arm_pose_settings(ui: &mut Ui, vm: &UiViewModel, ui_state: &mut super::UiState) {
+    ui.collapsing("Default arm pose", |ui| {
+        ui.small("Saved per model by its content hash.");
+        let mut profile = vm.arm_pose.profile;
+        let mut arm_drop_degrees = profile.arm_drop_radians.to_degrees();
+        let mut finger_curl_degrees = profile.finger_curl_radians.to_degrees();
+        let mut changed = false;
+        changed |= ui
+            .add(
+                bevy_egui::egui::Slider::new(&mut arm_drop_degrees, 0.0..=90.0)
+                    .text("Arm drop (deg)"),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                bevy_egui::egui::Slider::new(&mut profile.reach_ratio, 0.01..=1.0)
+                    .text("Reach ratio"),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                bevy_egui::egui::Slider::new(&mut profile.forward_hand_offset_ratio, -1.0..=1.0)
+                    .text("Forward offset"),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                bevy_egui::egui::Slider::new(&mut profile.elbow_pole_offset_ratio, 0.0..=1.0)
+                    .text("Elbow pole"),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                bevy_egui::egui::Slider::new(&mut profile.shoulder_follow_weight, 0.0..=1.0)
+                    .text("Shoulder follow"),
+            )
+            .changed();
+        changed |= ui
+            .add(
+                bevy_egui::egui::Slider::new(&mut finger_curl_degrees, 0.0..=90.0)
+                    .text("Finger curl (deg)"),
+            )
+            .changed();
+
+        profile.arm_drop_radians = arm_drop_degrees.to_radians();
+        profile.finger_curl_radians = finger_curl_degrees.to_radians();
+        if changed {
+            ui_state.emit(UiAction::SetArmPoseProfile {
+                profile: ArmPoseProfileOverride::from_profile(profile),
+            });
+        }
+        if vm.arm_pose.has_override && ui.button("Reset to automatic").clicked() {
+            ui_state.emit(UiAction::ResetArmPoseProfile);
+        }
+        if !vm.arm_pose.has_override {
+            ui.small("Using automatic geometry-derived defaults.");
+        }
+    });
 }
