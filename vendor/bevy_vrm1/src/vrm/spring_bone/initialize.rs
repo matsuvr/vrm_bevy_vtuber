@@ -188,25 +188,119 @@ fn terminal_direction(
     node_indices: &Query<Option<&VrmNodeIndex>>,
     last_transform: &Transform,
 ) -> Option<Vec3> {
+    let finite_nonzero_direction = |translation: Vec3| {
+        let length_squared = translation.length_squared();
+        (translation.is_finite()
+            && length_squared.is_finite()
+            && length_squared > f32::EPSILON)
+            .then(|| translation.normalize())
+    };
+
+    // A leaf node normally has no `Children` component. That is a valid
+    // glTF state, so absence of the component must fall through to the
+    // parent-to-last-joint fallback instead of returning early.
     let child_direction = children
         .get(entity)
-        .ok()?
-        .iter()
+        .ok()
+        .into_iter()
+        .flat_map(|children| children.iter())
         .filter_map(|child| {
             let transform = transforms.get(child).ok()?;
             node_indices
                 .get(child)
                 .ok()
                 .flatten()
-                .map(|_| transform.translation)
+                .and_then(|_| finite_nonzero_direction(transform.translation))
         })
-        .find(|translation| translation.length_squared() > f32::EPSILON)
-        .map(|translation| translation.normalize());
-    child_direction.or_else(|| {
-        (last_transform.translation.length_squared() > f32::EPSILON)
-            .then(|| last_transform.translation.normalize())
-    })
+        .next();
+
+    child_direction.or_else(|| finite_nonzero_direction(last_transform.translation))
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use bevy::app::App;
+
+    fn terminal_state(
+        last_translation: Vec3,
+        child_translation: Option<Vec3>,
+        terminal_length: Option<f32>,
+    ) -> Option<SpringJointState> {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_systems(Update, init_spring_joint_states);
+
+        let last_transform = Transform::from_translation(last_translation);
+        let last_entity = app
+            .world_mut()
+            .spawn((
+                last_transform,
+                GlobalTransform::from(last_transform),
+                VrmNodeIndex(0),
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(last_entity)
+            .insert(SpringRoot {
+                joints: SpringJoints(vec![last_entity]),
+                colliders: SpringColliders::default(),
+                center_node: SpringCenterNode::default(),
+                terminal_length,
+            });
+
+        if let Some(child_translation) = child_translation {
+            let child_transform = Transform::from_translation(child_translation);
+            app.world_mut().spawn((
+                child_transform,
+                GlobalTransform::from(child_transform),
+                VrmNodeIndex(1),
+                ChildOf(last_entity),
+            ));
+        }
+
+        app.update();
+        app.world().get::<SpringJointState>(last_entity).cloned()
+    }
+
+    #[test]
+    fn leaf_without_children_component_uses_last_joint_fallback() {
+        let state = terminal_state(Vec3::X, None, Some(0.07))
+            .expect("a leaf still needs a synthetic terminal state");
+
+        assert_eq!(state.bone_axis, Vec3::X);
+        assert_eq!(state.bone_length, 0.07);
+        assert!(state.current_tail.is_finite());
+    }
+
+    #[test]
+    fn valid_source_child_direction_wins_over_last_joint_fallback() {
+        let state = terminal_state(Vec3::X, Some(Vec3::Z), Some(0.07))
+            .expect("a valid source child supplies the terminal direction");
+
+        assert_eq!(state.bone_axis, Vec3::Z);
+        assert_eq!(state.bone_length, 0.07);
+    }
+
+    #[test]
+    fn zero_or_non_finite_child_translation_uses_valid_fallback() {
+        let zero_child = terminal_state(Vec3::Y, Some(Vec3::ZERO), Some(0.07))
+            .expect("zero child translation should fall back");
+        assert_eq!(zero_child.bone_axis, Vec3::Y);
+
+        let non_finite_child = terminal_state(Vec3::Y, Some(Vec3::NAN), Some(0.07))
+            .expect("non-finite child translation should fall back");
+        assert_eq!(non_finite_child.bone_axis, Vec3::Y);
+        assert!(non_finite_child.current_tail.is_finite());
+    }
+
+    #[test]
+    fn zero_child_and_zero_last_joint_skip_terminal_without_nan() {
+        assert!(terminal_state(Vec3::ZERO, Some(Vec3::ZERO), Some(0.07)).is_none());
+    }
+
+    #[test]
+    fn missing_terminal_length_preserves_vrm1_no_terminal_state_path() {
+        assert!(terminal_state(Vec3::Y, Some(Vec3::Z), None).is_none());
+    }
+}

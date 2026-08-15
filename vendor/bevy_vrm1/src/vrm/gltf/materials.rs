@@ -566,6 +566,63 @@ mod tests {
         assert_eq!(converted.shade_color_factor, [0.0, 0.0, 0.0]);
         assert_eq!(converted.legacy_alpha_mode, None);
     }
+
+    #[test]
+    fn covers_legacy_rim_matcap_emission_uv_and_texture_validation_contract() {
+        let value = json!({
+            "shader": "VRM/MToon",
+            "renderQueue": 2450,
+            "floatProperties": {
+                "_RimFresnelPower": 3.0,
+                "_RimLift": 0.2,
+                "_RimLightingMix": 0.4,
+                "_UvAnimRotation": 0.5,
+                "_UvAnimScrollX": 0.6,
+                "_UvAnimScrollY": 0.7,
+                "_Cull": 0.0,
+                "_ZWrite": 1.0,
+                "_ShadingShiftTextureScale": 1.5
+            },
+            "vectorProperties": {
+                "_RimColor": [0.1, 0.2, 0.3, 1.0],
+                "_MatcapColor": [0.4, 0.5, 0.6, 1.0],
+                "_EmissionColor": [0.7, 0.8, 0.9, 1.0],
+                "_MainTex_ST": [0.8, 0.9, 0.1, 0.2]
+            },
+            "textureProperties": {
+                "_RimTexture": 1,
+                "_ShadingShiftTexture": 2,
+                "_UvAnimMaskTexture": 3,
+                "_MatcapTexture": 99,
+                "_OutlineWidthTexture": 99,
+                "_EmissionMap": 1
+            },
+            "tagMap": {"RenderType": "Transparent"}
+        });
+        let converted = convert_legacy_material_properties_with_texture_count(&value, Some(4))
+            .expect("material should parse");
+
+        assert_eq!(converted.render_queue_offset_number, 450.0);
+        assert_eq!(converted.parametric_rim_fresnel_power, 3.0);
+        assert_eq!(converted.parametric_rim_lift_factor, 0.2);
+        assert_eq!(converted.rim_lighting_mix_factor, 0.4);
+        assert_eq!(converted.uv_animation_rotation_speed_factor, 0.5);
+        assert_eq!(converted.uv_animation_scroll_x_speed_factor, 0.6);
+        assert_eq!(converted.uv_animation_scroll_y_speed_factor, 0.7);
+        assert!(converted.transparent_with_z_write);
+        assert_eq!(converted.legacy_double_sided, Some(true));
+        assert_eq!(converted.legacy_emissive_texture, Some(1));
+        assert_eq!(converted.legacy_uv_transform, Some([0.8, 0.9, 0.1, 0.2]));
+        assert_eq!(converted.rim_multiply_texture.unwrap().index, 1);
+        assert_eq!(converted.shading_shift_texture.unwrap().index, 2);
+        assert_eq!(converted.uv_animation_mask_texture.unwrap().index, 3);
+        assert!(converted.matcap_texture.is_none());
+        assert!(converted.outline_width_multiply_texture.is_none());
+        assert_eq!(
+            converted.legacy_alpha_mode,
+            Some(LegacyAlphaMode::Blend)
+        );
+    }
 }
 
 #[derive(Serialize, Deserialize, Reflect, Debug, Clone, Copy)]

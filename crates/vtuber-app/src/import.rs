@@ -131,6 +131,20 @@ pub struct VrmInspectionSummary {
     /// Whether the model declares a material extension understood by the
     /// runtime compatibility layer.
     pub has_mtoon_materials: bool,
+    /// Number of material entries classified as legacy/modern MToon.
+    pub mtoon_material_count: usize,
+    /// Number of material entries classified as unlit.
+    pub unlit_material_count: usize,
+    /// Number of material entries that use the StandardMaterial fallback.
+    pub fallback_material_count: usize,
+    /// Number of normalized SpringBone chains.
+    pub spring_chain_count: usize,
+    /// Number of normalized SpringBone joints.
+    pub spring_joint_count: usize,
+    /// Number of SpringBone colliders.
+    pub spring_collider_count: usize,
+    /// Number of SpringBone center-space declarations.
+    pub spring_center_count: usize,
     /// Humanoid node indices.
     pub humanoid_nodes: HumanoidNodes,
 }
@@ -278,6 +292,21 @@ pub fn inspect_vrm<P: AsRef<Path>>(path: P) -> Result<VrmInspectionSummary, Mode
         }
     };
 
+    let material_root = serde_json::to_value(&json).map_err(|error| {
+        ModelImportError::GlbParse(format!("failed to inspect materials: {error}"))
+    })?;
+    let (mtoon_material_count, unlit_material_count, fallback_material_count) =
+        material_counts(&material_root, summary.generation, legacy);
+    summary.mtoon_material_count = mtoon_material_count;
+    summary.unlit_material_count = unlit_material_count;
+    summary.fallback_material_count = fallback_material_count;
+    let (spring_chain_count, spring_joint_count, spring_collider_count, spring_center_count) =
+        spring_counts(&material_root, summary.generation, legacy);
+    summary.spring_chain_count = spring_chain_count;
+    summary.spring_joint_count = spring_joint_count;
+    summary.spring_collider_count = spring_collider_count;
+    summary.spring_center_count = spring_center_count;
+
     summary.has_node_constraint =
         extensions.is_some_and(|ext| ext.contains_key("VRMC_node_constraint"));
     summary.has_mtoon_materials = match summary.generation {
@@ -291,6 +320,123 @@ pub fn inspect_vrm<P: AsRef<Path>>(path: P) -> Result<VrmInspectionSummary, Mode
     };
 
     Ok(summary)
+}
+
+fn material_counts(
+    root: &serde_json::Value,
+    generation: VrmGeneration,
+    legacy: Option<&serde_json::Value>,
+) -> (usize, usize, usize) {
+    let materials = root
+        .get("materials")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten();
+    let legacy_properties = legacy
+        .and_then(|value| value.get("materialProperties"))
+        .and_then(serde_json::Value::as_array);
+    let mut mtoon = 0;
+    let mut unlit = 0;
+    let mut fallback = 0;
+
+    for (index, material) in materials.enumerate() {
+        let shader = match generation {
+            VrmGeneration::Vrm0 => legacy_properties
+                .and_then(|properties| properties.get(index))
+                .and_then(|property| property.get("shader"))
+                .and_then(serde_json::Value::as_str),
+            VrmGeneration::Vrm1 => None,
+        };
+        let extensions = material
+            .get("extensions")
+            .and_then(serde_json::Value::as_object);
+        if shader.is_some_and(|shader| shader.contains("MToon"))
+            || extensions.is_some_and(|extensions| extensions.contains_key("VRMC_materials_mtoon"))
+        {
+            mtoon += 1;
+        } else if shader.is_some_and(|shader| shader.contains("Unlit"))
+            || extensions.is_some_and(|extensions| extensions.contains_key("KHR_materials_unlit"))
+        {
+            unlit += 1;
+        } else {
+            fallback += 1;
+        }
+    }
+    (mtoon, unlit, fallback)
+}
+
+fn spring_counts(
+    root: &serde_json::Value,
+    generation: VrmGeneration,
+    legacy: Option<&serde_json::Value>,
+) -> (usize, usize, usize, usize) {
+    let Some(extension) = (match generation {
+        VrmGeneration::Vrm0 => legacy.and_then(|value| value.get("secondaryAnimation")),
+        VrmGeneration::Vrm1 => root
+            .get("extensions")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|extensions| extensions.get("VRMC_springBone")),
+    }) else {
+        return (0, 0, 0, 0);
+    };
+
+    match generation {
+        VrmGeneration::Vrm0 => {
+            let groups = extension
+                .get("boneGroups")
+                .and_then(serde_json::Value::as_array);
+            let chains = groups.map_or(0, Vec::len);
+            let joints = groups
+                .into_iter()
+                .flatten()
+                .filter_map(|group| group.get("bones"))
+                .filter_map(serde_json::Value::as_array)
+                .map(Vec::len)
+                .sum();
+            let colliders = extension
+                .get("colliderGroups")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|group| group.get("colliders"))
+                .filter_map(serde_json::Value::as_array)
+                .map(Vec::len)
+                .sum();
+            let centers = groups
+                .into_iter()
+                .flatten()
+                .filter(|group| {
+                    group
+                        .get("center")
+                        .is_some_and(|center| center.as_i64() != Some(-1))
+                })
+                .count();
+            (chains, joints, colliders, centers)
+        }
+        VrmGeneration::Vrm1 => {
+            let springs = extension
+                .get("springs")
+                .and_then(serde_json::Value::as_array);
+            let chains = springs.map_or(0, Vec::len);
+            let joints = springs
+                .into_iter()
+                .flatten()
+                .filter_map(|spring| spring.get("joints"))
+                .filter_map(serde_json::Value::as_array)
+                .map(Vec::len)
+                .sum();
+            let colliders = extension
+                .get("colliders")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len);
+            let centers = springs
+                .into_iter()
+                .flatten()
+                .filter(|spring| spring.get("center").is_some_and(|center| !center.is_null()))
+                .count();
+            (chains, joints, colliders, centers)
+        }
+    }
 }
 
 fn inspect_vrm0(
@@ -362,6 +508,7 @@ fn inspect_vrm0(
         has_first_person: vrm.get("firstPerson").is_some(),
         has_mtoon_materials: false,
         humanoid_nodes: HumanoidNodes { hips, head, neck },
+        ..Default::default()
     })
 }
 
@@ -444,6 +591,7 @@ fn inspect_vrm1(
         has_first_person: vrmc.get("firstPerson").is_some(),
         has_mtoon_materials: false,
         humanoid_nodes: HumanoidNodes { hips, head, neck },
+        ..Default::default()
     })
 }
 

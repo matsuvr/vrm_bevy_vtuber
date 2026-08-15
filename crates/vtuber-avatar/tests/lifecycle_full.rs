@@ -10,6 +10,7 @@
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
+use bevy_vrm1::vrm::spring_bone::{SpringCenterNode, SpringColliders};
 
 use vtuber_avatar::bind::BindTriggered;
 use vtuber_avatar::binding::{AvatarBinding, bind_humanoid_bones};
@@ -146,6 +147,136 @@ fn count_active_markers(app: &mut App) -> usize {
         .query_filtered::<Entity, With<ActiveAvatar>>()
         .iter(app.world())
         .count()
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SyntheticGeneration {
+    Vrm0,
+    Vrm1,
+}
+
+fn spawn_generation_avatar_root(app: &mut App, generation: SyntheticGeneration) -> Entity {
+    let head = spawn_bone(app);
+    let root = app
+        .world_mut()
+        .spawn((
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            Visibility::Hidden,
+            Vrm,
+            VrmHandle(Handle::default()),
+            VrmCoordinateBasis(match generation {
+                SyntheticGeneration::Vrm0 => CoordinateBasis::Vrm0Y180,
+                SyntheticGeneration::Vrm1 => CoordinateBasis::Vrm1Identity,
+            }),
+            HeadBoneEntity(head),
+            ExpressionEntityMap(bevy::platform::collections::HashMap::new()),
+        ))
+        .id();
+
+    let parent = if matches!(generation, SyntheticGeneration::Vrm0) {
+        app.world_mut()
+            .spawn((
+                VrmBasisRoot,
+                VrmCoordinateBasis(CoordinateBasis::Vrm0Y180)
+                    .transform()
+                    .expect("VRM 0.x synthetic basis exists"),
+                GlobalTransform::IDENTITY,
+                ChildOf(root),
+            ))
+            .id()
+    } else {
+        root
+    };
+    app.world_mut().entity_mut(head).insert(ChildOf(parent));
+    app.world_mut().entity_mut(head).insert(SpringRoot {
+        joints: SpringJoints(vec![head]),
+        colliders: SpringColliders::default(),
+        center_node: SpringCenterNode::default(),
+        terminal_length: match generation {
+            SyntheticGeneration::Vrm0 => Some(0.07),
+            SyntheticGeneration::Vrm1 => None,
+        },
+    });
+    root
+}
+
+fn assert_generation_state(app: &mut App, root: Entity, generation: SyntheticGeneration) {
+    let expected_basis = match generation {
+        SyntheticGeneration::Vrm0 => CoordinateBasis::Vrm0Y180,
+        SyntheticGeneration::Vrm1 => CoordinateBasis::Vrm1Identity,
+    };
+    assert_eq!(
+        app.world().get::<VrmCoordinateBasis>(root).unwrap().0,
+        expected_basis
+    );
+    assert_eq!(count_active_markers(app), 1);
+    let basis_count = app
+        .world_mut()
+        .query_filtered::<Entity, With<VrmBasisRoot>>()
+        .iter(app.world())
+        .count();
+    assert_eq!(
+        basis_count,
+        if matches!(generation, SyntheticGeneration::Vrm0) {
+            1
+        } else {
+            0
+        }
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&SpringRoot>()
+            .iter(app.world())
+            .count(),
+        1
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&ExpressionEntityMap>()
+            .iter(app.world())
+            .count(),
+        1
+    );
+}
+
+fn assert_avatar_owned_state_empty(app: &mut App) {
+    let lifecycle = app.world().resource::<AvatarLifecycle>();
+    assert_eq!(lifecycle.state(), AvatarLifecycleState::NoAvatar);
+    assert!(lifecycle.active_root().is_none());
+    assert!(lifecycle.pending_root().is_none());
+    assert!(lifecycle.capabilities().is_none());
+    assert!(!lifecycle.has_active_generation());
+    assert_eq!(count_active_markers(app), 0);
+    assert_eq!(app.world_mut().query::<&Vrm>().iter(app.world()).count(), 0);
+    assert_eq!(
+        app.world_mut()
+            .query::<&VrmCoordinateBasis>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&VrmBasisRoot>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&SpringRoot>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&ExpressionEntityMap>()
+            .iter(app.world())
+            .count(),
+        0
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -521,4 +652,64 @@ fn full_lifecycle_snapshot_reflects_state() {
     assert_eq!(snap.state, AvatarLifecycleState::NoAvatar);
     assert!(snap.active_root.is_none());
     assert!(snap.capabilities.is_none());
+}
+
+/// Runs the revised Issue #31 transition matrix twice in one process. The
+/// synthetic roots carry the generation-specific runtime components that the
+/// real loader owns, so stale basis, expression, and SpringBone state is
+/// checked directly after every unload and replacement.
+#[test]
+fn generation_transition_matrix_has_no_stale_avatar_state() {
+    let sequences = vec![
+        vec![SyntheticGeneration::Vrm0],
+        vec![SyntheticGeneration::Vrm1],
+        vec![SyntheticGeneration::Vrm0, SyntheticGeneration::Vrm0],
+        vec![SyntheticGeneration::Vrm1, SyntheticGeneration::Vrm1],
+        vec![
+            SyntheticGeneration::Vrm1,
+            SyntheticGeneration::Vrm0,
+            SyntheticGeneration::Vrm1,
+        ],
+        vec![
+            SyntheticGeneration::Vrm0,
+            SyntheticGeneration::Vrm1,
+            SyntheticGeneration::Vrm0,
+        ],
+    ];
+
+    let mut app = test_app();
+    for _repetition in 0..2 {
+        for sequence in &sequences {
+            let mut previous_root = None;
+            for (index, generation) in sequence.iter().copied().enumerate() {
+                let root = spawn_generation_avatar_root(&mut app, generation);
+                if index == 0 {
+                    load_root(&mut app, root);
+                } else {
+                    app.world_mut()
+                        .resource_mut::<Messages<ReplaceAvatarRequest>>()
+                        .write(ReplaceAvatarRequest { root });
+                    app.update();
+                    assert!(
+                        previous_root
+                            .is_some_and(|previous| !app.world().entities().contains(previous)),
+                        "the previous avatar root must be gone after replacement"
+                    );
+                }
+
+                assert_generation_state(&mut app, root, generation);
+                simulate_initialized_and_bind(&mut app, root);
+                finish_ready(&mut app);
+                assert_ready(&app, root);
+                assert_generation_state(&mut app, root, generation);
+                previous_root = Some(root);
+            }
+
+            app.world_mut()
+                .resource_mut::<Messages<UnloadAvatarRequest>>()
+                .write(UnloadAvatarRequest);
+            app.update();
+            assert_avatar_owned_state_empty(&mut app);
+        }
+    }
 }

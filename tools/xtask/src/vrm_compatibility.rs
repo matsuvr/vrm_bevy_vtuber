@@ -4,7 +4,11 @@
 //! and writes a compatibility report. This is intentionally separate from the
 //! main app so that the runner can be executed as `cargo xtask vrm-compat`.
 
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 use bevy::app::{App, PluginGroup, Startup, Update};
 use bevy::asset::AssetPlugin;
@@ -29,6 +33,10 @@ pub const MAX_INIT_FRAMES: usize = 600;
 pub struct CompatibilityResult {
     /// Path to the model.
     pub path: PathBuf,
+    /// File size in bytes captured before loading.
+    pub file_size: u64,
+    /// SHA-256 captured before loading.
+    pub sha256: String,
     /// Preflight summary, if the file is a valid VRM 0.x/1.0 model.
     pub preflight: Result<vtuber_app::import::VrmInspectionSummary, String>,
     /// Runtime compatibility report, if the model loaded.
@@ -63,6 +71,8 @@ pub fn run(fixture_dir: impl AsRef<Path>) -> Result<Vec<CompatibilityResult>, St
                 let message = format!("runner error: {error}");
                 CompatibilityResult {
                     path: path.clone(),
+                    file_size: 0,
+                    sha256: String::new(),
                     preflight: Err(message.clone()),
                     runtime: None,
                     runner_error: Some(message),
@@ -76,21 +86,47 @@ pub fn run(fixture_dir: impl AsRef<Path>) -> Result<Vec<CompatibilityResult>, St
 
 /// Run the gate against a single model.
 pub fn run_single(path: &Path) -> Result<CompatibilityResult, String> {
+    let (file_size, sha256) = fingerprint(path)?;
     let preflight = inspect_vrm(path).map_err(|e| format!("{e}"));
 
     // If preflight fails, there is no point asking bevy_vrm1 to load it.
-    let runtime = if preflight.is_ok() {
-        Some(load_and_inspect(path)?)
+    let (runtime, runner_error) = if preflight.is_ok() {
+        match load_and_inspect(path) {
+            Ok(report) => (Some(report), None),
+            Err(error) => (None, Some(format!("runner error: {error}"))),
+        }
     } else {
-        None
+        (None, None)
     };
 
     Ok(CompatibilityResult {
         path: path.to_path_buf(),
+        file_size,
+        sha256,
         preflight,
         runtime,
-        runner_error: None,
+        runner_error,
     })
+}
+
+fn fingerprint(path: &Path) -> Result<(u64, String), String> {
+    let file_size = std::fs::metadata(path)
+        .map_err(|error| format!("failed to stat {}: {error}", path.display()))?
+        .len();
+    let mut file = File::open(path)
+        .map_err(|error| format!("failed to open {} for hashing: {error}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to hash {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok((file_size, format!("{:X}", hasher.finalize())))
 }
 
 fn load_and_inspect(path: &Path) -> Result<VrmCompatibilityReport, String> {

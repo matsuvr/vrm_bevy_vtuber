@@ -134,6 +134,17 @@ mod coordinate_basis_tests {
     }
 
     #[test]
+    fn legacy_basis_maps_source_front_to_canonical_front_without_reflection() {
+        let basis = VrmCoordinateBasis(CoordinateBasis::Vrm0Y180)
+            .transform()
+            .expect("legacy VRM requires a basis transform");
+
+        assert!((basis.rotation * Vec3::NEG_Z - Vec3::Z).length() < 1.0e-5);
+        assert!((basis.rotation * Vec3::Y - Vec3::Y).length() < 1.0e-5);
+        assert!(Mat3::from_quat(basis.rotation).determinant() > 0.0);
+    }
+
+    #[test]
     fn legacy_basis_is_a_child_and_keeps_application_root_identity() {
         let mut world = World::new();
         let application_root = world
