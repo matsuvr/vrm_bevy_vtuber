@@ -48,15 +48,24 @@ pub enum ModelImportError {
     /// GLB parse failure.
     #[error("MODEL_FILE_INVALID: failed to parse GLB: {0}")]
     GlbParse(String),
-    /// Missing or ambiguous VRM generation extension.
+    /// No supported VRM generation extension was found.
     #[error("MODEL_NOT_VRM: {reason}")]
     NotVrm {
+        /// Stable reason for diagnostics and user-facing error mapping.
+        reason: String,
+    },
+    /// Both VRM 0.x and VRM 1.0 root extensions were supplied.
+    #[error("MODEL_AMBIGUOUS_VRM_VERSION: {reason}")]
+    AmbiguousVrmVersion {
         /// Stable reason for diagnostics and user-facing error mapping.
         reason: String,
     },
     /// Unsupported VRM spec version.
     #[error("MODEL_UNSUPPORTED_VERSION: spec version {0}")]
     UnsupportedVersion(String),
+    /// A legacy human bone name occurred more than once.
+    #[error("MODEL_DUPLICATE_HUMAN_BONE: {0}")]
+    DuplicateHumanBone(String),
     /// Missing required humanoid bone.
     #[error("MODEL_MISSING_REQUIRED_BONE: {0}")]
     MissingRequiredBone(String),
@@ -93,6 +102,31 @@ pub enum ModelImportError {
     },
 }
 
+impl ModelImportError {
+    /// Returns the stable machine-readable import error code.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Io(_) => "MODEL_IO_ERROR",
+            Self::InvalidExtension
+            | Self::NotRegularFile
+            | Self::SizeExceeded { .. }
+            | Self::LimitExceedsHardCap { .. }
+            | Self::GlbParse(_)
+            | Self::ExternalUri(_)
+            | Self::InvalidNodeIndex { .. }
+            | Self::InvalidMeshIndex { .. }
+            | Self::InvalidMorphTargetIndex { .. }
+            | Self::InvalidVrmField { .. } => "MODEL_FILE_INVALID",
+            Self::NotVrm { .. } => "MODEL_NOT_VRM",
+            Self::AmbiguousVrmVersion { .. } => "MODEL_AMBIGUOUS_VRM_VERSION",
+            Self::UnsupportedVersion(_) => "MODEL_UNSUPPORTED_VERSION",
+            Self::DuplicateHumanBone(_) => "MODEL_DUPLICATE_HUMAN_BONE",
+            Self::MissingRequiredBone(_) => "MODEL_MISSING_REQUIRED_BONE",
+        }
+    }
+}
+
 /// Supported VRM generation detected by preflight.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -112,6 +146,9 @@ pub struct VrmInspectionSummary {
     pub generation: VrmGeneration,
     /// VRM spec version, or the stable `"0.x"` marker for VRM 0.x.
     pub spec_version: String,
+    /// VRM 0.x exporterVersion, retained independently of spec detection.
+    #[serde(default)]
+    pub exporter_version: Option<String>,
     /// Model name from the generation-specific metadata object.
     pub name: String,
     /// Authors from the generation-specific metadata object.
@@ -153,6 +190,9 @@ pub struct VrmInspectionSummary {
     pub spring_center_count: usize,
     /// Humanoid node indices.
     pub humanoid_nodes: HumanoidNodes,
+    /// Non-fatal source compatibility diagnostics.
+    #[serde(default)]
+    pub compatibility_warnings: Vec<vtuber_avatar::VrmCompatibilityWarning>,
 }
 
 /// Humanoid bone node indices.
@@ -285,7 +325,7 @@ pub fn inspect_vrm<P: AsRef<Path>>(path: P) -> Result<VrmInspectionSummary, Mode
 
     let mut summary = match (legacy, modern) {
         (Some(_), Some(_)) => {
-            return Err(ModelImportError::NotVrm {
+            return Err(ModelImportError::AmbiguousVrmVersion {
                 reason: "both VRM and VRMC_vrm extensions are present".into(),
             });
         }
@@ -306,6 +346,10 @@ pub fn inspect_vrm<P: AsRef<Path>>(path: P) -> Result<VrmInspectionSummary, Mode
     summary.mtoon_material_count = mtoon_material_count;
     summary.unlit_material_count = unlit_material_count;
     summary.fallback_material_count = fallback_material_count;
+    if let Some(legacy) = legacy {
+        summary.compatibility_warnings =
+            vtuber_avatar::collect_legacy_compatibility_warnings(&material_root, legacy);
+    }
     let (spring_chain_count, spring_joint_count, spring_collider_count, spring_center_count) =
         spring_counts(&material_root, summary.generation, legacy);
     summary.spring_chain_count = spring_chain_count;
@@ -356,12 +400,17 @@ fn material_counts(
         let extensions = material
             .get("extensions")
             .and_then(serde_json::Value::as_object);
-        if shader.is_some_and(|shader| shader.contains("MToon"))
-            || extensions.is_some_and(|extensions| extensions.contains_key("VRMC_materials_mtoon"))
+        if shader.is_some_and(|shader| {
+            vtuber_avatar::classify_legacy_shader(shader) == vtuber_avatar::LegacyShaderKind::MToon
+        }) || extensions
+            .is_some_and(|extensions| extensions.contains_key("VRMC_materials_mtoon"))
         {
             mtoon += 1;
-        } else if shader.is_some_and(|shader| shader.contains("Unlit"))
-            || extensions.is_some_and(|extensions| extensions.contains_key("KHR_materials_unlit"))
+        } else if shader.is_some_and(|shader| {
+            vtuber_avatar::classify_legacy_shader(shader)
+                == vtuber_avatar::LegacyShaderKind::SupportedUnlit
+        }) || extensions
+            .is_some_and(|extensions| extensions.contains_key("KHR_materials_unlit"))
         {
             unlit += 1;
         } else {
@@ -477,9 +526,16 @@ fn inspect_vrm0(
         .and_then(|bones| bones.as_array())
         .ok_or_else(|| ModelImportError::GlbParse("missing legacy humanoid.humanBones".into()))?;
     let node_count = document.nodes().len();
-    let hips = required_legacy_bone_index(human_bones, "hips", node_count)?;
-    let head = required_legacy_bone_index(human_bones, "head", node_count)?;
-    let neck = optional_legacy_bone_index(human_bones, "neck", node_count)?;
+    let indexed_bones = index_legacy_human_bones(human_bones, node_count)?;
+    let hips = indexed_bones
+        .get("hips")
+        .copied()
+        .ok_or_else(|| ModelImportError::MissingRequiredBone("hips".into()))?;
+    let head = indexed_bones
+        .get("head")
+        .copied()
+        .ok_or_else(|| ModelImportError::MissingRequiredBone("head".into()))?;
+    let neck = indexed_bones.get("neck").copied();
 
     validate_vrm0_first_person(document, vrm)?;
     validate_vrm0_expression_binds(document, vrm)?;
@@ -504,6 +560,11 @@ fn inspect_vrm0(
     Ok(VrmInspectionSummary {
         generation: VrmGeneration::Vrm0,
         spec_version: "0.x".into(),
+        exporter_version: vrm
+            .get("exporterVersion")
+            .or_else(|| vrm.get("meta").and_then(|meta| meta.get("exporterVersion")))
+            .and_then(|value| value.as_str())
+            .map(String::from),
         name,
         authors,
         license_url,
@@ -662,14 +723,14 @@ fn validate_vrm0_look_at(vrm: &serde_json::Value) -> Result<Option<String>, Mode
                 reason: "expected an object".into(),
             })?;
         for range in ["xRange", "yRange"] {
-            let valid = object
+            let value = object
                 .get(range)
                 .and_then(|value| value.as_f64())
-                .is_some_and(f64::is_finite);
-            if !valid {
+                .filter(|value| value.is_finite());
+            if value.is_none() || value.is_some_and(|value| value < 0.0) {
                 return Err(ModelImportError::InvalidVrmField {
                     path: format!("{path}.{range}"),
-                    reason: "expected a finite number".into(),
+                    reason: "expected a finite, non-negative number".into(),
                 });
             }
         }
@@ -687,6 +748,12 @@ fn validate_vrm0_look_at(vrm: &serde_json::Value) -> Result<Option<String>, Mode
                 return Err(ModelImportError::InvalidVrmField {
                     path: format!("{path}.curve"),
                     reason: "curve coefficients must be finite numbers".into(),
+                });
+            }
+            if values.len() % 4 != 0 {
+                return Err(ModelImportError::InvalidVrmField {
+                    path: format!("{path}.curve"),
+                    reason: "curve must contain groups of four coefficients".into(),
                 });
             }
         }
@@ -859,8 +926,14 @@ fn validate_vrm0_expression_binds(
 }
 
 fn normalize_legacy_expression_name(group: &serde_json::Value, group_index: usize) -> String {
-    let preset = group.get("presetName").and_then(|value| value.as_str());
-    let name = group.get("name").and_then(|value| value.as_str());
+    let preset = group
+        .get("presetName")
+        .and_then(|value| value.as_str())
+        .map(str::trim);
+    let name = group
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(str::trim);
     let source = preset
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"))
         .or(name)
@@ -890,34 +963,35 @@ fn normalize_legacy_expression_name(group: &serde_json::Value, group_index: usiz
     .into()
 }
 
-fn required_legacy_bone_index(
+fn index_legacy_human_bones(
     bones: &[serde_json::Value],
-    name: &str,
     node_count: usize,
-) -> Result<usize, ModelImportError> {
-    let index = bones
-        .iter()
-        .find(|bone| bone.get("bone").and_then(|value| value.as_str()) == Some(name))
-        .and_then(|bone| bone.get("node"))
-        .and_then(|node| node.as_u64())
-        .map(|node| node as usize)
-        .ok_or_else(|| ModelImportError::MissingRequiredBone(name.to_string()))?;
-    if index >= node_count {
-        return Err(ModelImportError::InvalidNodeIndex { index });
+) -> Result<std::collections::BTreeMap<String, usize>, ModelImportError> {
+    let mut indexed = std::collections::BTreeMap::new();
+    for bone in bones {
+        let name = bone
+            .get("bone")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| ModelImportError::InvalidVrmField {
+                path: "VRM.humanoid.humanBones[].bone".into(),
+                reason: "expected a bone name".into(),
+            })?;
+        let index = bone
+            .get("node")
+            .and_then(|node| node.as_u64())
+            .and_then(|node| usize::try_from(node).ok())
+            .ok_or_else(|| ModelImportError::InvalidVrmField {
+                path: format!("VRM.humanoid.humanBones[{name}].node"),
+                reason: "expected a non-negative integer".into(),
+            })?;
+        if index >= node_count {
+            return Err(ModelImportError::InvalidNodeIndex { index });
+        }
+        if indexed.insert(name.to_string(), index).is_some() {
+            return Err(ModelImportError::DuplicateHumanBone(name.to_string()));
+        }
     }
-    Ok(index)
-}
-
-fn optional_legacy_bone_index(
-    bones: &[serde_json::Value],
-    name: &str,
-    node_count: usize,
-) -> Result<Option<usize>, ModelImportError> {
-    match required_legacy_bone_index(bones, name, node_count) {
-        Ok(index) => Ok(Some(index)),
-        Err(ModelImportError::MissingRequiredBone(_)) => Ok(None),
-        Err(error) => Err(error),
-    }
+    Ok(indexed)
 }
 
 fn required_bone_index(
@@ -1140,7 +1214,8 @@ mod tests {
         "extensionsUsed": ["VRM"],
         "extensions": {
             "VRM": {
-                "meta": {"title": "Hermetic VRM 0.x", "author": "Legacy Author"},
+                "exporterVersion": "UniVRM 0.123",
+                "meta": {"title": "Hermetic VRM 0.x", "author": "Legacy Author", "exporterVersion": "nonstandard-meta"},
                 "humanoid": {
                     "humanBones": [
                         {"bone": "hips", "node": 0},
@@ -1153,7 +1228,7 @@ mod tests {
                     "firstPersonBoneOffset": {"x": 0.0, "y": 0.1, "z": 0.2},
                     "meshAnnotations": [{"mesh": 0, "firstPersonFlag": "Both"}],
                     "lookAtTypeName": "BlendShape",
-                    "lookAtHorizontalInner": {"curve": [0.0, 0.0, 1.0], "xRange": 90.0, "yRange": 10.0},
+                    "lookAtHorizontalInner": {"curve": [0.0, 0.0, 0.0, 0.0], "xRange": 90.0, "yRange": 10.0},
                     "lookAtHorizontalOuter": {"xRange": 90.0, "yRange": 10.0},
                     "lookAtVerticalDown": {"xRange": 90.0, "yRange": 10.0},
                     "lookAtVerticalUp": {"xRange": 90.0, "yRange": 10.0}
@@ -1242,7 +1317,8 @@ mod tests {
     fn generated_non_vrm_glb_is_rejected_with_generation_error() {
         let dir = TempDir::new().unwrap();
         let err = inspect_vrm(legacy_fixture(&dir)).unwrap_err();
-        assert!(matches!(err, ModelImportError::NotVrm { .. }));
+        assert!(matches!(&err, ModelImportError::NotVrm { .. }));
+        assert_eq!(err.code(), "MODEL_NOT_VRM");
     }
 
     #[test]
@@ -1259,6 +1335,7 @@ mod tests {
         let summary = inspect_vrm(vrm0_fixture(&dir)).expect("fixture should be valid VRM 0.x");
         assert_eq!(summary.generation, VrmGeneration::Vrm0);
         assert_eq!(summary.spec_version, "0.x");
+        assert_eq!(summary.exporter_version.as_deref(), Some("UniVRM 0.123"));
         assert_eq!(summary.name, "Hermetic VRM 0.x");
         assert_eq!(summary.authors, vec!["Legacy Author"]);
         assert_eq!(summary.look_at_type.as_deref(), Some("expression"));
@@ -1277,6 +1354,7 @@ mod tests {
         let summary = inspect_vrm(vrm1_fixture(&dir)).expect("fixture should be valid VRM 1.0");
         assert_eq!(summary.generation, VrmGeneration::Vrm1);
         assert_eq!(summary.spec_version, "1.0");
+        assert_eq!(summary.exporter_version, None);
         assert!(!summary.name.is_empty(), "model name should be present");
         assert!(summary.humanoid_nodes.hips < 1000);
         assert!(summary.humanoid_nodes.head < 1000);
@@ -1306,6 +1384,19 @@ mod tests {
     }
 
     #[test]
+    fn rejects_duplicate_legacy_human_bones_during_preflight() {
+        let dir = TempDir::new().unwrap();
+        let duplicate = VRM0_GLTF_JSON.replace(
+            "{\"bone\": \"head\", \"node\": 1}",
+            "{\"bone\": \"head\", \"node\": 1}, {\"bone\": \"head\", \"node\": 2}",
+        );
+        let path = write_glb_fixture(&dir, "duplicate-bone.vrm", &duplicate);
+        let err = inspect_vrm(path).unwrap_err();
+        assert!(matches!(&err, ModelImportError::DuplicateHumanBone(name) if name == "head"));
+        assert_eq!(err.code(), "MODEL_DUPLICATE_HUMAN_BONE");
+    }
+
+    #[test]
     fn accepts_legacy_bone_look_at_during_preflight() {
         let dir = TempDir::new().unwrap();
         let bone = VRM0_GLTF_JSON.replace(
@@ -1320,8 +1411,10 @@ mod tests {
     #[test]
     fn rejects_malformed_legacy_degree_map_during_preflight() {
         let dir = TempDir::new().unwrap();
-        let malformed =
-            VRM0_GLTF_JSON.replace("\"curve\": [0.0, 0.0, 1.0]", "\"curve\": \"not-an-array\"");
+        let malformed = VRM0_GLTF_JSON.replace(
+            "\"curve\": [0.0, 0.0, 0.0, 0.0]",
+            "\"curve\": \"not-an-array\"",
+        );
         let path = write_glb_fixture(&dir, "malformed-degree-map.vrm", &malformed);
         assert!(matches!(
             inspect_vrm(path),
@@ -1336,7 +1429,8 @@ mod tests {
         let both = VRM1_GLTF_JSON.replace("\"VRMC_vrm\": {", "\"VRM\": {}, \"VRMC_vrm\": {");
         let path = write_glb_fixture(&dir, "ambiguous.vrm", &both);
         let err = inspect_vrm(path).unwrap_err();
-        assert!(matches!(err, ModelImportError::NotVrm { .. }));
+        assert!(matches!(&err, ModelImportError::AmbiguousVrmVersion { .. }));
+        assert_eq!(err.code(), "MODEL_AMBIGUOUS_VRM_VERSION");
     }
 
     #[test]

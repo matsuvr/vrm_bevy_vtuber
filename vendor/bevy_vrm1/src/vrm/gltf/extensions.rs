@@ -4,8 +4,10 @@ pub mod vrmc_spring_bone;
 pub mod vrmc_vrm;
 
 pub use runtime_descriptor::{
-    CoordinateBasis, VrmFirstPerson, VrmFirstPersonFlag, VrmGeneration, VrmHumanoid, VrmLookAt,
-    VrmLookAtType, VrmMeshAnnotation, VrmMeta, VrmParseError, VrmRangeMap, VrmRuntimeDescriptor,
+    classify_legacy_shader, collect_legacy_compatibility_warnings, CoordinateBasis,
+    LegacyShaderKind, VrmFirstPerson, VrmFirstPersonFlag, VrmGeneration, VrmHumanoid, VrmLookAt,
+    Vrm0MetaDiagnostics, VrmCompatibilityWarning, VrmCompatibilityWarningCode, VrmLookAtType,
+    VrmMeshAnnotation, VrmMeta, VrmParseError, VrmRangeMap, VrmRuntimeDescriptor,
     parse_runtime_descriptor,
 };
 
@@ -148,7 +150,11 @@ fn normalized_legacy_vrm(
     });
 
     Ok(VrmcVrm {
-        expressions: normalized_legacy_expressions(legacy, root)?,
+        expressions: normalized_legacy_expressions(
+            legacy,
+            root,
+            &descriptor.compatibility_warnings,
+        )?,
         first_person,
         humanoid: Humanoid { human_bones },
         look_at,
@@ -176,6 +182,7 @@ fn normalized_legacy_vrm(
 fn normalized_legacy_expressions(
     legacy: &Value,
     root: &Value,
+    _compatibility_warnings: &[VrmCompatibilityWarning],
 ) -> AppResult<Option<Expressions>> {
     let groups = legacy
         .get("blendShapeMaster")
@@ -196,6 +203,7 @@ fn normalized_legacy_expressions(
             .get("binds")
             .and_then(Value::as_array)
             .map(|binds| {
+                let mut seen = BTreeSet::new();
                 binds
                     .iter()
                     .enumerate()
@@ -223,11 +231,17 @@ fn normalized_legacy_expressions(
                             ));
                         }
                         let nodes = mesh_instance_nodes(root, mesh, &format!("{path}.mesh"))?;
-                        Ok(nodes.into_iter().map(move |node| MorphTargetBind {
-                            index: morph_index,
-                            node,
-                            weight: weight / 100.0,
-                        }))
+                        let normalized = nodes
+                            .into_iter()
+                            .filter_map(|node| {
+                                seen.insert((node, morph_index)).then_some(MorphTargetBind {
+                                    index: morph_index,
+                                    node,
+                                    weight: weight / 100.0,
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        Ok(normalized.into_iter())
                     })
                     .collect::<AppResult<Vec<_>>>()
                     .map(|binds| binds.into_iter().flatten().collect())
@@ -254,8 +268,14 @@ fn normalized_legacy_expression_name(
     group: &Value,
     group_index: usize,
 ) -> Option<String> {
-    let preset = group.get("presetName").and_then(Value::as_str);
-    let name = group.get("name").and_then(Value::as_str);
+    let preset = group
+        .get("presetName")
+        .and_then(Value::as_str)
+        .map(str::trim);
+    let name = group
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim);
     let source = preset
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"))
         .or(name)
@@ -834,7 +854,7 @@ mod tests {
         ]);
         let legacy = json!({"blendShapeMaster": {"blendShapeGroups": groups}});
         let root = json!({"nodes": [], "meshes": []});
-        let expressions = normalized_legacy_expressions(&legacy, &root)
+        let expressions = normalized_legacy_expressions(&legacy, &root, &[])
             .expect("groups should parse")
             .expect("expressions should exist");
         for name in [

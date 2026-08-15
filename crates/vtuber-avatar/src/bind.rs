@@ -13,6 +13,7 @@ use std::time::Instant;
 use crate::lifecycle::{
     ActiveAvatar, AvatarLifecycle, AvatarLifecycleFailure, AvatarLifecycleState,
 };
+use crate::load::ExpectedVrmGeneration;
 
 /// Marker preventing a root from triggering the bind path more than once.
 ///
@@ -35,7 +36,11 @@ pub(crate) fn observe_initialized(
     asset_server: Res<AssetServer>,
     active_loading_handles: Query<(Entity, &VrmHandle), With<ActiveAvatar>>,
     newly_initialized: Query<
-        Entity,
+        (
+            Entity,
+            Option<&ExpectedVrmGeneration>,
+            Option<&VrmCoordinateBasis>,
+        ),
         (
             With<ActiveAvatar>,
             Added<Initialized>,
@@ -85,12 +90,26 @@ pub(crate) fn observe_initialized(
     // Transition to Binding once Initialized is observed exactly once on the
     // active root. The `Without<BindTriggered>` filter and `Added<Initialized>`
     // filter together ensure this path runs at most once per root.
-    for entity in newly_initialized.iter() {
+    for (entity, expected_generation, coordinate_basis) in newly_initialized.iter() {
         if lifecycle.active_root() != Some(entity) {
             continue;
         }
         if lifecycle.state() != AvatarLifecycleState::Loading {
             continue;
+        }
+        if let Some(expected) = expected_generation {
+            let detected = coordinate_basis.map(|basis| match basis.0 {
+                CoordinateBasis::Vrm0Y180 => ExpectedVrmGeneration::Vrm0,
+                CoordinateBasis::Vrm1Identity => ExpectedVrmGeneration::Vrm1,
+            });
+            if detected != Some(*expected) {
+                commands.entity(entity).remove::<ActiveAvatar>();
+                lifecycle.fail(AvatarLifecycleFailure::GenerationMismatch {
+                    expected: *expected,
+                    detected,
+                });
+                continue;
+            }
         }
         commands.entity(entity).insert(BindTriggered);
         lifecycle.start_binding(entity);
@@ -243,5 +262,52 @@ mod tests {
         assert_eq!(lifecycle.state(), AvatarLifecycleState::Failed);
         assert!(lifecycle.active_root().is_none());
         assert!(!app.world().entity(root).contains::<ActiveAvatar>());
+    }
+
+    #[test]
+    fn expected_and_runtime_generation_must_match() {
+        for (expected, detected, should_bind) in [
+            (ExpectedVrmGeneration::Vrm0, CoordinateBasis::Vrm0Y180, true),
+            (
+                ExpectedVrmGeneration::Vrm1,
+                CoordinateBasis::Vrm1Identity,
+                true,
+            ),
+            (
+                ExpectedVrmGeneration::Vrm0,
+                CoordinateBasis::Vrm1Identity,
+                false,
+            ),
+            (
+                ExpectedVrmGeneration::Vrm1,
+                CoordinateBasis::Vrm0Y180,
+                false,
+            ),
+        ] {
+            let mut app = test_app();
+            let root = spawn_active_root(&mut app);
+            app.world_mut().entity_mut(root).insert((
+                expected,
+                VrmCoordinateBasis(detected),
+                Initialized,
+            ));
+            app.world_mut()
+                .resource_mut::<AvatarLifecycle>()
+                .request_load(root)
+                .unwrap();
+            app.update();
+
+            let lifecycle = app.world().resource::<AvatarLifecycle>();
+            if should_bind {
+                assert_eq!(lifecycle.state(), AvatarLifecycleState::Binding);
+                assert!(lifecycle.failure().is_none());
+            } else {
+                assert_eq!(lifecycle.state(), AvatarLifecycleState::Failed);
+                assert!(matches!(
+                    lifecycle.failure(),
+                    Some(AvatarLifecycleFailure::GenerationMismatch { .. })
+                ));
+            }
+        }
     }
 }

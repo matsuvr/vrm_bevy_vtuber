@@ -15,8 +15,8 @@ use vtuber_app::inference_runtime::InferenceProjectRoot;
 use vtuber_app::orchestrator::Orchestrator;
 use vtuber_app::ui::UiShellPlugin;
 use vtuber_avatar::{
-    AvatarAssetId, ImportedAvatar, LoadImportedAvatarRequest, StartupModelPath, UserAssetPath,
-    VtuberAvatarPlugin,
+    AvatarAssetId, ExpectedVrmGeneration, ImportedAvatar, LoadImportedAvatarRequest,
+    StartupModelPath, UserAssetPath, VtuberAvatarPlugin,
 };
 
 fn main() {
@@ -30,7 +30,15 @@ fn main() {
             Ok(model) => {
                 let id = AvatarAssetId::new(&model.id);
                 match UserAssetPath::avatar_model_path(&id) {
-                    Ok(asset_path) => Some(ImportedAvatar::new(id, asset_path, model.name.clone())),
+                    Ok(asset_path) => Some(ImportedAvatar::new(
+                        id,
+                        asset_path,
+                        model.name.clone(),
+                        match model.summary.generation {
+                            import::VrmGeneration::Vrm0 => ExpectedVrmGeneration::Vrm0,
+                            import::VrmGeneration::Vrm1 => ExpectedVrmGeneration::Vrm1,
+                        },
+                    )),
                     Err(e) => {
                         eprintln!("Failed to construct user asset path for CLI model: {e}");
                         None

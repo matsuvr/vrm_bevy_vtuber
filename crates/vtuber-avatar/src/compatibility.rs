@@ -36,6 +36,8 @@ type InitializedVrmBones<'w, 's> = (
 /// Resource populated once a VRM has been inspected.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct VrmCompatibilityReport {
+    /// Active runtime root owning this report.
+    pub root: Option<Entity>,
     /// Generation selected by the runtime normalization boundary.
     pub generation: Option<VrmGeneration>,
     /// Whether a `Vrm` component was observed.
@@ -58,6 +60,8 @@ pub struct VrmCompatibilityReport {
     pub has_body_tracking_component: bool,
     /// Number of `SpringRoot` components found (proxy for SpringBone presence).
     pub spring_root_count: usize,
+    /// Typed warnings from the active source generation only.
+    pub warnings: Vec<VrmCompatibilityWarning>,
 }
 
 impl VrmCompatibilityReport {
@@ -92,10 +96,15 @@ impl VrmCompatibilityReport {
 fn inspect_initialized_vrm(
     mut report: ResMut<VrmCompatibilityReport>,
     vrms: Query<InitializedVrmBones, (With<Vrm>, Added<Initialized>)>,
+    all_vrms: Query<Entity, With<Vrm>>,
+    diagnostics: Query<&VrmCompatibilityDiagnostics>,
     spring_roots: Query<&SpringRoot>,
 ) {
+    if report.root.is_some_and(|root| !all_vrms.contains(root)) {
+        *report = VrmCompatibilityReport::default();
+    }
     for (
-        _entity,
+        entity,
         coordinate_basis,
         head,
         neck,
@@ -106,6 +115,7 @@ fn inspect_initialized_vrm(
         body_tracking,
     ) in vrms.iter()
     {
+        report.root = Some(entity);
         report.vrm_loaded = true;
         report.initialized = true;
         report.generation = coordinate_basis.map(|basis| match basis.0 {
@@ -119,6 +129,10 @@ fn inspect_initialized_vrm(
         report.has_look_at_component = look_at.is_some();
         report.has_body_tracking_component = body_tracking.is_some();
         report.spring_root_count = spring_roots.iter().count();
+        report.warnings = diagnostics
+            .get(entity)
+            .map(|diagnostics| diagnostics.warnings.clone())
+            .unwrap_or_default();
 
         if let Some(map) = expression_map {
             report.expressions = map
@@ -163,5 +177,46 @@ mod tests {
             ..Default::default()
         };
         assert!(report.is_mvp_capable());
+    }
+
+    #[test]
+    fn warnings_are_cleared_when_the_active_runtime_root_is_replaced() {
+        let mut app = App::new();
+        app.init_resource::<VrmCompatibilityReport>()
+            .add_systems(Update, inspect_initialized_vrm);
+        let root = app
+            .world_mut()
+            .spawn((
+                Vrm,
+                Initialized,
+                VrmCoordinateBasis(CoordinateBasis::Vrm0Y180),
+                VrmCompatibilityDiagnostics {
+                    generation: VrmGeneration::Vrm0,
+                    legacy_meta: None,
+                    warnings: vec![VrmCompatibilityWarning::new(
+                        VrmCompatibilityWarningCode::EmptyLegacyExpressionName,
+                        "old-root",
+                    )],
+                },
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<VrmCompatibilityReport>().root,
+            Some(root)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<VrmCompatibilityReport>()
+                .warnings
+                .len(),
+            1
+        );
+
+        app.world_mut().entity_mut(root).despawn();
+        app.update();
+        let report = app.world().resource::<VrmCompatibilityReport>();
+        assert_eq!(report.root, None);
+        assert!(report.warnings.is_empty());
     }
 }

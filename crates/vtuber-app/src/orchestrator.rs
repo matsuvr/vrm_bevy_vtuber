@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 
 use crate::actions::UiAction;
+use crate::import::VrmGeneration;
 use crate::import::{self, ImportedModel, ModelImportError};
 use crate::preview::PreviewState;
 use crate::ui::UiState;
@@ -554,7 +555,13 @@ fn format_import_error(error: &ModelImportError) -> String {
         ModelImportError::NotVrm { reason } => {
             format!("File is not a supported VRM model: {reason}")
         }
+        ModelImportError::AmbiguousVrmVersion { reason } => {
+            format!("Model declares both VRM generations: {reason}")
+        }
         ModelImportError::UnsupportedVersion(v) => format!("Unsupported VRM version: {v}"),
+        ModelImportError::DuplicateHumanBone(bone) => {
+            format!("Duplicate human bone declaration: {bone}")
+        }
         ModelImportError::MissingRequiredBone(bone) => format!("Missing required bone: {bone}"),
         ModelImportError::GlbParse(msg) => format!("Failed to parse model: {msg}"),
         ModelImportError::ExternalUri(uri) => format!("External URI not allowed: {uri}"),
@@ -669,8 +676,16 @@ pub fn sync_avatar_lifecycle_system(
 
         match asset_path {
             Ok(path) => {
-                let imported =
-                    vtuber_avatar::ImportedAvatar::new(id, path, pending.model.name.clone());
+                let expected_generation = match pending.model.summary.generation {
+                    VrmGeneration::Vrm0 => vtuber_avatar::ExpectedVrmGeneration::Vrm0,
+                    VrmGeneration::Vrm1 => vtuber_avatar::ExpectedVrmGeneration::Vrm1,
+                };
+                let imported = vtuber_avatar::ImportedAvatar::new(
+                    id,
+                    path,
+                    pending.model.name.clone(),
+                    expected_generation,
+                );
                 load_requests.write(vtuber_avatar::LoadImportedAvatarRequest {
                     request_id: pending.request_id,
                     imported,

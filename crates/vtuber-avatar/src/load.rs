@@ -158,6 +158,15 @@ impl AssetPathError {
 }
 
 /// The engine-facing description of an imported avatar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Component)]
+pub enum ExpectedVrmGeneration {
+    /// The preflight source was VRM 0.x.
+    Vrm0,
+    /// The preflight source was VRM 1.0.
+    Vrm1,
+}
+
+/// The engine-facing description of an imported avatar.
 #[derive(Clone, Debug, PartialEq, Eq, Component)]
 pub struct ImportedAvatar {
     /// Stable asset identifier.
@@ -166,16 +175,24 @@ pub struct ImportedAvatar {
     pub asset_path: UserAssetPath,
     /// User-facing model name.
     pub name: String,
+    /// Generation established by app-side preflight.
+    pub expected_generation: ExpectedVrmGeneration,
 }
 
 impl ImportedAvatar {
     /// Creates a new imported avatar descriptor.
     #[must_use]
-    pub fn new(id: AvatarAssetId, asset_path: UserAssetPath, name: impl Into<String>) -> Self {
+    pub fn new(
+        id: AvatarAssetId,
+        asset_path: UserAssetPath,
+        name: impl Into<String>,
+        expected_generation: ExpectedVrmGeneration,
+    ) -> Self {
         Self {
             id,
             asset_path,
             name: name.into(),
+            expected_generation,
         }
     }
 }
@@ -337,6 +354,7 @@ pub(crate) fn handle_load_imported_avatar_requests(
                     request_id: request.request_id,
                 },
                 request.imported.id.clone(),
+                request.imported.expected_generation,
                 VrmHandle(asset_server.load(asset_path)),
                 Transform::default(),
                 GlobalTransform::default(),
@@ -421,7 +439,12 @@ mod tests {
         let asset_path = UserAssetPath::avatar_model_path(&id).expect("test path is valid");
         LoadImportedAvatarRequest {
             request_id,
-            imported: ImportedAvatar::new(id, asset_path, "Test Model"),
+            imported: ImportedAvatar::new(
+                id,
+                asset_path,
+                "Test Model",
+                ExpectedVrmGeneration::Vrm1,
+            ),
         }
     }
 

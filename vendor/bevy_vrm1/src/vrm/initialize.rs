@@ -10,7 +10,9 @@ use crate::vrm::node_constraint::initialize::RequestInitializeNodeConstraints;
 use crate::vrm::node_constraint::registry::NodeConstraintRegistry;
 use crate::vrm::spring_bone::initialize::RequestInitializeSpringBone;
 use crate::vrm::spring_bone::registry::*;
-use crate::vrm::{Initialized, Vrm, VrmBasisRoot, VrmCoordinateBasis, VrmPath};
+use crate::vrm::{
+    Initialized, Vrm, VrmBasisRoot, VrmCompatibilityDiagnostics, VrmCoordinateBasis, VrmPath,
+};
 use crate::vrma::Vrma;
 use crate::vrma::animation::animation_graph::RequestUpdateAnimationGraph;
 use bevy::app::{App, Update};
@@ -83,6 +85,11 @@ fn spawn_vrm(
         cmd.insert((
             Vrm,
             VrmCoordinateBasis(coordinate_basis),
+            VrmCompatibilityDiagnostics {
+                generation: extensions.runtime_descriptor.generation,
+                legacy_meta: extensions.runtime_descriptor.legacy_meta.clone(),
+                warnings: extensions.runtime_descriptor.compatibility_warnings.clone(),
+            },
             Name::new(extensions.name().unwrap_or_else(|| "VRM".to_string())),
             Transform::IDENTITY,
             GlobalTransform::IDENTITY,
