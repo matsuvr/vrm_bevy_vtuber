@@ -356,7 +356,13 @@ fn normalized_legacy_spring_bone(
                     node,
                     shape: crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape::Sphere(
                         Sphere {
-                            offset: legacy_vector(offset),
+                            // VRM 0.x collider offsets are already local to
+                            // the target node. The normalized scene is placed
+                            // below one Y=pi basis root, so converting this
+                            // local value would apply the basis twice. Gravity
+                            // is handled separately as an external/world
+                            // vector below.
+                            offset,
                             radius,
                         },
                     ),
@@ -764,6 +770,8 @@ pub(crate) fn obtain_vrmc_vrm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::prelude::{Quat, Vec3};
+    use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
     use serde_json::json;
 
     #[test]
@@ -904,7 +912,58 @@ mod tests {
             Some([-1.0, -1.0, -0.25])
         );
         assert_eq!(spring.colliders.len(), 1);
+        assert_eq!(
+            spring.colliders[0].shape,
+            ColliderShape::Sphere(Sphere {
+                offset: [0.1, 0.2, 0.3],
+                radius: 0.04,
+            })
+        );
         assert_eq!(spring.spring_colliders(&[0, 9]).len(), 1);
+    }
+
+    #[test]
+    fn legacy_collider_offset_gets_basis_once_at_world_boundary() {
+        let source_offset = [0.25, 0.5, -0.75];
+        let root = json!({
+            "nodes": [{}, {}, {}],
+            "extensions": {}
+        });
+        let legacy = json!({
+            "secondaryAnimation": {
+                "colliderGroups": [{
+                    "node": 1,
+                    "colliders": [{
+                        "offset": {"x": 0.25, "y": 0.5, "z": -0.75},
+                        "radius": 0.1
+                    }]
+                }]
+            }
+        });
+        let spring = normalized_legacy_spring_bone(&root, &legacy)
+            .expect("collider should parse")
+            .expect("collider should exist");
+        let sphere = match spring.colliders[0].shape {
+            ColliderShape::Sphere(sphere) => sphere,
+            ColliderShape::Capsule(_) => panic!("legacy collider must normalize to a sphere"),
+        };
+        assert_eq!(sphere.offset, source_offset);
+
+        let basis = Quat::from_rotation_y(std::f32::consts::PI);
+        let world = basis * Vec3::from(source_offset);
+        assert!((world - Vec3::new(-0.25, 0.5, 0.75)).length() < 1.0e-5);
+        let double_converted_world = basis * Vec3::from([
+            -source_offset[0],
+            source_offset[1],
+            -source_offset[2],
+        ]);
+        assert!((double_converted_world - Vec3::from(source_offset)).length() < 1.0e-5);
+    }
+
+    #[test]
+    fn legacy_gravity_basis_is_applied_once_for_vertical_and_horizontal_vectors() {
+        assert_eq!(legacy_gravity_direction([0.0, 1.0, 0.0]), [0.0, 1.0, 0.0]);
+        assert_eq!(legacy_gravity_direction([1.0, 0.0, 0.25]), [-1.0, 0.0, -0.25]);
     }
 
     #[test]
