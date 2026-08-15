@@ -43,7 +43,8 @@ fn main() {
                     let mut failed = 0;
                     for result in &results {
                         print_result(result);
-                        if result.preflight.is_err()
+                        if result.runner_error.is_some()
+                            || result.preflight.is_err()
                             || result.runtime.as_ref().is_some_and(|r| !r.is_mvp_capable())
                         {
                             failed += 1;
@@ -159,27 +160,135 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
         .unwrap_or_default()
         .to_string_lossy();
     println!("=== {name} ===");
+    println!("  machine:");
+    println!("    file_size={}", result.file_size);
+    println!("    sha256={}", result.sha256);
     match &result.preflight {
         Ok(summary) => {
             println!("  preflight: ok");
+            println!("    generation: {:?}", summary.generation);
             println!("    name: {}", summary.name);
             println!("    specVersion: {}", summary.spec_version);
             println!("    expressions: {:?}", summary.expression_presets);
             println!("    lookAt type: {:?}", summary.look_at_type);
             println!("    springBone: {}", summary.has_spring_bone);
+            println!(
+                "    material counts: mtoon={}, unlit={}, fallback={}",
+                summary.mtoon_material_count,
+                summary.unlit_material_count,
+                summary.fallback_material_count
+            );
+            println!(
+                "    spring source-declared inventory: groups_or_springs={}, joint_or_root_references={}, colliders={}, centers={}",
+                summary.spring_chain_count,
+                summary.spring_joint_count,
+                summary.spring_collider_count,
+                summary.spring_center_count
+            );
+            println!("    machine.parse=pass");
+            println!("    machine.external_uri_gate=pass");
+            println!("    machine.generation={:?}", summary.generation);
+            println!("    machine.spec_version={}", summary.spec_version);
+            println!("    machine.name={:?}", summary.name);
+            println!(
+                "    machine.expression_preset_count={}",
+                summary.expression_presets.len()
+            );
+            println!(
+                "    machine.expression_presets={:?}",
+                summary.expression_presets
+            );
+            println!("    machine.look_at_type={:?}", summary.look_at_type);
+            println!("    machine.has_spring_bone={}", summary.has_spring_bone);
+            println!(
+                "    machine.has_node_constraint={}",
+                summary.has_node_constraint
+            );
+            println!("    machine.has_first_person={}", summary.has_first_person);
+            println!(
+                "    machine.has_mtoon_materials={}",
+                summary.has_mtoon_materials
+            );
+            println!(
+                "    machine.required_humanoid_hips={}",
+                summary.humanoid_nodes.hips
+            );
+            println!(
+                "    machine.required_humanoid_head={}",
+                summary.humanoid_nodes.head
+            );
+            println!(
+                "    machine.optional_humanoid_neck={:?}",
+                summary.humanoid_nodes.neck
+            );
+            println!(
+                "    machine.material_mtoon_count={}",
+                summary.mtoon_material_count
+            );
+            println!(
+                "    machine.material_unlit_count={}",
+                summary.unlit_material_count
+            );
+            println!(
+                "    machine.material_fallback_count={}",
+                summary.fallback_material_count
+            );
+            println!("    machine.spring_inventory_semantics=source_declared_inventory");
+            println!(
+                "    machine.spring_chain_count={}",
+                summary.spring_chain_count
+            );
+            println!(
+                "    machine.spring_joint_count={}",
+                summary.spring_joint_count
+            );
+            println!(
+                "    machine.spring_collider_count={}",
+                summary.spring_collider_count
+            );
+            println!(
+                "    machine.spring_center_count={}",
+                summary.spring_center_count
+            );
+            println!("    machine.warnings=0");
         }
-        Err(e) => println!("  preflight: FAIL ({e})"),
+        Err(e) => {
+            println!("  preflight: FAIL ({e})");
+            println!("    machine.parse=fail");
+            println!("    machine.external_uri_gate=not_evaluated");
+            println!("    machine.warnings=1");
+        }
     }
     if let Some(report) = &result.runtime {
         println!("  runtime:");
         println!("    initialized: {}", report.initialized);
+        println!("    generation: {:?}", report.generation);
         println!("    head: {}", report.has_head);
         println!("    neck: {}", report.has_neck);
         println!("    leftEye: {}", report.has_left_eye);
         println!("    rightEye: {}", report.has_right_eye);
         println!("    expressions: {:?}", report.expressions);
+        println!("    spring roots: {}", report.spring_root_count);
         println!("    mvp capable: {}", report.is_mvp_capable());
+        println!("    machine.initialize=pass");
+        println!(
+            "    machine.runtime_spring_root_count={}",
+            report.spring_root_count
+        );
+        println!("    machine.initialized={}", report.initialized);
+        println!("    machine.generation={:?}", report.generation);
+        println!("    machine.head={}", report.has_head);
+        println!("    machine.neck={}", report.has_neck);
+        println!("    machine.left_eye={}", report.has_left_eye);
+        println!("    machine.right_eye={}", report.has_right_eye);
+        println!("    machine.expression_count={}", report.expressions.len());
+        println!("    machine.expressions={:?}", report.expressions);
+        println!("    machine.mvp_capable={}", report.is_mvp_capable());
     } else {
         println!("  runtime: skipped");
+        println!("    machine.initialize=not_run");
+    }
+    if let Some(error) = &result.runner_error {
+        println!("  runner: FAIL ({error})");
     }
 }

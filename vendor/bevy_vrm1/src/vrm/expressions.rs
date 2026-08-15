@@ -7,7 +7,6 @@ use crate::vrma::RetargetSource;
 use bevy::animation::{AnimatedBy, AnimationTargetId};
 use bevy::app::Plugin;
 use bevy::asset::{Assets, Handle};
-use bevy::gltf::GltfNode;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
@@ -90,7 +89,7 @@ pub(crate) struct ExpressionMetadata {
 
 #[derive(Reflect, Debug, Clone)]
 pub(crate) struct ExpressionNode {
-    pub name: Name,
+    pub node_index: usize,
     pub morph_target_index: usize,
     pub weight: f32,
 }
@@ -319,11 +318,7 @@ pub(crate) struct RetargetExpressionNodes(pub(crate) Vec<BindExpressionNode>);
 pub(crate) struct VrmExpressionRegistry(pub(crate) HashMap<VrmExpression, ExpressionMetadata>);
 
 impl VrmExpressionRegistry {
-    pub fn new(
-        extensions: &VrmExtensions,
-        node_assets: &Assets<GltfNode>,
-        nodes: &[Handle<GltfNode>],
-    ) -> Self {
+    pub fn new(extensions: &VrmExtensions) -> Self {
         let Some(expressions) = extensions.vrmc_vrm.expressions.as_ref() else {
             return Self(HashMap::default());
         };
@@ -335,12 +330,7 @@ impl VrmExpressionRegistry {
                     let expression_nodes = preset
                         .morph_target_binds
                         .as_ref()
-                        .map(|binds| {
-                            binds
-                                .iter()
-                                .filter_map(|bind| convert_to_node(bind, node_assets, nodes))
-                                .collect::<Vec<_>>()
-                        })
+                        .map(|binds| binds.iter().map(convert_to_node).collect::<Vec<_>>())
                         .unwrap_or_default();
                     let metadata = ExpressionMetadata {
                         nodes: expression_nodes,
@@ -389,18 +379,12 @@ impl Plugin for VrmExpressionPlugin {
     }
 }
 
-fn convert_to_node(
-    bind: &MorphTargetBind,
-    node_assets: &Assets<GltfNode>,
-    nodes: &[Handle<GltfNode>],
-) -> Option<ExpressionNode> {
-    let node_handle = nodes.get(bind.node)?;
-    let node = node_assets.get(node_handle)?;
-    Some(ExpressionNode {
-        name: Name::new(node.name.clone()),
+fn convert_to_node(bind: &MorphTargetBind) -> ExpressionNode {
+    ExpressionNode {
+        node_index: bind.node,
         morph_target_index: bind.index,
         weight: bind.weight,
-    })
+    }
 }
 
 fn apply_initialize_expressions(
@@ -632,7 +616,7 @@ fn obtain_expression_nodes(
         .iter()
         .flat_map(|node| {
             Some(BindExpressionNode {
-                expression_entity: searcher.find_from_name(vrm_entity, &node.name)?,
+                expression_entity: searcher.find_from_node_index(vrm_entity, node.node_index)?,
                 index: node.morph_target_index,
                 weight: node.weight,
             })
@@ -663,12 +647,12 @@ mod tests {
     }
 
     fn simple_metadata(
-        name: &str,
+        _name: &str,
         index: usize,
     ) -> ExpressionMetadata {
         ExpressionMetadata {
             nodes: vec![ExpressionNode {
-                name: Name::new(name.to_string()),
+                node_index: 0,
                 morph_target_index: index,
                 weight: 1.0,
             }],
@@ -691,7 +675,7 @@ mod tests {
                     .collect(),
             ),))
             .with_children(|c| {
-                c.spawn(Name::new("Test"));
+                c.spawn((Name::new("Test"), VrmNodeIndex(0)));
             })
             .id();
 
@@ -726,7 +710,7 @@ mod tests {
                     .collect(),
             ),))
             .with_children(|c| {
-                c.spawn(Name::new("Test"));
+                c.spawn((Name::new("Test"), VrmNodeIndex(0)));
             })
             .id();
 
@@ -765,7 +749,7 @@ mod tests {
                     .collect(),
             ),))
             .with_children(|c| {
-                c.spawn(Name::new("Test"));
+                c.spawn((Name::new("Test"), VrmNodeIndex(0)));
             })
             .id();
 
@@ -797,7 +781,7 @@ mod tests {
                     .collect(),
             ),))
             .with_children(|c| {
-                c.spawn(Name::new("Test"));
+                c.spawn((Name::new("Test"), VrmNodeIndex(0)));
             })
             .id();
 

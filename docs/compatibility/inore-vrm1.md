@@ -1,4 +1,9 @@
-# VRM 1.0 Model Compatibility Report
+# Historical VRM 1.0 Model Compatibility Report (2026-08-06)
+
+This report predates ADR-011 and records the VRM 1.0-only runtime revision at
+that time. It is retained as historical evidence; current VRM 0.x/1.0 scope
+and the Issue #31 gate are recorded in
+`docs/compatibility/vrm-0x-1x-2026-08-14.md`.
 
 ## Identification
 
@@ -92,4 +97,5 @@
 - Known limitations:
   - `bevy_vrm1` pinned revision で `LookAtType::Expression` は `todo!()` のため使用不可。
   - 本モデルは `lookAt.type = bone` かつ look-direction Expression preset を持たないため、MVP gaze は eye bone 直接制御に依存する。
-  - VRM 0.x モデル（`tsukuyomi-chan.vrm`）は `bevy_vrm1` 対象外。G0-03 preflight で拒否する。
+  - VRM 0.x support was outside the scope of this historical run. Current
+    generation normalization is governed by ADR-011.

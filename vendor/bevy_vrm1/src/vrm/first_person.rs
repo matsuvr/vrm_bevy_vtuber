@@ -28,7 +28,6 @@ use bevy::ecs::{
     resource::Resource,
     system::{Commands, Query, Res, ResMut},
 };
-use bevy::gltf::GltfNode;
 use bevy::mesh::morph::MeshMorphWeights;
 use bevy::mesh::{Indices, Mesh, Mesh3d, skinning::SkinnedMesh};
 use bevy::pbr::MeshMaterial3d;
@@ -55,26 +54,20 @@ impl Plugin for VrmFirstPersonPlugin {
     }
 }
 
-/// Holds `(node name, firstPersonFlag)` pairs from `VRMC_vrm.firstPerson.meshAnnotations`.
+/// Holds `(source glTF node index, firstPersonFlag)` pairs from
+/// `VRMC_vrm.firstPerson.meshAnnotations`.
 #[derive(Component, Deref, Reflect, Default)]
-pub struct FirstPersonRegistry(Vec<(Name, FirstPersonFlag)>);
+pub struct FirstPersonRegistry(Vec<(usize, FirstPersonFlag)>);
 
 impl FirstPersonRegistry {
-    pub fn new(
-        first_person: Option<&FirstPerson>,
-        node_assets: &Assets<GltfNode>,
-        nodes: &[Handle<GltfNode>],
-    ) -> Self {
+    pub fn new(first_person: Option<&FirstPerson>) -> Self {
         let Some(fp) = first_person else {
             return Self::default();
         };
         Self(
             fp.mesh_annotations
                 .iter()
-                .filter_map(|a| {
-                    let node = node_assets.get(nodes.get(a.node)?)?;
-                    Some((Name::new(node.name.clone()), a.first_person_flag))
-                })
+                .map(|annotation| (annotation.node, annotation.first_person_flag))
                 .collect(),
         )
     }
@@ -168,8 +161,8 @@ fn apply_enable_first_person(
 
     // Mesh entities already covered by an explicit annotation.
     let mut covered = HashSet::new();
-    for (name, flag) in registry.iter() {
-        let Some(node) = searcher.find_from_name(vrm, name.as_str()) else {
+    for (node_index, flag) in registry.iter() {
+        let Some(node) = searcher.find_from_node_index(vrm, *node_index) else {
             continue;
         };
         for mesh_entity in descendants_with_mesh(node, &children, &meshes) {

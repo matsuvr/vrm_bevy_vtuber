@@ -401,6 +401,7 @@ impl Orchestrator {
 
         // Avatar — imported model summary for display.
         vm.avatar.imported_model = self.imported_model.as_ref().map(|m| ImportedModelSummary {
+            generation: m.summary.generation,
             id: m.id.clone(),
             name: m.name.clone(),
             original_path: m.original_path.clone(),
@@ -550,13 +551,22 @@ fn format_import_error(error: &ModelImportError) -> String {
         ModelImportError::SizeExceeded { size, limit } => {
             format!("File size ({size} bytes) exceeds limit ({limit} bytes)")
         }
-        ModelImportError::NotVrm1 => "File is not a VRM 1.0 model".to_string(),
+        ModelImportError::NotVrm { reason } => {
+            format!("File is not a supported VRM model: {reason}")
+        }
         ModelImportError::UnsupportedVersion(v) => format!("Unsupported VRM version: {v}"),
         ModelImportError::MissingRequiredBone(bone) => format!("Missing required bone: {bone}"),
         ModelImportError::GlbParse(msg) => format!("Failed to parse model: {msg}"),
         ModelImportError::ExternalUri(uri) => format!("External URI not allowed: {uri}"),
         ModelImportError::InvalidNodeIndex { index } => {
             format!("Invalid node index: {index}")
+        }
+        ModelImportError::InvalidMeshIndex { index } => format!("Invalid mesh index: {index}"),
+        ModelImportError::InvalidMorphTargetIndex { mesh, index } => {
+            format!("Invalid morph target index {index} for mesh {mesh}")
+        }
+        ModelImportError::InvalidVrmField { path, reason } => {
+            format!("Invalid VRM field {path}: {reason}")
         }
         ModelImportError::Io(e) => format!("I/O error: {e}"),
         ModelImportError::LimitExceedsHardCap { .. } => "Configuration error".to_string(),
@@ -879,10 +889,12 @@ mod tests {
     }
 
     #[test]
-    fn format_import_error_not_vrm1() {
-        let err = ModelImportError::NotVrm1;
+    fn format_import_error_not_vrm() {
+        let err = ModelImportError::NotVrm {
+            reason: "missing VRM or VRMC_vrm extension".into(),
+        };
         let msg = format_import_error(&err);
-        assert!(msg.contains("VRM 1.0"));
+        assert!(msg.contains("supported VRM"));
     }
 
     #[test]

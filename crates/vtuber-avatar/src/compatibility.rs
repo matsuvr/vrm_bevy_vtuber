@@ -1,4 +1,4 @@
-//! VRM 1.0 compatibility gate for `bevy_vrm1`.
+//! VRM 0.x/1.0 compatibility gate for the shared `bevy_vrm1` runtime.
 //!
 //! This module introspects a loaded VRM model and records which runtime
 //! capabilities are present. It is used by the compatibility runner and by
@@ -23,6 +23,7 @@ impl Plugin for VrmCompatibilityPlugin {
 /// Bone capability tuple used when querying a freshly-initialized VRM.
 type InitializedVrmBones<'w, 's> = (
     Entity,
+    Option<&'static VrmCoordinateBasis>,
     Option<&'static HeadBoneEntity>,
     Option<&'static NeckBoneEntity>,
     Option<&'static LeftEyeBoneEntity>,
@@ -35,6 +36,8 @@ type InitializedVrmBones<'w, 's> = (
 /// Resource populated once a VRM has been inspected.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct VrmCompatibilityReport {
+    /// Generation selected by the runtime normalization boundary.
+    pub generation: Option<VrmGeneration>,
     /// Whether a `Vrm` component was observed.
     pub vrm_loaded: bool,
     /// Whether the `Initialized` marker was observed.
@@ -91,11 +94,24 @@ fn inspect_initialized_vrm(
     vrms: Query<InitializedVrmBones, (With<Vrm>, Added<Initialized>)>,
     spring_roots: Query<&SpringRoot>,
 ) {
-    for (_entity, head, neck, left_eye, right_eye, expression_map, look_at, body_tracking) in
-        vrms.iter()
+    for (
+        _entity,
+        coordinate_basis,
+        head,
+        neck,
+        left_eye,
+        right_eye,
+        expression_map,
+        look_at,
+        body_tracking,
+    ) in vrms.iter()
     {
         report.vrm_loaded = true;
         report.initialized = true;
+        report.generation = coordinate_basis.map(|basis| match basis.0 {
+            CoordinateBasis::Vrm0Y180 => VrmGeneration::Vrm0,
+            CoordinateBasis::Vrm1Identity => VrmGeneration::Vrm1,
+        });
         report.has_head = head.is_some();
         report.has_neck = neck.is_some();
         report.has_left_eye = left_eye.is_some();

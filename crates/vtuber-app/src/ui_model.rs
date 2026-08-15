@@ -6,6 +6,8 @@
 use bevy::prelude::Resource;
 use std::path::PathBuf;
 
+use crate::import::VrmGeneration;
+
 /// Which screen the UI is currently showing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
@@ -74,6 +76,8 @@ pub struct AvatarViewModel {
 /// Summary of an imported model for display.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportedModelSummary {
+    /// VRM generation accepted by preflight and the runtime adapter.
+    pub generation: VrmGeneration,
     /// Stable asset ID (SHA-256 short).
     pub id: String,
     /// Model name from VRM metadata.

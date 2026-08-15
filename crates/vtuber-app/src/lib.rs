@@ -23,7 +23,7 @@ pub mod metrics_export;
 /// Error presenter — maps domain errors to user-facing messages.
 pub mod error_presenter;
 
-/// VRM 1.0 import and preflight inspection.
+/// VRM 0.x/1.0 import and preflight inspection.
 pub mod import;
 
 /// Application bridge for the pure-Rust face inference worker.

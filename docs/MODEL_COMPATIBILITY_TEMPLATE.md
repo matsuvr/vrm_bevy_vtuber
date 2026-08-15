@@ -1,4 +1,4 @@
-# VRM 1.0 Model Compatibility Report
+# VRM 0.x/1.0 Model Compatibility Report
 
 ## Identification
 
@@ -8,6 +8,7 @@
 | Model filename | |
 | SHA-256 | |
 | Model name | |
+| Generation | VRM 0.x / VRM 1.0 |
 | Author | |
 | Source／exporter | |
 | Exporter version | |
@@ -21,8 +22,8 @@
 | Check | Result | Notes |
 |---|---|---|
 | GLB parse | | |
-| `VRMC_vrm` exists | | |
-| VRM 1.0 accepted | | |
+| exactly one VRM root exists | | `VRM` or `VRMC_vrm` |
+| generation accepted | | `VRM 0.x` or `VRM 1.0` |
 | external URI absent | | |
 | hips present | | |
 | head present | | |
@@ -34,6 +35,7 @@
 |---|---|---|
 | load without panic | | |
 | `Initialized` observed | | |
+| normalized generation | | |
 | head entity | | |
 | neck entity | | |
 | left eye | | |
@@ -82,6 +84,19 @@
 - Upstream issue／PR:
 - App workaround:
 - Fork patch required: Yes / No
+
+## Lifecycle regression
+
+| Check | Result | Notes |
+|---|---|---|
+| load VRM 0.x | | |
+| load VRM 1.0 | | |
+| replace 0.x -> 1.0 | | |
+| replace 1.0 -> 0.x | | |
+| unload cleanup | | |
+| automated lifecycle transition matrix | | repeated VRM 0.x/1.0 load/replace/unload; no stale runtime state |
+| manual replacement cycles | | optional platform evidence; record `NOT VERIFIED` when not run |
+| bounded SpringBone soak | | optional platform evidence; record `NOT VERIFIED` when not run |
 
 ## Conclusion
 

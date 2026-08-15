@@ -161,6 +161,142 @@ fn apply_collision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    use bevy::time::TimePlugin;
+    use crate::vrm::spring_bone::{SpringCenterNode, SpringColliders, SpringJoints};
+
+    fn assert_finite_simulation_state(app: &App, joint: Entity) {
+        let state = app
+            .world()
+            .get::<SpringJointState>(joint)
+            .expect("the synthetic spring joint keeps its state");
+        assert!(state.prev_tail.is_finite());
+        assert!(state.current_tail.is_finite());
+        assert!(state.bone_axis.is_finite());
+        assert!(state.bone_length.is_finite());
+        assert!(state.initial_local_rotation.is_finite());
+        assert!(state
+            .initial_local_matrix
+            .to_cols_array()
+            .iter()
+            .all(|value| value.is_finite()));
+
+        let transform = app
+            .world()
+            .get::<Transform>(joint)
+            .expect("the synthetic spring joint keeps a Transform");
+        assert!(transform.translation.is_finite());
+        assert!(transform.rotation.is_finite());
+        assert!(transform.scale.is_finite());
+
+        let global = app
+            .world()
+            .get::<GlobalTransform>(joint)
+            .expect("the synthetic spring joint keeps a GlobalTransform");
+        assert!(global
+            .to_matrix()
+            .to_cols_array()
+            .iter()
+            .all(|value| value.is_finite()));
+    }
+
+    fn run_fixed_step_simulation(with_center: bool) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins.build().disable::<TimePlugin>())
+            .insert_resource(Time::<()>::default())
+            .add_systems(Update, update_spring_bones);
+
+        let center = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(0.1, 0.2, -0.1)),
+                GlobalTransform::from(Transform::from_translation(Vec3::new(
+                    0.1, 0.2, -0.1,
+                ))),
+            ))
+            .id();
+        let parent = app
+            .world_mut()
+            .spawn((Transform::IDENTITY, GlobalTransform::IDENTITY))
+            .id();
+        let collider = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(0.3, 0.0, 0.0)),
+                GlobalTransform::from(Transform::from_translation(Vec3::new(
+                    0.3, 0.0, 0.0,
+                ))),
+            ))
+            .id();
+        let joint = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                ChildOf(parent),
+                SpringJointState {
+                    prev_tail: Vec3::new(0.0, 0.07, 0.0),
+                    current_tail: Vec3::new(0.0, 0.07, 0.0),
+                    bone_axis: Vec3::Y,
+                    bone_length: 0.07,
+                    initial_local_matrix: Mat4::IDENTITY,
+                    initial_local_rotation: Quat::IDENTITY,
+                },
+                SpringJointProps {
+                    drag_force: 0.1,
+                    gravity_dir: Vec3::new(0.0, -1.0, 0.0),
+                    gravity_power: 0.1,
+                    hit_radius: 0.01,
+                    stiffness: 0.5,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(joint)
+            .insert(SpringRoot {
+                joints: SpringJoints(vec![joint]),
+                colliders: SpringColliders(vec![
+                (
+                    collider,
+                    ColliderShape::Sphere(crate::vrm::gltf::extensions::vrmc_spring_bone::Sphere {
+                        offset: [0.0, 0.0, 0.0],
+                        radius: 0.01,
+                    }),
+                ),
+            ]),
+                center_node: SpringCenterNode(if with_center { Some(center) } else { None }),
+                terminal_length: Some(0.07),
+            });
+
+        for _step in 0..24 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(Duration::from_secs_f32(1.0 / 60.0));
+            app.update();
+            assert_finite_simulation_state(&app, joint);
+            assert!(app
+                .world()
+                .get::<Transform>(joint)
+                .expect("joint transform")
+                .translation
+                .length()
+                < 1.0);
+        }
+
+        let root = app
+            .world()
+            .get::<SpringRoot>(joint)
+            .expect("the synthetic joint keeps one spring root");
+        assert_eq!(root.joints.iter().copied().collect::<std::collections::HashSet<_>>().len(), 1);
+        assert!(root.colliders.iter().all(|(_, shape)| shape.radius().is_finite()));
+    }
+
+    #[test]
+    fn fixed_step_simulation_is_finite_with_and_without_center() {
+        run_fixed_step_simulation(false);
+        run_fixed_step_simulation(true);
+    }
 
     #[test]
     fn tail_rotation_matches_previous_behavior_for_finite_direction() {

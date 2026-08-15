@@ -32,8 +32,9 @@ impl VRMCSpringBone {
     ) -> Vec<Collider> {
         collider_group_indices
             .iter()
-            .flat_map(|index| self.collider_groups[*index].colliders.clone())
-            .flat_map(|index| self.colliders.get(index as usize).cloned())
+            .filter_map(|index| self.collider_groups.get(*index))
+            .flat_map(|group| group.colliders.clone())
+            .filter_map(|index| self.colliders.get(index as usize).cloned())
             .collect()
     }
 }
@@ -69,6 +70,10 @@ pub struct Spring {
     pub collider_groups: Option<Vec<usize>>,
 
     pub center: Option<usize>,
+
+    /// Length, in meters, of a synthetic terminal joint used by legacy VRM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_length: Option<f32>,
 }
 
 /// The node of a single glTF with spring bone settings.
