@@ -1847,11 +1847,13 @@ goldenは許容誤差付きで比較する。raw camera frameをcommitする場�
 
 ### 21.3 VRM compatibility test
 
-最低三種類:
-
-1. VRM consortium / author公式sample
-2. VRoid Studioで新規exportしたVRM 1.0
-3. 実際に利用予定のmodel
+現在のIssue #31 acceptance gateはagent-firstで自動化する。local
+compatibility runnerは、required real-model matrix（VRM 0.xを5体以上、
+VRM 1.0を2体以上）のfile hash、preflight inventory、runtime capability、
+bounded initialization resultを記録する。automated invariant coverageには
+世代正規化、lifecycle cleanup、semantic pose／gaze／expression mapping、
+固定12度framing、head subtree bounds、default arm pose、breathing direction、
+finiteなnon-identity rest rotationを含める。
 
 各modelについてmanifestへ記録する。
 
@@ -1869,18 +1871,17 @@ goldenは許容誤差付きで比較する。raw camera frameをcommitする場�
 - head binding
 - optional neck / eye binding
 - Expression map
-- 300frame updateでpanicなし
-- model detach
-- same modelを再load
+- bounded updateでpanicなし
+- model detachとlifecycle cleanup
+- same modelのreload／generation replacement
 
-visual検査:
+このautomated gateに対するhuman visual、camera、macOS hardware evidenceは
+optionalである。未実施の場合は`NOT VERIFIED`と記録し、platform PASSと
+解釈しない。product固有のvisual／platform gateはIssue #31と分離してよい。
 
-- MToon
-- outline
-- transparent hair / accessories
-- SpringBone
-- blink
-- mouth
+Optional platform evidence may cover MToon, outline, transparent hair／
+accessories, SpringBone appearance, blink, and mouth behavior. These checks
+must not be used to replace the automated invariant evidence above.
 
 ### 21.4 ローカル検証（GitHub Actionsは禁止）
 

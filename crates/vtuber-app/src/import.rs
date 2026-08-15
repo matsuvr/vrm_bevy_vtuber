@@ -137,13 +137,19 @@ pub struct VrmInspectionSummary {
     pub unlit_material_count: usize,
     /// Number of material entries that use the StandardMaterial fallback.
     pub fallback_material_count: usize,
-    /// Number of normalized SpringBone chains.
+    /// Number of source-declared SpringBone groups/springs.
+    ///
+    /// This is an input inventory, not the number of runtime-normalized
+    /// `SpringRoot` entities created after hierarchy expansion.
     pub spring_chain_count: usize,
-    /// Number of normalized SpringBone joints.
+    /// Number of source-declared SpringBone joint/root references.
+    ///
+    /// For VRM 0.x this counts `secondaryAnimation.boneGroups[*].bones`,
+    /// which are root references rather than expanded ordered chains.
     pub spring_joint_count: usize,
-    /// Number of SpringBone colliders.
+    /// Number of source-declared SpringBone colliders.
     pub spring_collider_count: usize,
-    /// Number of SpringBone center-space declarations.
+    /// Number of source-declared SpringBone center-space declarations.
     pub spring_center_count: usize,
     /// Humanoid node indices.
     pub humanoid_nodes: HumanoidNodes,

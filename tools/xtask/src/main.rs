@@ -179,7 +179,7 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
                 summary.fallback_material_count
             );
             println!(
-                "    spring counts: chains={}, joints={}, colliders={}, centers={}",
+                "    spring source-declared inventory: groups_or_springs={}, joint_or_root_references={}, colliders={}, centers={}",
                 summary.spring_chain_count,
                 summary.spring_joint_count,
                 summary.spring_collider_count,
@@ -233,6 +233,7 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
                 "    machine.material_fallback_count={}",
                 summary.fallback_material_count
             );
+            println!("    machine.spring_inventory_semantics=source_declared_inventory");
             println!(
                 "    machine.spring_chain_count={}",
                 summary.spring_chain_count

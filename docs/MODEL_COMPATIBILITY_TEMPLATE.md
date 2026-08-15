@@ -94,8 +94,9 @@
 | replace 0.x -> 1.0 | | |
 | replace 1.0 -> 0.x | | |
 | unload cleanup | | |
-| 20 replacements | | |
-| bounded SpringBone soak | | |
+| automated lifecycle transition matrix | | repeated VRM 0.x/1.0 load/replace/unload; no stale runtime state |
+| manual replacement cycles | | optional platform evidence; record `NOT VERIFIED` when not run |
+| bounded SpringBone soak | | optional platform evidence; record `NOT VERIFIED` when not run |
 
 ## Conclusion
 

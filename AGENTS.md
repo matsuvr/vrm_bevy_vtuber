@@ -226,6 +226,11 @@ Mandatory classes over the project lifecycle:
 
 Do not claim camera, MToon, permission, or performance success without an actual platform run.
 
+For the Issue #31 automated compatibility gate, human visual/camera/macOS
+evidence is optional. Keep such evidence `NOT VERIFIED` when it is not run;
+automated invariant and real-model compatibility results must remain separate
+from platform claims.
+
 ## Documentation
 
 - Keep `DESIGN.md`, `AI_AGENT_TASKS.md`, ADRs, and public APIs consistent.

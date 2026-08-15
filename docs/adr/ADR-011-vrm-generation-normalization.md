@@ -81,12 +81,20 @@ The pinned specification references for this work are:
   avatar semantics generation-dependent and prevents reliable regression
   tests.
 
-## Verification record (2026-08-14)
+## Verification record (2026-08-15)
 
-The local headless compatibility runner initialized at least three valid VRM
-0.x models and two valid VRM 1.0 models, and all passed the MVP capability
-gate. Two additional ignored fixture paths contained HTML documents rather
-than GLB payloads and were rejected at preflight; three other legacy artifacts
-hit the bounded initialization timeout. The 20 real-model replacements,
-bounded physical SpringBone soak, and macOS evidence remain pending; see
-`docs/compatibility/vrm-0x-1x-2026-08-14.md`.
+The current Issue #31 acceptance record is the deterministic local gate:
+
+- the SpringBone terminal-direction fixed-step tests pass;
+- the automated VRM 0.x/1.0 lifecycle transition matrix passes twice without
+  stale roots, registries, generation state, or `SpringJointState`;
+- the automated real-model matrix initializes five VRM 0.x and two VRM 1.0
+  models as MVP-capable;
+- three additional valid VRM 0.x artifacts hit the bounded 600-frame timeout
+  and are explicitly not counted as PASS.
+
+The former 20 real-model replacements and physical SpringBone soak are
+superseded follow-up evidence, not current Issue #31 acceptance conditions.
+Human visual/camera evidence and macOS hardware evidence are optional for this
+automated gate; when not run they remain `NOT VERIFIED`. See
+`docs/compatibility/vrm-0x-1x-2026-08-14.md` for the exact commands and matrix.

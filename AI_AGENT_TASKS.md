@@ -31,12 +31,14 @@ Python/Unity変換、GitHub Actionsは追加しない。仕様参照は
 | #28 | materialPropertiesから既存MToonへの変換 | #25/#26 |
 | #29 | secondaryAnimationから既存SpringBoneへの変換 | #25/#26 |
 | #30 | production load/replace/unload統合 | #24/#26-#29 |
-| #31 | 実モデル互換性gate、回帰、最終ADR | #30 |
+| #31 | 自動互換性gate、回帰検証、最終ADR | #30 |
 
 実装順は`#23 -> (#24,#25) -> #26 -> (#27,#28,#29) -> #30 -> #31`とし、
 各Issueは独立branch、draft PR単位で証跡を残す。start/end SHA、変更file、
-仕様変換、ローカル検証command、Windows/macOS実機結果（未実施は
-`NOT RUN`）を記録する。VRM 1.0回帰は全てのlegacy変更で必須である。
+仕様変換、ローカル検証command、automated invariant／compatibility evidenceを
+記録する。Issue #31のcurrent acceptanceは自動検査で閉じ、Windows/macOSの
+実機・visual・camera evidenceはoptionalとする。未実施のplatform evidenceは
+`NOT VERIFIED`として残してよく、VRM 1.0回帰は全てのlegacy変更で必須である。
 
 ---
 
