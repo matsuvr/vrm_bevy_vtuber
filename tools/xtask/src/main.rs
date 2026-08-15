@@ -250,13 +250,23 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
                 "    machine.spring_center_count={}",
                 summary.spring_center_count
             );
-            println!("    machine.warnings=0");
+            let warning_codes = summary
+                .compatibility_warnings
+                .iter()
+                .map(|warning| warning.code.as_str())
+                .collect::<Vec<_>>();
+            println!(
+                "    machine.warning_count={}",
+                summary.compatibility_warnings.len()
+            );
+            println!("    machine.warning_codes={warning_codes:?}");
         }
         Err(e) => {
             println!("  preflight: FAIL ({e})");
             println!("    machine.parse=fail");
             println!("    machine.external_uri_gate=not_evaluated");
-            println!("    machine.warnings=1");
+            println!("    machine.warning_count=0");
+            println!("    machine.warning_codes=[]");
         }
     }
     if let Some(report) = &result.runtime {
@@ -284,6 +294,13 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
         println!("    machine.expression_count={}", report.expressions.len());
         println!("    machine.expressions={:?}", report.expressions);
         println!("    machine.mvp_capable={}", report.is_mvp_capable());
+        let warning_codes = report
+            .warnings
+            .iter()
+            .map(|warning| warning.code.as_str())
+            .collect::<Vec<_>>();
+        println!("    machine.warning_count={}", report.warnings.len());
+        println!("    machine.warning_codes={warning_codes:?}");
     } else {
         println!("  runtime: skipped");
         println!("    machine.initialize=not_run");

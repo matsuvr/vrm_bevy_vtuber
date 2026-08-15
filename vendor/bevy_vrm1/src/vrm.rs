@@ -17,6 +17,8 @@ use crate::system_set::VrmSystemSets;
 use crate::vrm::body_tracking::BodyTrackingPlugin;
 use crate::vrm::detach::VrmDetachPlugin;
 use crate::vrm::gltf::extensions::CoordinateBasis;
+use crate::vrm::gltf::extensions::{Vrm0MetaDiagnostics, VrmGeneration};
+pub use crate::vrm::gltf::extensions::{VrmCompatibilityWarning, VrmCompatibilityWarningCode};
 use crate::vrm::humanoid_bone::VrmHumanoidBonePlugin;
 use crate::vrm::initialize::VrmInitializePlugin;
 use crate::vrm::loader::{VrmAsset, VrmLoaderPlugin};
@@ -35,6 +37,7 @@ use std::path::PathBuf;
 pub mod prelude {
     pub use crate::vrm::{
         Initialized, RestGlobalTransform, RestTransform, Vrm, VrmBasisRoot, VrmBone,
+        VrmCompatibilityDiagnostics, VrmCompatibilityWarning, VrmCompatibilityWarningCode,
         VrmCoordinateBasis, VrmExpression, VrmNodeIndex, VrmPath, VrmPlugin,
         body_tracking::{
             BodyBoneHalfLives, BodyBoneRotationLimits, BodyBoneWeights, BodyTracking,
@@ -86,6 +89,17 @@ impl Vrm {
 /// Coordinate basis applied to the loaded model scene.
 #[derive(Debug, Component, Copy, Clone, PartialEq, Eq)]
 pub struct VrmCoordinateBasis(pub CoordinateBasis);
+
+/// Source-generation compatibility diagnostics owned by one VRM root.
+#[derive(Debug, Component, Clone, PartialEq)]
+pub struct VrmCompatibilityDiagnostics {
+    /// Generation selected by the runtime normalization boundary.
+    pub generation: VrmGeneration,
+    /// Source-only VRM 0.x metadata, if applicable.
+    pub legacy_meta: Option<Vrm0MetaDiagnostics>,
+    /// Non-fatal warnings scoped to this root.
+    pub warnings: Vec<VrmCompatibilityWarning>,
+}
 
 /// Source glTF node index attached to every instantiated scene node.
 ///

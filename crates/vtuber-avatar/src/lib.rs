@@ -36,6 +36,10 @@ pub use arm_pose::{
     DEFAULT_ARM_RETURN_SECONDS, DEFAULT_ARM_TRANSITION_SECONDS, DefaultArmPose, ResolvedArmPose,
     ResolvedBoneDelta, ResolvedFingerJointPose, ResolvedFingerPose, apply_default_arm_pose,
 };
+pub use bevy_vrm1::prelude::{
+    Vrm0MetaDiagnostics, VrmCompatibilityWarning, VrmCompatibilityWarningCode,
+    VrmRuntimeDescriptor, collect_legacy_compatibility_warnings,
+};
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};
 pub use breathing::{
@@ -52,7 +56,7 @@ pub use capabilities::{
 };
 pub use lifecycle::*;
 pub use load::{
-    AssetPathError, AvatarAssetId, ImportedAvatar, LoadImportedAvatarError,
+    AssetPathError, AvatarAssetId, ExpectedVrmGeneration, ImportedAvatar, LoadImportedAvatarError,
     LoadImportedAvatarRequest, LoadImportedAvatarResult, PendingAvatarLoad, UserAssetPath,
 };
 pub use mirror::AvatarMotionMirror;

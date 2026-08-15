@@ -10,6 +10,75 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// Maximum context length for a compatibility warning.
+pub const MAX_COMPATIBILITY_WARNING_CONTEXT: usize = 256;
+
+/// Stable machine-readable compatibility warning codes.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VrmCompatibilityWarningCode {
+    /// A legacy `DegreeMap` curve cannot be represented by the current linear
+    /// runtime range map.
+    NonLinearLegacyLookAtCurve,
+    /// A legacy expression contains materialValues which are not applied by
+    /// the existing expression runtime.
+    LegacyExpressionMaterialValuesUnsupported,
+    /// Two legacy expression groups normalize to the same canonical identity.
+    DuplicateLegacyExpression,
+    /// A legacy custom expression had no usable name.
+    EmptyLegacyExpressionName,
+    /// A legacy expression repeats the same node/morph bind.
+    DuplicateLegacyExpressionBind,
+    /// A legacy material property key is not part of the known migration set.
+    UnknownLegacyMaterialProperty,
+    /// Legacy materialProperties contains more entries than glTF materials.
+    ExtraLegacyMaterialProperty,
+    /// A legacy shader is not handled by the existing material path.
+    UnknownLegacyShader,
+    /// `StandardMaterial` has no equivalent for legacy transparent Z-write.
+    UnlitZWriteNotRepresentable,
+}
+
+impl VrmCompatibilityWarningCode {
+    /// Returns the stable machine-readable spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NonLinearLegacyLookAtCurve => "non_linear_legacy_look_at_curve",
+            Self::LegacyExpressionMaterialValuesUnsupported => {
+                "legacy_expression_material_values_unsupported"
+            }
+            Self::DuplicateLegacyExpression => "duplicate_legacy_expression",
+            Self::EmptyLegacyExpressionName => "empty_legacy_expression_name",
+            Self::DuplicateLegacyExpressionBind => "duplicate_legacy_expression_bind",
+            Self::UnknownLegacyMaterialProperty => "unknown_legacy_material_property",
+            Self::ExtraLegacyMaterialProperty => "extra_legacy_material_property",
+            Self::UnknownLegacyShader => "unknown_legacy_shader",
+            Self::UnlitZWriteNotRepresentable => "unlit_z_write_not_representable",
+        }
+    }
+}
+
+/// A bounded, generation-owned compatibility diagnostic.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct VrmCompatibilityWarning {
+    /// Stable warning code.
+    pub code: VrmCompatibilityWarningCode,
+    /// Short source path or other bounded context.
+    pub context: String,
+}
+
+impl VrmCompatibilityWarning {
+    /// Constructs a warning while enforcing the bounded context contract.
+    #[must_use]
+    pub fn new(code: VrmCompatibilityWarningCode, context: impl Into<String>) -> Self {
+        Self {
+            code,
+            context: context.into().chars().take(MAX_COMPATIBILITY_WARNING_CONTEXT).collect(),
+        }
+    }
+}
+
 /// VRM generation represented by a normalized descriptor.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,12 +109,44 @@ pub struct VrmRuntimeDescriptor {
     pub coordinate_basis: CoordinateBasis,
     /// Model metadata.
     pub meta: VrmMeta,
+    /// Source-only VRM 0.x metadata retained for diagnostics and reports.
+    #[serde(default)]
+    pub legacy_meta: Option<Vrm0MetaDiagnostics>,
     /// Humanoid node references by canonical bone name.
     pub humanoid: VrmHumanoid,
     /// Optional first-person metadata.
     pub first_person: Option<VrmFirstPerson>,
     /// Optional gaze metadata.
     pub look_at: Option<VrmLookAt>,
+    /// Compatibility diagnostics produced while normalizing the source.
+    #[serde(default)]
+    pub compatibility_warnings: Vec<VrmCompatibilityWarning>,
+}
+
+/// Source metadata which has no common VRM 1.0 runtime equivalent.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct Vrm0MetaDiagnostics {
+    /// Exporter identifier/version from `VRM.exporterVersion`.
+    pub exporter_version: Option<String>,
+    /// Source metadata version.
+    pub version: Option<String>,
+    /// Contact information supplied by the exporter.
+    pub contact_information: Option<String>,
+    /// Reference/credit text supplied by the exporter.
+    pub reference: Option<String>,
+    /// Thumbnail texture index.
+    pub texture_index: Option<usize>,
+    /// Usage permission fields retained as source strings.
+    pub allowed_user_name: Option<String>,
+    pub violent_usage_name: Option<String>,
+    pub sexual_usage_name: Option<String>,
+    pub commercial_usage_name: Option<String>,
+    pub other_permission_url: Option<String>,
+    /// License names and both legacy URL spellings.
+    pub license_name: Option<String>,
+    pub license_url: Option<String>,
+    pub other_license_url: Option<String>,
 }
 
 /// Common model metadata.
@@ -201,6 +302,7 @@ fn parse_vrm0(
     vrm: &Value,
 ) -> Result<VrmRuntimeDescriptor, VrmParseError> {
     let meta = parse_vrm0_meta(vrm.get("meta"));
+    let legacy_meta = Some(parse_vrm0_meta_diagnostics(vrm));
     let humanoid = parse_vrm0_humanoid(root, vrm.get("humanoid"))?;
     let first_person = vrm
         .get("firstPerson")
@@ -223,14 +325,18 @@ fn parse_vrm0(
         .map(parse_vrm0_look_at)
         .transpose()?;
 
+    let compatibility_warnings = collect_legacy_compatibility_warnings(root, vrm);
+
     Ok(VrmRuntimeDescriptor {
         generation: VrmGeneration::Vrm0,
         spec_version: "0.x".into(),
         coordinate_basis: CoordinateBasis::Vrm0Y180,
         meta,
+        legacy_meta,
         humanoid,
         first_person,
         look_at,
+        compatibility_warnings,
     })
 }
 
@@ -252,9 +358,11 @@ fn parse_vrm1(vrmc: &Value) -> Result<VrmRuntimeDescriptor, VrmParseError> {
         spec_version,
         coordinate_basis: CoordinateBasis::Vrm1Identity,
         meta,
+        legacy_meta: None,
         humanoid,
         first_person,
         look_at,
+        compatibility_warnings: Vec::new(),
     })
 }
 
@@ -268,6 +376,265 @@ fn parse_vrm0_meta(meta: Option<&Value>) -> VrmMeta {
         license_url: string_field(meta, "otherLicenseUrl")
             .or_else(|| string_field(meta, "licenseUrl")),
     }
+}
+
+fn parse_vrm0_meta_diagnostics(vrm: &Value) -> Vrm0MetaDiagnostics {
+    let meta = vrm.get("meta").and_then(Value::as_object);
+    let string = |field: &str| meta.and_then(|meta| string_field(meta, field));
+    let texture_index = meta
+        .and_then(|meta| meta.get("texture"))
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok());
+    Vrm0MetaDiagnostics {
+        exporter_version: string("exporterVersion").or_else(|| string_field_from(vrm, "exporterVersion")),
+        version: string("version"),
+        contact_information: string("contactInformation"),
+        reference: string("reference"),
+        texture_index,
+        allowed_user_name: string("allowedUserName"),
+        violent_usage_name: string("violentUsageName"),
+        sexual_usage_name: string("sexualUsageName"),
+        commercial_usage_name: string("commercialUsageName"),
+        other_permission_url: string("otherPermissionUrl"),
+        license_name: string("licenseName"),
+        license_url: string("licenseUrl"),
+        other_license_url: string("otherLicenseUrl"),
+    }
+}
+
+fn string_field_from(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(Value::as_str).map(String::from)
+}
+
+/// Collects non-fatal VRM 0.x migration diagnostics in source order.
+pub fn collect_legacy_compatibility_warnings(
+    root: &Value,
+    legacy: &Value,
+) -> Vec<VrmCompatibilityWarning> {
+    let mut warnings = Vec::new();
+
+    if let Some(first_person) = legacy.get("firstPerson") {
+        for field in [
+            "lookAtHorizontalInner",
+            "lookAtHorizontalOuter",
+            "lookAtVerticalDown",
+            "lookAtVerticalUp",
+        ] {
+            if let Some(range) = first_person.get(field).and_then(Value::as_object)
+                && range.get("curve").is_some()
+            {
+                warnings.push(VrmCompatibilityWarning::new(
+                    VrmCompatibilityWarningCode::NonLinearLegacyLookAtCurve,
+                    format!("VRM.firstPerson.{field}.curve"),
+                ));
+            }
+        }
+    }
+
+    if let Some(properties) = legacy
+        .get("materialProperties")
+        .and_then(Value::as_array)
+    {
+        let material_count = root
+            .get("materials")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        if properties.len() > material_count {
+            warnings.push(VrmCompatibilityWarning::new(
+                VrmCompatibilityWarningCode::ExtraLegacyMaterialProperty,
+                format!(
+                    "VRM.materialProperties length {} exceeds glTF materials length {material_count}",
+                    properties.len()
+                ),
+            ));
+        }
+        for (index, property) in properties.iter().enumerate() {
+            if let Some(shader) = property.get("shader").and_then(Value::as_str) {
+                let known = shader.contains("MToon")
+                    || matches!(
+                        shader,
+                        "VRM/UnlitTexture"
+                            | "VRM/UnlitCutout"
+                            | "VRM/UnlitTransparent"
+                            | "VRM/UnlitTransparentZWrite"
+                            | "Standard"
+                            | "UniGLTF/UniUnlit"
+                    );
+                if !known {
+                    warnings.push(VrmCompatibilityWarning::new(
+                        VrmCompatibilityWarningCode::UnknownLegacyShader,
+                        format!("VRM.materialProperties[{index}].shader={shader}"),
+                    ));
+                }
+                if shader == "VRM/UnlitTransparentZWrite" {
+                    warnings.push(VrmCompatibilityWarning::new(
+                        VrmCompatibilityWarningCode::UnlitZWriteNotRepresentable,
+                        format!("VRM.materialProperties[{index}].shader"),
+                    ));
+                }
+            }
+            for key in property
+                .get("floatProperties")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flat_map(|values| values.keys())
+                .chain(
+                    property
+                        .get("vectorProperties")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flat_map(|values| values.keys()),
+                )
+                .chain(
+                    property
+                        .get("textureProperties")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flat_map(|values| values.keys()),
+                )
+            {
+                if !is_known_legacy_material_property(key) {
+                    warnings.push(VrmCompatibilityWarning::new(
+                        VrmCompatibilityWarningCode::UnknownLegacyMaterialProperty,
+                        format!("VRM.materialProperties[{index}].{key}"),
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(groups) = legacy
+        .get("blendShapeMaster")
+        .and_then(|master| master.get("blendShapeGroups"))
+        .and_then(Value::as_array)
+    {
+        let mut seen = BTreeMap::new();
+        for (group_index, group) in groups.iter().enumerate() {
+            let name = normalized_legacy_expression_name(group, group_index, &mut warnings);
+            if let Some(previous) = seen.insert(name.clone(), group_index) {
+                warnings.push(VrmCompatibilityWarning::new(
+                    VrmCompatibilityWarningCode::DuplicateLegacyExpression,
+                    format!(
+                        "VRM.blendShapeMaster.blendShapeGroups[{group_index}] canonical={name} first={previous}"
+                    ),
+                ));
+            }
+            if group.get("materialValues").is_some() {
+                warnings.push(VrmCompatibilityWarning::new(
+                    VrmCompatibilityWarningCode::LegacyExpressionMaterialValuesUnsupported,
+                    format!("VRM.blendShapeMaster.blendShapeGroups[{group_index}].materialValues"),
+                ));
+            }
+            let mut binds = std::collections::BTreeSet::new();
+            if let Some(raw_binds) = group.get("binds").and_then(Value::as_array) {
+                for (bind_index, bind) in raw_binds.iter().enumerate() {
+                    let mesh = bind.get("mesh").and_then(Value::as_u64);
+                    let morph = bind.get("index").and_then(Value::as_u64);
+                    let Some((mesh, morph)) = mesh.zip(morph) else { continue };
+                    let nodes = mesh_instance_nodes_for_warning(root, mesh as usize);
+                    for node in nodes {
+                        if !binds.insert((node, morph as usize)) {
+                            warnings.push(VrmCompatibilityWarning::new(
+                                VrmCompatibilityWarningCode::DuplicateLegacyExpressionBind,
+                                format!(
+                                    "VRM.blendShapeMaster.blendShapeGroups[{group_index}].binds[{bind_index}] node={node} morph={morph}"
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    warnings
+}
+
+fn mesh_instance_nodes_for_warning(root: &Value, mesh: usize) -> Vec<usize> {
+    root.get("nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, node)| {
+            (node.get("mesh").and_then(Value::as_u64) == Some(mesh as u64)).then_some(index)
+        })
+        .collect()
+}
+
+fn is_known_legacy_material_property(key: &str) -> bool {
+    matches!(
+        key,
+        "_Color"
+            | "_MainColor"
+            | "_ShadeColor"
+            | "_EmissionColor"
+            | "_OutlineColor"
+            | "_RimColor"
+            | "_MainTex"
+            | "_MainTexture"
+            | "_ShadeTexture"
+            | "_EmissionMap"
+            | "_BumpMap"
+            | "_MainTex_ST"
+            | "_Cutoff"
+            | "_BumpScale"
+            | "_OutlineWidth"
+            | "_OutlineScaledMaxDistance"
+            | "_OutlineLightingMix"
+            | "_ShadeShift"
+            | "_ShadeToony"
+            | "_ReceiveShadowRate"
+            | "_ShadingGradeRate"
+            | "_RimLightingMix"
+            | "_RimFresnelPower"
+            | "_RimLift"
+            | "_Cull"
+    )
+}
+
+fn normalized_legacy_expression_name(
+    group: &Value,
+    group_index: usize,
+    warnings: &mut Vec<VrmCompatibilityWarning>,
+) -> String {
+    let preset = group
+        .get("presetName")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"));
+    let name = group
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(source) = preset.or(name) else {
+        warnings.push(VrmCompatibilityWarning::new(
+            VrmCompatibilityWarningCode::EmptyLegacyExpressionName,
+            format!("VRM.blendShapeMaster.blendShapeGroups[{group_index}]"),
+        ));
+        return format!("custom_{group_index}");
+    };
+    match source {
+        "A" | "a" => "aa",
+        "I" | "i" => "ih",
+        "U" | "u" => "ou",
+        "E" | "e" => "ee",
+        "O" | "o" => "oh",
+        "Blink" | "blink" => "blink",
+        "Blink_L" | "blink_l" => "blinkLeft",
+        "Blink_R" | "blink_r" => "blinkRight",
+        "Joy" | "joy" => "happy",
+        "Angry" | "angry" => "angry",
+        "Sorrow" | "sorrow" => "sad",
+        "Fun" | "fun" => "relaxed",
+        "LookUp" | "lookup" => "lookUp",
+        "LookDown" | "lookdown" => "lookDown",
+        "LookLeft" | "lookleft" => "lookLeft",
+        "LookRight" | "lookright" => "lookRight",
+        "Neutral" | "neutral" => "neutral",
+        other => other,
+    }
+    .to_string()
 }
 
 fn parse_vrm1_meta(meta: Option<&Value>) -> VrmMeta {
@@ -519,18 +886,44 @@ fn parse_vrm0_range_map(
                 reason: "curve coefficients must be finite numbers".into(),
             });
         }
+        if values.len() % 4 != 0 {
+            return Err(VrmParseError::InvalidField {
+                path: format!("{path}.curve"),
+                reason: "curve must contain groups of time, value, inTangent, outTangent".into(),
+            });
+        }
     }
-    Ok(VrmRangeMap {
-        input_max_value: required_f32(
+    let mut input_max_value = required_f32(
             &Value::Object(range.clone()),
             "xRange",
             &format!("{path}.xRange"),
-        )?,
-        output_scale: required_f32(
+        )?;
+    let output_scale = required_f32(
             &Value::Object(range.clone()),
             "yRange",
             &format!("{path}.yRange"),
-        )?,
+        )?;
+    // UniVRM's fixed reference maps xRange == 0 to its default 90 degree
+    // input range, permits yRange == 0, and rejects negative ranges. The
+    // current runtime is linear, so any source curve remains a typed warning.
+    if input_max_value < 0.0 {
+        return Err(VrmParseError::InvalidField {
+            path: format!("{path}.xRange"),
+            reason: "expected zero or a positive degree range".into(),
+        });
+    }
+    if output_scale < 0.0 {
+        return Err(VrmParseError::InvalidField {
+            path: format!("{path}.yRange"),
+            reason: "expected a zero or positive degree range".into(),
+        });
+    }
+    if input_max_value == 0.0 {
+        input_max_value = 90.0;
+    }
+    Ok(VrmRangeMap {
+        input_max_value,
+        output_scale,
     })
 }
 
@@ -787,7 +1180,7 @@ mod tests {
                 ],
                 "lookAtTypeName": "BlendShape",
                 "firstPersonBoneOffset": {"x": 0.0, "y": 0.1, "z": 0.2},
-                "lookAtHorizontalInner": {"curve": [0.0, 0.0, 1.0], "xRange": 90.0, "yRange": 10.0},
+                "lookAtHorizontalInner": {"curve": [0.0, 0.0, 0.0, 0.0], "xRange": 90.0, "yRange": 10.0},
                 "lookAtHorizontalOuter": {"xRange": 90.0, "yRange": 10.0},
                 "lookAtVerticalDown": {"xRange": 90.0, "yRange": 10.0},
                 "lookAtVerticalUp": {"xRange": 90.0, "yRange": 10.0}
@@ -866,6 +1259,13 @@ mod tests {
                 .first_person_bone_offset,
             Some([0.0, 0.1, 0.2])
         );
+        assert_eq!(
+            descriptor.legacy_meta.as_ref().unwrap().other_license_url.as_deref(),
+            Some("https://example.test/license")
+        );
+        assert!(descriptor.compatibility_warnings.iter().any(|warning| {
+            warning.code == VrmCompatibilityWarningCode::NonLinearLegacyLookAtCurve
+        }));
     }
 
     #[test]
@@ -980,5 +1380,41 @@ mod tests {
             Err(VrmParseError::InvalidField { path, .. })
                 if path.ends_with("lookAtHorizontalInner.curve")
         ));
+    }
+
+    #[test]
+    fn compatibility_warnings_are_typed_bounded_and_deterministic() {
+        let mut root = vrm0_root();
+        root["materials"] = json!([{}]);
+        root["extensions"]["VRM"]["materialProperties"] = json!([
+            {"shader": "VRM/UnlitTransparentZWrite", "floatProperties": {"_Unknown": 1.0}},
+            {"shader": "Unknown/Shader"}
+        ]);
+        root["extensions"]["VRM"]["blendShapeMaster"] = json!({
+            "blendShapeGroups": [
+                {"presetName": "Blink", "name": "first", "binds": []},
+                {"presetName": " blink ", "name": "second", "materialValues": []},
+                {"presetName": "Unknown", "name": "   "}
+            ]
+        });
+        let warnings = collect_legacy_compatibility_warnings(
+            &root,
+            &root["extensions"]["VRM"],
+        );
+        assert!(warnings.iter().any(|warning| {
+            warning.code == VrmCompatibilityWarningCode::ExtraLegacyMaterialProperty
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning.code == VrmCompatibilityWarningCode::DuplicateLegacyExpression
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning.code == VrmCompatibilityWarningCode::EmptyLegacyExpressionName
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning.code == VrmCompatibilityWarningCode::UnlitZWriteNotRepresentable
+        }));
+        assert!(warnings.iter().all(|warning| {
+            warning.context.chars().count() <= MAX_COMPATIBILITY_WARNING_CONTEXT
+        }));
     }
 }
