@@ -155,3 +155,64 @@ fn turn_to_mtoon_material(
             ));
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::test_app;
+    use bevy::app::Update;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn main_texture_fallback_reaches_real_mtoon_material_setup() {
+        let source = json!({
+            "shader": "VRM/MToon",
+            "textureProperties": {"_MainTex": 0}
+        });
+        let extension = crate::vrm::gltf::materials::convert_legacy_material_properties_with_texture_count(
+            &source,
+            Some(1),
+        )
+        .expect("legacy material should convert");
+
+        let mut app = test_app();
+        app.init_asset::<StandardMaterial>();
+        app.init_asset::<MToonMaterial>();
+        let standard_handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let image_handle = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        let root = app
+            .world_mut()
+            .spawn(VrmcMaterialRegistry {
+                images: vec![image_handle.clone()],
+                materials: HashMap::from([(standard_handle.id(), extension)]),
+            })
+            .id();
+        let material_entity = app
+            .world_mut()
+            .spawn((MeshMaterial3d(standard_handle), ChildOf(root)))
+            .id();
+        app.add_systems(Update, turn_to_mtoon_material);
+
+        app.update();
+
+        let material_id = app
+            .world()
+            .get::<MeshMaterial3d<MToonMaterial>>(material_entity)
+            .expect("setup must replace StandardMaterial with MToonMaterial")
+            .0
+            .id();
+        let material = app
+            .world()
+            .resource::<Assets<MToonMaterial>>()
+            .get(material_id)
+            .expect("setup must create the MToon asset");
+        assert_eq!(material.shade_multiply_texture, Some(image_handle));
+    }
+}

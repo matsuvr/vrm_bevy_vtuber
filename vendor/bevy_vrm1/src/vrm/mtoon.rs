@@ -99,7 +99,8 @@ impl VrmcMaterialRegistry {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let render_queue_offsets = plan_legacy_render_queue_offsets(&legacy_properties);
+        let render_queue_offsets =
+            plan_legacy_render_queue_offsets(&legacy_properties, source.materials().count());
         let mut materials = HashMap::new();
         for material in source.materials() {
             let Some(index) = material.index() else {
@@ -123,7 +124,7 @@ impl VrmcMaterialRegistry {
             // glTF material index is the only stable identity; names and
             // occurrence order are not.
             let legacy = legacy_properties.get(index).cloned();
-            let render_queue_offset = render_queue_offsets.get(index).copied();
+            let render_queue_offset = render_queue_offsets.get(index).copied().flatten();
             if let Some(shader) = legacy
                 .as_ref()
                 .and_then(|value| value.get("shader"))

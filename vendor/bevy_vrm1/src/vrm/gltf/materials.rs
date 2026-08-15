@@ -4,6 +4,8 @@ use bevy::render::render_resource::ShaderType;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::vrm::gltf::extensions::{classify_legacy_shader, LegacyShaderKind};
+
 #[derive(Serialize, Deserialize, Reflect, Debug, Clone)]
 pub struct VrmcMaterialsExtensitions {
     /// Indicates the version number of `VRMC_materials_mtoon` extension.
@@ -141,11 +143,11 @@ impl VrmcMaterialsExtensitions {
 /// material contract. Legacy values are normalized by name and texture index;
 /// the renderer remains the same `MToon` renderer used for VRM 1.0.
 pub fn convert_legacy_material_properties(value: &Value) -> Option<VrmcMaterialsExtensitions> {
-    let planned = plan_legacy_render_queue_offsets(std::slice::from_ref(value));
+    let planned = plan_legacy_render_queue_offsets(std::slice::from_ref(value), 1);
     convert_legacy_material_properties_with_render_queue_offset(
         value,
         None,
-        planned.first().copied(),
+        planned.first().copied().flatten(),
     )
 }
 
@@ -154,11 +156,11 @@ pub fn convert_legacy_material_properties_with_texture_count(
     value: &Value,
     texture_count: Option<usize>,
 ) -> Option<VrmcMaterialsExtensitions> {
-    let planned = plan_legacy_render_queue_offsets(std::slice::from_ref(value));
+    let planned = plan_legacy_render_queue_offsets(std::slice::from_ref(value), 1);
     convert_legacy_material_properties_with_render_queue_offset(
         value,
         texture_count,
-        planned.first().copied(),
+        planned.first().copied().flatten(),
     )
 }
 
@@ -168,15 +170,29 @@ pub fn convert_legacy_material_properties_with_texture_count(
 /// zero, while transparent-with-Z-write materials are ordered from zero
 /// upward. Opaque and cutout materials always use their `MToon` 1.0 default.
 #[must_use]
-pub fn plan_legacy_render_queue_offsets(values: &[Value]) -> Vec<i32> {
+pub fn plan_legacy_render_queue_offsets(
+    values: &[Value],
+    gltf_material_count: usize,
+) -> Vec<Option<i32>> {
     let mut modes = Vec::with_capacity(values.len());
     let mut transparent = std::collections::BTreeSet::new();
     let mut transparent_z_write = std::collections::BTreeSet::new();
 
-    for value in values {
-        let mode = legacy_render_mode(value);
+    for (index, value) in values.iter().enumerate() {
+        let is_mtoon = value
+            .get("shader")
+            .and_then(Value::as_str)
+            .is_some_and(|shader| classify_legacy_shader(shader) == LegacyShaderKind::MToon);
+        let mode = is_mtoon
+            .then(|| (index < gltf_material_count).then(|| legacy_render_mode(value)))
+            .flatten()
+            .flatten();
+        let Some(mode) = mode else {
+            modes.push(None);
+            continue;
+        };
         let source_offset = legacy_source_render_queue_offset(value, mode);
-        modes.push((mode, source_offset));
+        modes.push(Some((mode, source_offset)));
         match mode {
             2 => {
                 transparent.insert(source_offset);
@@ -202,10 +218,12 @@ pub fn plan_legacy_render_queue_offsets(values: &[Value]) -> Vec<i32> {
 
     modes
         .into_iter()
-        .map(|(mode, source)| match mode {
-            2 => transparent_map.get(&source).copied().unwrap_or(0),
-            3 => transparent_z_write_map.get(&source).copied().unwrap_or(0),
-            _ => 0,
+        .map(|entry| {
+            entry.map(|(mode, source)| match mode {
+                2 => transparent_map.get(&source).copied().unwrap_or(0),
+                3 => transparent_z_write_map.get(&source).copied().unwrap_or(0),
+                _ => 0,
+            })
         })
         .collect()
 }
@@ -252,6 +270,23 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
         .unwrap_or_default();
     let shade_toony = floats.get("_ShadeToony").and_then(finite_f32);
     let shade_shift = floats.get("_ShadeShift").and_then(finite_f32);
+    let blend_mode = floats
+        .get("_BlendMode")
+        .and_then(finite_f32)
+        .and_then(|value| {
+            let mode = value as i32;
+            (value == mode as f32 && (0..=3).contains(&mode)).then_some(mode)
+        });
+    if let Some(blend_mode) = blend_mode {
+        properties.insert(
+            "transparentWithZWrite".into(),
+            json!(blend_mode == 3),
+        );
+    } else if !floats.contains_key("_BlendMode")
+        && let Some(z_write) = floats.get("_ZWrite").and_then(finite_f32)
+    {
+        properties.insert("transparentWithZWrite".into(), json!(z_write > 0.5));
+    }
     if let Some(render_queue_offset) = render_queue_offset {
         properties.insert(
             "renderQueueOffsetNumber".into(),
@@ -265,9 +300,6 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
         match name.as_str() {
             "_OutlineLightingMix" => {
                 properties.insert("outlineLightingMixFactor".into(), json!(value));
-            }
-            "_RimLightingMix" => {
-                properties.insert("rimLightingMixFactor".into(), json!(value));
             }
             "_RimFresnelPower" => {
                 properties.insert("parametricRimFresnelPowerFactor".into(), json!(value));
@@ -292,12 +324,6 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
             }
             "_UvAnimScrollY" | "_UV_Animation_ScrollY" => {
                 properties.insert("uvAnimationScrollYSpeedFactor".into(), json!(-value));
-            }
-            "_ZWrite" => {
-                properties.insert("transparentWithZWrite".into(), json!(value > 0.5));
-            }
-            "_BlendMode" => {
-                properties.insert("transparentWithZWrite".into(), json!(value as i32 == 3));
             }
             "_Cull" => {
                 properties.insert("legacyDoubleSided".into(), json!(value <= 0.5));
@@ -381,21 +407,6 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
                     properties.insert("legacyBaseColor".into(), json!(unity_color(&vector)));
                 }
             }
-            "_MainTex" => {
-                if vector.len() >= 4 {
-                    properties.insert(
-                        "legacyUvTransform".into(),
-                        json!(legacy_main_texture_transform(&vector)),
-                    );
-                }
-            }
-            "_MainTex_ST" => {
-                if vector.len() >= 4 {
-                    // Compatibility alias: this non-official key already
-                    // uses Unity's [scale.xy, offset.xy] ordering.
-                    properties.insert("legacyUvTransform".into(), json!(&vector[..4]));
-                }
-            }
             "_EmissionColor" | "_Emission" => {
                 if vector.len() >= 3 {
                     // UniVRM's official exporter stores emission as linear
@@ -434,19 +445,29 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let main_texture_transform = vectors
+    let main_texture_index = textures
         .get("_MainTex")
-        .and_then(finite_array)
-        .and_then(|values| {
-            (values.len() >= 4).then(|| legacy_main_texture_transform(&values))
-        })
-        .or_else(|| {
-            vectors
-                .get("_MainTex_ST")
-                .and_then(finite_array)
-                .and_then(|values| (values.len() >= 4).then(|| [values[0], values[1], values[2], values[3]]))
-        });
-    for (name, value) in textures {
+        .or_else(|| textures.get("_MainTexture"))
+        .and_then(|value| value.as_u64())
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|index| texture_count.is_none_or(|count| *index < count));
+    let main_texture_transform = main_texture_index.and_then(|_| {
+        vectors
+            .get("_MainTex")
+            .and_then(finite_array)
+            .and_then(|values| {
+                (values.len() >= 4).then(|| legacy_main_texture_transform(&values))
+            })
+            .or_else(|| {
+                vectors
+                    .get("_MainTex_ST")
+                    .and_then(finite_array)
+                    .and_then(|values| {
+                        (values.len() >= 4).then(|| [values[0], values[1], values[2], values[3]])
+                    })
+            })
+    });
+    for (name, value) in &textures {
         let Some(index) = value.as_u64().and_then(|value| usize::try_from(value).ok()) else {
             continue;
         };
@@ -496,6 +517,14 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
             _ => {}
         }
     }
+    if !textures.contains_key("_ShadeTexture")
+        && let Some(index) = main_texture_index
+    {
+        properties.insert(
+            "shadeMultiplyTexture".into(),
+            texture_with_transform(index, main_texture_transform),
+        );
+    }
 
     let mut converted: VrmcMaterialsExtensitions =
         serde_json::from_value(Value::Object(properties)).ok()?;
@@ -506,17 +535,7 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
         .and_then(|vectors| vectors.get("_Color").or_else(|| vectors.get("_MainColor")))
         .and_then(finite_array)
         .and_then(|values| (values.len() >= 4).then(|| unity_color(&values)));
-    converted.legacy_base_texture = value
-        .get("textureProperties")
-        .and_then(Value::as_object)
-        .and_then(|textures| {
-            textures
-                .get("_MainTex")
-                .or_else(|| textures.get("_MainTexture"))
-        })
-        .and_then(|index| index.as_u64())
-        .and_then(|index| index.try_into().ok())
-        .filter(|index| texture_count.is_none_or(|count| *index < count));
+    converted.legacy_base_texture = main_texture_index;
     converted.legacy_emissive = value
         .get("vectorProperties")
         .and_then(Value::as_object)
@@ -548,24 +567,7 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
                 .map(|cull| cull < 1.5)
                 .or_else(|| floats.get("_Cull").and_then(finite_f32).map(|cull| cull <= 0.5))
         });
-    converted.legacy_uv_transform = value
-        .get("vectorProperties")
-        .and_then(Value::as_object)
-        .and_then(|vectors| vectors.get("_MainTex").or_else(|| vectors.get("_MainTex_ST")))
-        .and_then(finite_array)
-        .and_then(|values| {
-            (values.len() >= 4).then(|| {
-                if value
-                    .get("vectorProperties")
-                    .and_then(Value::as_object)
-                    .is_some_and(|vectors| vectors.contains_key("_MainTex"))
-                {
-                    legacy_main_texture_transform(&values)
-                } else {
-                    [values[0], values[1], values[2], values[3]]
-                }
-            })
-        });
+    converted.legacy_uv_transform = main_texture_transform;
     for name in ["_BumpMap", "_BumpScale"] {
         if value
             .get("textureProperties")
@@ -585,15 +587,17 @@ pub(crate) fn convert_legacy_material_properties_with_render_queue_offset(
     Some(converted)
 }
 
-fn legacy_render_mode(value: &Value) -> i32 {
-    let mode = value
+fn legacy_render_mode(value: &Value) -> Option<i32> {
+    let value = value
         .get("floatProperties")
         .and_then(Value::as_object)
         .and_then(|floats| floats.get("_BlendMode"))
-        .and_then(finite_f32)
-        .map(|value| value as i32)
-        .unwrap_or(0);
-    if (0..=3).contains(&mode) { mode } else { 0 }
+        .and_then(finite_f32);
+    let Some(value) = value else {
+        return Some(0);
+    };
+    let mode = value as i32;
+    (value == mode as f32 && (0..=3).contains(&mode)).then_some(mode)
 }
 
 fn legacy_source_render_queue_offset(value: &Value, mode: i32) -> i32 {
@@ -667,9 +671,7 @@ fn finite_i32(value: &Value) -> Option<i32> {
 }
 
 fn finite_array(value: &Value) -> Option<Vec<f32>> {
-    value
-        .as_array()
-        .map(|values| values.iter().filter_map(finite_f32).collect())
+    value.as_array()?.iter().map(finite_f32).collect()
 }
 
 fn unity_rgb(vector: &[f32]) -> [f32; 3] {
@@ -718,7 +720,6 @@ fn legacy_main_texture_transform(values: &[f32]) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vrm::gltf::extensions::{classify_legacy_shader, LegacyShaderKind};
 
     #[test]
     fn converts_legacy_mtoon_properties_to_existing_fields() {
@@ -911,7 +912,7 @@ mod tests {
         assert_eq!(converted.render_queue_offset_number, 0.0);
         assert_eq!(converted.parametric_rim_fresnel_power, 3.0);
         assert_eq!(converted.parametric_rim_lift_factor, 0.2);
-        assert_eq!(converted.rim_lighting_mix_factor, 0.4);
+        assert_eq!(converted.rim_lighting_mix_factor, 1.0);
         assert_eq!(
             converted.uv_animation_rotation_speed_factor,
             0.5 * std::f32::consts::TAU
@@ -921,7 +922,7 @@ mod tests {
         assert!(converted.transparent_with_z_write);
         assert_eq!(converted.legacy_double_sided, Some(true));
         assert_eq!(converted.legacy_emissive_texture, Some(1));
-        assert_eq!(converted.legacy_uv_transform, Some([0.8, 0.9, 0.1, 0.2]));
+        assert!(converted.legacy_uv_transform.is_none());
         assert_eq!(converted.rim_multiply_texture.unwrap().index, 1);
         assert_eq!(converted.shading_shift_texture.unwrap().index, 2);
         assert_eq!(converted.uv_animation_mask_texture.unwrap().index, 3);
@@ -947,12 +948,178 @@ mod tests {
             json!({"shader": "VRM/MToon", "renderQueue": 9999, "floatProperties": {"_BlendMode": 99.0}}),
         ];
         assert_eq!(
-            plan_legacy_render_queue_offsets(&values),
-            vec![0, 0, 0, -1, 0, 1, 0, 1, 0]
+            plan_legacy_render_queue_offsets(&values, values.len()),
+            vec![
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(-1),
+                Some(0),
+                Some(1),
+                Some(0),
+                Some(1),
+                None
+            ]
         );
-        assert!(plan_legacy_render_queue_offsets(&values)
+        assert!(plan_legacy_render_queue_offsets(&values, values.len())
             .into_iter()
+            .flatten()
             .all(|offset| (-9..=9).contains(&offset)));
+    }
+
+    #[test]
+    fn render_queue_planning_ignores_non_mtoon_materials() {
+        let values = vec![
+            json!({"shader": "VRM/MToon", "renderQueue": 3020, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "Custom/MToon", "renderQueue": 3010, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 3005, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "VRM/UnlitTransparent", "renderQueue": 3001, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "VRM_USE_GLTFSHADER", "renderQueue": 2999, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "Standard", "renderQueue": 2998, "floatProperties": {"_BlendMode": 2.0}}),
+            json!({"shader": "VRM/MToon", "renderQueue": 2997, "floatProperties": {"_BlendMode": 2.0}}),
+        ];
+        assert_eq!(
+            plan_legacy_render_queue_offsets(&values, 3),
+            vec![Some(0), None, Some(-1), None, None, None, None]
+        );
+    }
+
+    #[test]
+    fn main_texture_falls_back_to_shade_like_univrm() {
+        let main_only = json!({
+            "shader": "VRM/MToon",
+            "textureProperties": {"_MainTex": 2}
+        });
+        let explicit_shade = json!({
+            "shader": "VRM/MToon",
+            "textureProperties": {"_MainTex": 2, "_ShadeTexture": 1}
+        });
+        let invalid_main = json!({
+            "shader": "VRM/MToon",
+            "textureProperties": {"_MainTex": 3}
+        });
+
+        assert_eq!(
+            convert_legacy_material_properties_with_texture_count(&main_only, Some(3))
+                .unwrap()
+                .shade_multiply_texture
+                .unwrap()
+                .index,
+            2
+        );
+        assert_eq!(
+            convert_legacy_material_properties_with_texture_count(&explicit_shade, Some(3))
+                .unwrap()
+                .shade_multiply_texture
+                .unwrap()
+                .index,
+            1
+        );
+        assert!(
+            convert_legacy_material_properties_with_texture_count(&invalid_main, Some(3))
+                .unwrap()
+                .shade_multiply_texture
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn main_texture_transform_requires_main_texture() {
+        let vector_only = json!({
+            "shader": "VRM/MToon",
+            "vectorProperties": {"_MainTex": [0.1, 0.2, 0.8, 0.7]}
+        });
+        let official = json!({
+            "shader": "VRM/MToon",
+            "vectorProperties": {
+                "_MainTex": [0.1, 0.2, 0.8, 0.7],
+                "_MainTex_ST": [0.2, 0.3, 0.4, 0.5]
+            },
+            "textureProperties": {"_MainTex": 0}
+        });
+        let alias = json!({
+            "shader": "VRM/MToon",
+            "vectorProperties": {"_MainTex_ST": [0.2, 0.3, 0.4, 0.5]},
+            "textureProperties": {"_MainTex": 0}
+        });
+
+        assert!(
+            convert_legacy_material_properties(&vector_only)
+                .unwrap()
+                .legacy_uv_transform
+                .is_none()
+        );
+        let official_transform =
+            convert_legacy_material_properties_with_texture_count(&official, Some(1))
+                .unwrap()
+                .legacy_uv_transform
+                .expect("valid MainTex should activate the official transform");
+        assert!(official_transform
+            .iter()
+            .zip([0.8, 0.7, 0.1, 0.1])
+            .all(|(actual, expected)| (*actual - expected).abs() < 1.0e-6));
+        assert_eq!(
+            convert_legacy_material_properties_with_texture_count(&alias, Some(1))
+                .unwrap()
+                .legacy_uv_transform,
+            Some([0.2, 0.3, 0.4, 0.5])
+        );
+    }
+
+    #[test]
+    fn legacy_rim_lighting_mix_migrates_to_safe_one() {
+        for value in [0.0, 0.4, 1.0] {
+            let source = json!({
+                "shader": "VRM/MToon",
+                "floatProperties": {"_RimLightingMix": value}
+            });
+            assert_eq!(
+                convert_legacy_material_properties(&source)
+                    .unwrap()
+                    .rim_lighting_mix_factor,
+                1.0
+            );
+        }
+    }
+
+    #[test]
+    fn blend_mode_owns_transparent_zwrite() {
+        for floats in [
+            json!({"_ZWrite": 1.0, "_BlendMode": 0.0}),
+            json!({"_BlendMode": 3.0, "_ZWrite": 0.0}),
+        ] {
+            let value = json!({"shader": "VRM/MToon", "floatProperties": floats});
+            let converted = convert_legacy_material_properties(&value).unwrap();
+            assert_eq!(converted.transparent_with_z_write, floats["_BlendMode"] == 3.0);
+        }
+        let legacy_fallback = json!({
+            "shader": "VRM/MToon",
+            "floatProperties": {"_ZWrite": 1.0}
+        });
+        assert!(
+            convert_legacy_material_properties(&legacy_fallback)
+                .unwrap()
+                .transparent_with_z_write
+        );
+    }
+
+    #[test]
+    fn malformed_legacy_vector_is_not_compacted() {
+        let value = json!({
+            "shader": "VRM/MToon",
+            "vectorProperties": {
+                "_Color": [0.1, null, 0.3, 1.0],
+                "_MainTex": [0.1, null, 0.8, 0.7],
+                "_EmissionColor": [0.2, null, 0.4, 1.0]
+            },
+            "textureProperties": {"_MainTex": 0, "_EmissionMap": 0}
+        });
+        let converted =
+            convert_legacy_material_properties_with_texture_count(&value, Some(1))
+                .expect("malformed optional properties must not reject the material");
+        assert!(converted.legacy_base_color.is_none());
+        assert!(converted.legacy_uv_transform.is_none());
+        assert!(converted.legacy_emissive.is_none());
     }
 
     #[test]
