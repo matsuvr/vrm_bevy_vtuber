@@ -400,12 +400,17 @@ fn material_counts(
         let extensions = material
             .get("extensions")
             .and_then(serde_json::Value::as_object);
-        if shader.is_some_and(|shader| shader.contains("MToon"))
-            || extensions.is_some_and(|extensions| extensions.contains_key("VRMC_materials_mtoon"))
+        if shader.is_some_and(|shader| {
+            vtuber_avatar::classify_legacy_shader(shader) == vtuber_avatar::LegacyShaderKind::MToon
+        }) || extensions
+            .is_some_and(|extensions| extensions.contains_key("VRMC_materials_mtoon"))
         {
             mtoon += 1;
-        } else if shader.is_some_and(|shader| shader.contains("Unlit"))
-            || extensions.is_some_and(|extensions| extensions.contains_key("KHR_materials_unlit"))
+        } else if shader.is_some_and(|shader| {
+            vtuber_avatar::classify_legacy_shader(shader)
+                == vtuber_avatar::LegacyShaderKind::SupportedUnlit
+        }) || extensions
+            .is_some_and(|extensions| extensions.contains_key("KHR_materials_unlit"))
         {
             unlit += 1;
         } else {
@@ -556,9 +561,8 @@ fn inspect_vrm0(
         generation: VrmGeneration::Vrm0,
         spec_version: "0.x".into(),
         exporter_version: vrm
-            .get("meta")
-            .and_then(|meta| meta.get("exporterVersion"))
-            .or_else(|| vrm.get("exporterVersion"))
+            .get("exporterVersion")
+            .or_else(|| vrm.get("meta").and_then(|meta| meta.get("exporterVersion")))
             .and_then(|value| value.as_str())
             .map(String::from),
         name,
@@ -1210,7 +1214,8 @@ mod tests {
         "extensionsUsed": ["VRM"],
         "extensions": {
             "VRM": {
-                "meta": {"title": "Hermetic VRM 0.x", "author": "Legacy Author", "exporterVersion": "UniVRM 0.123"},
+                "exporterVersion": "UniVRM 0.123",
+                "meta": {"title": "Hermetic VRM 0.x", "author": "Legacy Author", "exporterVersion": "nonstandard-meta"},
                 "humanoid": {
                     "humanBones": [
                         {"bone": "hips", "node": 0},
@@ -1349,6 +1354,7 @@ mod tests {
         let summary = inspect_vrm(vrm1_fixture(&dir)).expect("fixture should be valid VRM 1.0");
         assert_eq!(summary.generation, VrmGeneration::Vrm1);
         assert_eq!(summary.spec_version, "1.0");
+        assert_eq!(summary.exporter_version, None);
         assert!(!summary.name.is_empty(), "model name should be present");
         assert!(summary.humanoid_nodes.hips < 1000);
         assert!(summary.humanoid_nodes.head < 1000);

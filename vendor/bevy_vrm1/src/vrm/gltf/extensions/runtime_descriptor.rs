@@ -39,6 +39,35 @@ pub enum VrmCompatibilityWarningCode {
     UnlitZWriteNotRepresentable,
 }
 
+/// Exact VRM 0.x shader classification shared by diagnostics and migration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyShaderKind {
+    /// The only shader migrated through the MToon path.
+    MToon,
+    /// One of the four known StandardMaterial fallbacks.
+    SupportedUnlit,
+    /// A known glTF/legacy passthrough shader with no VRM migration.
+    Passthrough,
+    /// An exporter-specific or otherwise unknown shader.
+    Unknown,
+}
+
+/// Classifies a VRM 0.x shader by exact fixed-schema name.
+#[must_use]
+pub fn classify_legacy_shader(shader: &str) -> LegacyShaderKind {
+    match shader {
+        "VRM/MToon" => LegacyShaderKind::MToon,
+        "VRM/UnlitTexture"
+        | "VRM/UnlitCutout"
+        | "VRM/UnlitTransparent"
+        | "VRM/UnlitTransparentZWrite" => LegacyShaderKind::SupportedUnlit,
+        "VRM_USE_GLTFSHADER" | "Standard" | "UniGLTF/UniUnlit" => {
+            LegacyShaderKind::Passthrough
+        }
+        _ => LegacyShaderKind::Unknown,
+    }
+}
+
 impl VrmCompatibilityWarningCode {
     /// Returns the stable machine-readable spelling.
     #[must_use]
@@ -386,7 +415,8 @@ fn parse_vrm0_meta_diagnostics(vrm: &Value) -> Vrm0MetaDiagnostics {
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok());
     Vrm0MetaDiagnostics {
-        exporter_version: string("exporterVersion").or_else(|| string_field_from(vrm, "exporterVersion")),
+        exporter_version: string_field_from(vrm, "exporterVersion")
+            .or_else(|| string("exporterVersion")),
         version: string("version"),
         contact_information: string("contactInformation"),
         reference: string("reference"),
@@ -453,17 +483,7 @@ pub fn collect_legacy_compatibility_warnings(
         }
         for (index, property) in properties.iter().enumerate() {
             if let Some(shader) = property.get("shader").and_then(Value::as_str) {
-                let known = shader.contains("MToon")
-                    || matches!(
-                        shader,
-                        "VRM/UnlitTexture"
-                            | "VRM/UnlitCutout"
-                            | "VRM/UnlitTransparent"
-                            | "VRM/UnlitTransparentZWrite"
-                            | "Standard"
-                            | "UniGLTF/UniUnlit"
-                    );
-                if !known {
+                if classify_legacy_shader(shader) == LegacyShaderKind::Unknown {
                     warnings.push(VrmCompatibilityWarning::new(
                         VrmCompatibilityWarningCode::UnknownLegacyShader,
                         format!("VRM.materialProperties[{index}].shader={shader}"),
@@ -618,11 +638,35 @@ fn is_known_legacy_material_property(key: &str) -> bool {
 }
 
 fn legacy_curve_is_linear(curve: &[Value]) -> bool {
-    let keys = curve.chunks_exact(4).collect::<Vec<_>>();
-    if keys.is_empty() || curve.len() < 8 {
-        return true;
+    if curve.len() < 8 || !curve.len().is_multiple_of(4) {
+        return false;
     }
-    if !curve.len().is_multiple_of(4) {
+    let keys = curve.chunks_exact(4).collect::<Vec<_>>();
+    let Some(first) = keys.first() else {
+        return false;
+    };
+    let Some(last) = keys.last() else {
+        return false;
+    };
+    const EPSILON: f64 = 1.0e-6;
+
+    let Some(first_time) = first[0].as_f64() else {
+        return false;
+    };
+    let Some(first_value) = first[1].as_f64() else {
+        return false;
+    };
+    let Some(last_time) = last[0].as_f64() else {
+        return false;
+    };
+    let Some(last_value) = last[1].as_f64() else {
+        return false;
+    };
+    if (first_time - 0.0).abs() > EPSILON
+        || (first_value - 0.0).abs() > EPSILON
+        || (last_time - 1.0).abs() > EPSILON
+        || (last_value - 1.0).abs() > EPSILON
+    {
         return false;
     }
 
@@ -630,18 +674,30 @@ fn legacy_curve_is_linear(curve: &[Value]) -> bool {
     // endpoint tangents may be zero because they are not used outside the
     // interval; the tangents joining each adjacent pair must be one.
     if keys.iter().any(|key| {
-        let time = key[0].as_f64();
-        let value = key[1].as_f64();
-        time.zip(value)
-            .is_none_or(|(time, value)| (time - value).abs() > 1.0e-6)
+        let Some(time) = key[0].as_f64() else {
+            return true;
+        };
+        let Some(value) = key[1].as_f64() else {
+            return true;
+        };
+        (time - value).abs() > EPSILON
     }) {
         return false;
     }
     keys.windows(2).all(|pair| {
+        let Some(left_time) = pair[0][0].as_f64() else {
+            return false;
+        };
+        let Some(right_time) = pair[1][0].as_f64() else {
+            return false;
+        };
+        if right_time <= left_time {
+            return false;
+        }
         let outgoing = pair[0][3].as_f64();
         let incoming = pair[1][2].as_f64();
         outgoing.zip(incoming).is_some_and(|(outgoing, incoming)| {
-            (outgoing - 1.0).abs() <= 1.0e-6 && (incoming - 1.0).abs() <= 1.0e-6
+            (outgoing - 1.0).abs() <= EPSILON && (incoming - 1.0).abs() <= EPSILON
         })
     })
 }
@@ -1224,7 +1280,8 @@ mod tests {
             "nodes": [{}, {}, {"mesh": 2}, {"mesh": 2}],
             "meshes": [{}, {}, {"primitives": [{}]}],
             "extensions": {"VRM": {
-                "meta": {"title": "legacy", "author": "author", "otherLicenseUrl": "https://example.test/license"},
+                "exporterVersion": "UniVRM top-level",
+                "meta": {"title": "legacy", "author": "author", "exporterVersion": "nonstandard-meta", "otherLicenseUrl": "https://example.test/license"},
                 "humanoid": {"humanBones": [
                     {"bone": "hips", "node": 0},
                     {"bone": "head", "node": 1}
@@ -1272,6 +1329,10 @@ mod tests {
         assert_eq!(descriptor.generation, VrmGeneration::Vrm0);
         assert_eq!(descriptor.coordinate_basis, CoordinateBasis::Vrm0Y180);
         assert_eq!(descriptor.meta.name.as_deref(), Some("legacy"));
+        assert_eq!(
+            descriptor.legacy_meta.as_ref().unwrap().exporter_version.as_deref(),
+            Some("UniVRM top-level")
+        );
         assert_eq!(descriptor.humanoid.human_bones["head"], 1);
         assert_eq!(
             descriptor.first_person.as_ref().unwrap().first_person_bone,
@@ -1437,11 +1498,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_legacy_degree_map_curve_with_malformed_length() {
+        let mut root = vrm0_root();
+        root["extensions"]["VRM"]["firstPerson"]["lookAtHorizontalInner"]["curve"] =
+            json!([0.0, 0.0, 0.0, 1.0, 1.0]);
+        assert!(matches!(
+            parse_runtime_descriptor(&root),
+            Err(VrmParseError::InvalidField { path, .. })
+                if path.ends_with("lookAtHorizontalInner.curve")
+        ));
+    }
+
+    #[test]
     fn linear_legacy_degree_map_curves_do_not_warn() {
         for curve in [
             json!([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
             json!([0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0]),
-            json!([0.0, 0.0, 0.0, 0.0]),
         ] {
             let mut root = vrm0_root();
             root["extensions"]["VRM"]["firstPerson"]["lookAtHorizontalInner"]["curve"] =
@@ -1451,6 +1523,42 @@ mod tests {
                 &root["extensions"]["VRM"],
             );
             assert!(!warnings.iter().any(|warning| {
+                warning.code == VrmCompatibilityWarningCode::NonLinearLegacyLookAtCurve
+            }));
+        }
+    }
+
+    #[test]
+    fn absent_legacy_degree_map_curve_uses_default_without_warning() {
+        let mut root = vrm0_root();
+        root["extensions"]["VRM"]["firstPerson"]["lookAtHorizontalInner"]
+            .as_object_mut()
+            .unwrap()
+            .remove("curve");
+        let warnings = collect_legacy_compatibility_warnings(
+            &root,
+            &root["extensions"]["VRM"],
+        );
+        assert!(!warnings.iter().any(|warning| {
+            warning.code == VrmCompatibilityWarningCode::NonLinearLegacyLookAtCurve
+        }));
+    }
+
+    #[test]
+    fn empty_one_key_and_partial_legacy_degree_maps_warn() {
+        for curve in [
+            json!([]),
+            json!([0.0, 0.0, 0.0, 0.0]),
+            json!([0.2, 0.2, 1.0, 1.0, 0.8, 0.8, 1.0, 1.0]),
+        ] {
+            let mut root = vrm0_root();
+            root["extensions"]["VRM"]["firstPerson"]["lookAtHorizontalInner"]["curve"] =
+                curve;
+            let warnings = collect_legacy_compatibility_warnings(
+                &root,
+                &root["extensions"]["VRM"],
+            );
+            assert!(warnings.iter().any(|warning| {
                 warning.code == VrmCompatibilityWarningCode::NonLinearLegacyLookAtCurve
             }));
         }
@@ -1520,6 +1628,43 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn legacy_shader_classification_requires_exact_names() {
+        assert_eq!(classify_legacy_shader("VRM/MToon"), LegacyShaderKind::MToon);
+        assert_eq!(
+            classify_legacy_shader("VRM/UnlitTransparentZWrite"),
+            LegacyShaderKind::SupportedUnlit
+        );
+        for shader in ["VRM_USE_GLTFSHADER", "Standard", "UniGLTF/UniUnlit"] {
+            assert_eq!(classify_legacy_shader(shader), LegacyShaderKind::Passthrough);
+        }
+        for shader in ["Custom/MToon", "MyMToonShader", "VRM/MToonExtra"] {
+            assert_eq!(classify_legacy_shader(shader), LegacyShaderKind::Unknown);
+        }
+    }
+
+    #[test]
+    fn custom_mtoon_shader_is_an_unknown_warning_not_a_mtoon_diagnostic() {
+        let mut root = vrm0_root();
+        root["materials"] = json!([{}]);
+        root["extensions"]["VRM"]["materialProperties"] = json!([
+            {"shader": "Custom/MToon"},
+            {"shader": "MyMToonShader"},
+            {"shader": "VRM/MToonExtra"}
+        ]);
+        let warnings = collect_legacy_compatibility_warnings(
+            &root,
+            &root["extensions"]["VRM"],
+        );
+        let contexts = warnings
+            .iter()
+            .filter(|warning| warning.code == VrmCompatibilityWarningCode::UnknownLegacyShader)
+            .map(|warning| warning.context.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(contexts.len(), 3);
+        assert!(contexts.iter().all(|context| context.contains("shader=")));
     }
 
     #[test]

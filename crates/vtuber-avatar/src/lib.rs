@@ -37,8 +37,8 @@ pub use arm_pose::{
     ResolvedBoneDelta, ResolvedFingerJointPose, ResolvedFingerPose, apply_default_arm_pose,
 };
 pub use bevy_vrm1::prelude::{
-    Vrm0MetaDiagnostics, VrmCompatibilityWarning, VrmCompatibilityWarningCode,
-    VrmRuntimeDescriptor, collect_legacy_compatibility_warnings,
+    LegacyShaderKind, Vrm0MetaDiagnostics, VrmCompatibilityWarning, VrmCompatibilityWarningCode,
+    VrmRuntimeDescriptor, classify_legacy_shader, collect_legacy_compatibility_warnings,
 };
 pub use bind::BindTriggered;
 pub use binding::{AvatarBindError, AvatarBinding, bind_humanoid_bones};

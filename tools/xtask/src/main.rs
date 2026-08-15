@@ -169,6 +169,7 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
             println!("    generation: {:?}", summary.generation);
             println!("    name: {}", summary.name);
             println!("    specVersion: {}", summary.spec_version);
+            println!("    exporterVersion: {:?}", summary.exporter_version);
             println!("    expressions: {:?}", summary.expression_presets);
             println!("    lookAt type: {:?}", summary.look_at_type);
             println!("    springBone: {}", summary.has_spring_bone);
@@ -189,6 +190,10 @@ fn print_result(result: &vrm_compatibility::CompatibilityResult) {
             println!("    machine.external_uri_gate=pass");
             println!("    machine.generation={:?}", summary.generation);
             println!("    machine.spec_version={}", summary.spec_version);
+            println!(
+                "    machine.exporter_version={:?}",
+                summary.exporter_version
+            );
             println!("    machine.name={:?}", summary.name);
             println!(
                 "    machine.expression_preset_count={}",

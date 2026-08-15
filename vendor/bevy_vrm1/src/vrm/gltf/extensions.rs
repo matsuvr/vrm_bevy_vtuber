@@ -4,10 +4,11 @@ pub mod vrmc_spring_bone;
 pub mod vrmc_vrm;
 
 pub use runtime_descriptor::{
-    CoordinateBasis, VrmFirstPerson, VrmFirstPersonFlag, VrmGeneration, VrmHumanoid, VrmLookAt,
+    classify_legacy_shader, collect_legacy_compatibility_warnings, CoordinateBasis,
+    LegacyShaderKind, VrmFirstPerson, VrmFirstPersonFlag, VrmGeneration, VrmHumanoid, VrmLookAt,
     Vrm0MetaDiagnostics, VrmCompatibilityWarning, VrmCompatibilityWarningCode, VrmLookAtType,
     VrmMeshAnnotation, VrmMeta, VrmParseError, VrmRangeMap, VrmRuntimeDescriptor,
-    collect_legacy_compatibility_warnings, parse_runtime_descriptor,
+    parse_runtime_descriptor,
 };
 
 use crate::error::AppResult;
