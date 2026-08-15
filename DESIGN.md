@@ -1544,7 +1544,7 @@ new model失敗時はold modelを維持する。
 - 設定上限がhard capの1 GiBを超える
 - external buffer / image URIを含む
 
-VRM 0.xでは`extensions.VRM`の`meta`, `humanoid`, `firstPerson`, `lookAtMaster`, `blendShapeMaster`, `materialProperties`, `secondaryAnimation`をpreflight summaryへ抽出する。runtime descriptorへの変換とECS registry接続は`vtuber-avatar`のvendor境界で行い、app crateは`bevy_vrm1`型を参照しない。
+VRM 0.xでは`extensions.VRM`の`meta`, `humanoid`, `firstPerson`（`lookAtTypeName`、`firstPersonBoneOffset`、4つのDegreeMapを含む）, `blendShapeMaster`, `materialProperties`, `secondaryAnimation`をpreflight summaryへ抽出する。`meshAnnotations.mesh`と`blendShapeMaster.binds[].mesh`はglTF mesh indexとして検証し、全node instanceへ展開する。runtime descriptorへの変換とECS registry接続は`vtuber-avatar`のvendor境界で行い、app crateは`bevy_vrm1`型を参照しない。
 
 ### 17.4 import cache
 

@@ -1,5 +1,5 @@
 use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
-use crate::vrm::{Vrm, VrmBone};
+use crate::vrm::{Vrm, VrmBone, VrmNodeIndex};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -11,6 +11,7 @@ pub struct ChildSearcher<'w, 's> {
         (
             Option<&'static Name>,
             Option<&'static VrmBone>,
+            Option<&'static VrmNodeIndex>,
             Option<&'static Children>,
         ),
     >,
@@ -41,6 +42,15 @@ impl ChildSearcher<'_, '_> {
         find_entity(target_name, false, root, &self.entities)
     }
 
+    /// Finds a scene entity by its source glTF node index.
+    pub fn find_from_node_index(
+        &self,
+        root: Entity,
+        target_index: usize,
+    ) -> Option<Entity> {
+        find_node_index(target_index, root, &self.entities)
+    }
+
     pub fn find_by_bone_name(
         &self,
         root: Entity,
@@ -64,9 +74,14 @@ fn find_entity(
     target_name: &str,
     is_bone: bool,
     entity: Entity,
-    entities: &Query<(Option<&Name>, Option<&VrmBone>, Option<&Children>)>,
+    entities: &Query<(
+        Option<&Name>,
+        Option<&VrmBone>,
+        Option<&VrmNodeIndex>,
+        Option<&Children>,
+    )>,
 ) -> Option<Entity> {
-    let (name, bone, children) = entities.get(entity).ok()?;
+    let (name, bone, _, children) = entities.get(entity).ok()?;
     if is_bone {
         if bone.is_some_and(|bone| bone.0 == target_name) {
             return Some(entity);
@@ -77,6 +92,28 @@ fn find_entity(
 
     for child in children? {
         if let Some(entity) = find_entity(target_name, is_bone, *child, entities) {
+            return Some(entity);
+        }
+    }
+    None
+}
+
+fn find_node_index(
+    target_index: usize,
+    entity: Entity,
+    entities: &Query<(
+        Option<&Name>,
+        Option<&VrmBone>,
+        Option<&VrmNodeIndex>,
+        Option<&Children>,
+    )>,
+) -> Option<Entity> {
+    let (_, _, node_index, children) = entities.get(entity).ok()?;
+    if node_index.is_some_and(|node_index| node_index.0 == target_index) {
+        return Some(entity);
+    }
+    for child in children? {
+        if let Some(entity) = find_node_index(target_index, *child, entities) {
             return Some(entity);
         }
     }

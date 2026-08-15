@@ -88,23 +88,13 @@ impl VrmcMaterialRegistry {
         // to the overwritten materials skip the MToon conversion entirely,
         // rendering with the default `StandardMaterial` instead.
         let source = gltf.source.as_ref()?;
-        let mut legacy_properties = HashMap::<String, Vec<Value>>::new();
-        if let Some(properties) = source
+        let legacy_properties = source
             .extensions()
             .and_then(|extensions| extensions.get("VRM"))
             .and_then(|vrm| vrm.get("materialProperties"))
             .and_then(Value::as_array)
-        {
-            for property in properties {
-                if let Some(name) = property.get("name").and_then(Value::as_str) {
-                    legacy_properties
-                        .entry(name.to_string())
-                        .or_default()
-                        .push(property.clone());
-                }
-            }
-        }
-        let mut legacy_occurrences = HashMap::<String, usize>::new();
+            .cloned()
+            .unwrap_or_default();
         let mut materials = HashMap::new();
         for material in source.materials() {
             let Some(index) = material.index() else {
@@ -124,15 +114,25 @@ impl VrmcMaterialRegistry {
                 .extensions()
                 .and_then(|extensions| extensions.get("VRMC_materials_mtoon"))
                 .cloned();
-            let legacy = material.name().and_then(|name| {
-                let occurrence = legacy_occurrences.entry(name.to_string()).or_default();
-                let value = legacy_properties
-                    .get(name)
-                    .and_then(|values| values.get(*occurrence))
-                    .cloned();
-                *occurrence += 1;
-                value
-            });
+            // VRM 0.x materialProperties is parallel to glTF materials. The
+            // glTF material index is the only stable identity; names and
+            // occurrence order are not.
+            let legacy = legacy_properties.get(index).cloned();
+            if let Some(shader) = legacy
+                .as_ref()
+                .and_then(|value| value.get("shader"))
+                .and_then(Value::as_str)
+            {
+                let is_mtoon = shader.contains("MToon");
+                let is_unlit = shader.contains("Unlit");
+                if is_unlit || !is_mtoon {
+                    #[cfg(feature = "log")]
+                    bevy::log::warn!(
+                        "VRM 0.x material {index} uses unsupported shader '{shader}'; keeping glTF StandardMaterial fallback"
+                    );
+                    continue;
+                }
+            }
             let Some(properties) = modern
                 .and_then(|value| match serde_json::from_value(value) {
                     Ok(properties) => Some(properties),
@@ -141,7 +141,14 @@ impl VrmcMaterialRegistry {
                         None
                     }
                 })
-                .or_else(|| legacy.and_then(|value| convert_legacy_material_properties(&value)))
+                .or_else(|| {
+                    legacy.and_then(|value| {
+                        convert_legacy_material_properties_with_texture_count(
+                            &value,
+                            Some(source.textures().count()),
+                        )
+                    })
+                })
             else {
                 continue;
             };

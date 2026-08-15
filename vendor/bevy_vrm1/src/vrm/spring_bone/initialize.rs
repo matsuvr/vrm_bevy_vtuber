@@ -1,4 +1,5 @@
 use crate::prelude::ChildSearcher;
+use crate::vrm::VrmNodeIndex;
 use crate::vrm::humanoid_bone::RequestInitializeHumanoidBones;
 use crate::vrm::spring_bone::registry::{
     SpringColliderRegistry, SpringJointPropsRegistry, SpringNodeRegistry,
@@ -36,8 +37,8 @@ fn apply_initialize_joint_props(
     let Ok(nodes) = models.get(root) else {
         return;
     };
-    for (name, props) in nodes.iter() {
-        let Some(joint_entity) = child_searcher.find_from_name(root, name.as_str()) else {
+    for (node_index, props) in nodes.iter() {
+        let Some(joint_entity) = child_searcher.find_from_node_index(root, *node_index) else {
             continue;
         };
         commands.entity(joint_entity).insert(*props);
@@ -54,8 +55,8 @@ fn apply_initialize_collider_shapes(
     let Ok(registry) = models.get(entity) else {
         return;
     };
-    for (name, shape) in registry.iter() {
-        let Some(collider_entity) = child_searcher.find_from_name(entity, name) else {
+    for (node_index, shape) in registry.iter() {
+        let Some(collider_entity) = child_searcher.find_from_node_index(entity, *node_index) else {
             continue;
         };
         commands.entity(collider_entity).insert(*shape);
@@ -76,14 +77,13 @@ fn apply_initialize_spring_roots(
         center_node: SpringCenterNode(
             spring
                 .center
-                .as_ref()
-                .and_then(|center| child_searcher.find_from_name(entity, center.as_str())),
+                .and_then(|center| child_searcher.find_from_node_index(entity, center)),
         ),
         joints: SpringJoints(
             spring
                 .joints
                 .iter()
-                .filter_map(|joint| child_searcher.find_from_name(entity, joint.as_str()))
+                .filter_map(|joint| child_searcher.find_from_node_index(entity, *joint))
                 .collect(),
         ),
         colliders: SpringColliders(
@@ -91,8 +91,8 @@ fn apply_initialize_spring_roots(
                 .colliders
                 .iter()
                 .filter_map(|(collider, shape)| {
-                    let name = child_searcher.find_from_name(entity, collider.as_str())?;
-                    Some((name, *shape))
+                    let entity = child_searcher.find_from_node_index(entity, *collider)?;
+                    Some((entity, *shape))
                 })
                 .collect(),
         ),
@@ -110,6 +110,8 @@ fn init_spring_joint_states(
     spring_roots: Query<&SpringRoot, Added<SpringRoot>>,
     joints: Query<&Transform>,
     global_transforms: Query<&GlobalTransform>,
+    children: Query<&Children>,
+    node_indices: Query<Option<&VrmNodeIndex>>,
 ) {
     spring_roots.par_iter().for_each(|root| {
         for w in root.joints.windows(2) {
@@ -129,11 +131,15 @@ fn init_spring_joint_states(
                 .and_then(|center| global_transforms.get(center).ok())
                 .map(|center_gtf| tail_gtf.reparented_to(center_gtf).translation)
                 .unwrap_or(tail_gtf.translation());
+            let bone_length = tail_tf.translation.length();
+            if !bone_length.is_finite() || bone_length <= f32::EPSILON {
+                continue;
+            }
             let state = SpringJointState {
                 prev_tail: tail_pos,
                 current_tail: tail_pos,
-                bone_axis: tail_tf.translation.normalize(),
-                bone_length: tail_tf.translation.length(),
+                bone_axis: tail_tf.translation / bone_length,
+                bone_length,
                 initial_local_matrix: head_tf.to_matrix(),
                 initial_local_rotation: head_tf.rotation,
             };
@@ -145,9 +151,11 @@ fn init_spring_joint_states(
             (root.joints.last(), root.terminal_length)
             && let (Ok(last_tf), Ok(last_gtf)) =
                 (joints.get(last_entity), global_transforms.get(last_entity))
+            && let Some(bone_axis) =
+                terminal_direction(last_entity, &children, &joints, &node_indices, last_tf)
         {
             let terminal_global =
-                last_gtf.translation() + last_gtf.rotation().mul_vec3(Vec3::Y * terminal_length);
+                last_gtf.translation() + last_gtf.rotation().mul_vec3(bone_axis * terminal_length);
             let terminal_tail = root
                 .center_node
                 .and_then(|center| global_transforms.get(center).ok())
@@ -161,7 +169,7 @@ fn init_spring_joint_states(
             let state = SpringJointState {
                 prev_tail: terminal_tail,
                 current_tail: terminal_tail,
-                bone_axis: Vec3::Y,
+                bone_axis,
                 bone_length: terminal_length,
                 initial_local_matrix: last_tf.to_matrix(),
                 initial_local_rotation: last_tf.rotation,
@@ -171,6 +179,33 @@ fn init_spring_joint_states(
             });
         }
     });
+}
+
+fn terminal_direction(
+    entity: Entity,
+    children: &Query<&Children>,
+    transforms: &Query<&Transform>,
+    node_indices: &Query<Option<&VrmNodeIndex>>,
+    last_transform: &Transform,
+) -> Option<Vec3> {
+    let child_direction = children
+        .get(entity)
+        .ok()?
+        .iter()
+        .filter_map(|child| {
+            let transform = transforms.get(child).ok()?;
+            node_indices
+                .get(child)
+                .ok()
+                .flatten()
+                .map(|_| transform.translation)
+        })
+        .find(|translation| translation.length_squared() > f32::EPSILON)
+        .map(|translation| translation.normalize());
+    child_direction.or_else(|| {
+        (last_transform.translation.length_squared() > f32::EPSILON)
+            .then(|| last_transform.translation.normalize())
+    })
 }
 
 #[cfg(test)]

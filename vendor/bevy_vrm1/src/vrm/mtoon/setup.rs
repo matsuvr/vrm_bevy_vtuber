@@ -2,6 +2,7 @@ use crate::prelude::*;
 use crate::vrm::gltf::materials::LegacyAlphaMode;
 use bevy::app::{App, Plugin};
 use bevy::asset::Assets;
+use bevy::math::{Affine2, Vec2};
 use bevy::prelude::*;
 
 pub struct MToonMaterialSetupPlugin;
@@ -37,11 +38,16 @@ fn turn_to_mtoon_material(
         let Some(base) = standard_materials.get(handle.id()).cloned() else {
             return;
         };
+        let legacy_double_sided = extension.legacy_double_sided;
         let mut cmd = commands.entity(entity);
         cmd.remove::<MeshMaterial3d<StandardMaterial>>()
             .insert(MeshMaterial3d(
                 mtoon_materials.add(MToonMaterial {
-                    base_color_texture: base.base_color_texture.clone(),
+                    base_color_texture: extension
+                        .legacy_base_texture
+                        .and_then(|index| registry.images.get(index))
+                        .cloned()
+                        .or_else(|| base.base_color_texture.clone()),
                     uv_animation_mask_texture: extension
                         .uv_animation_mask_texture
                         .and_then(|tex| registry.images.get(tex.index))
@@ -71,7 +77,7 @@ fn turn_to_mtoon_material(
                     rim_lighting: RimLighting::from(extension),
                     uv_animation: UVAnimation::from(extension),
                     gi_equalization_factor: extension.gi_equalization_factor,
-                    double_sided: base.double_sided,
+                    double_sided: legacy_double_sided.unwrap_or(base.double_sided),
                     alpha_mode: extension
                         .legacy_alpha_mode
                         .map(|mode| match mode {
@@ -84,11 +90,34 @@ fn turn_to_mtoon_material(
                     render_queue_offset: extension.render_queue_offset_number,
                     transparent_with_z_write: extension.transparent_with_z_write,
                     opaque_renderer_method: base.opaque_render_method,
-                    base_color: base.base_color,
-                    cull_mode: base.cull_mode,
-                    emissive: base.emissive,
-                    emissive_texture: base.emissive_texture.clone(),
-                    uv_transform: base.uv_transform,
+                    base_color: extension
+                        .legacy_base_color
+                        .map(|color| Color::linear_rgba(color[0], color[1], color[2], color[3]))
+                        .unwrap_or(base.base_color),
+                    cull_mode: if legacy_double_sided == Some(true) {
+                        None
+                    } else {
+                        base.cull_mode
+                    },
+                    emissive: extension
+                        .legacy_emissive
+                        .map(|color| LinearRgba::rgb(color[0], color[1], color[2]))
+                        .unwrap_or(base.emissive),
+                    emissive_texture: extension
+                        .legacy_emissive_texture
+                        .and_then(|index| registry.images.get(index))
+                        .cloned()
+                        .or_else(|| base.emissive_texture.clone()),
+                    uv_transform: extension
+                        .legacy_uv_transform
+                        .map(|transform| {
+                            Affine2::from_scale_angle_translation(
+                                Vec2::new(transform[0], transform[1]),
+                                0.0,
+                                Vec2::new(transform[2], transform[3]),
+                            )
+                        })
+                        .unwrap_or(base.uv_transform),
                 }),
             ));
     });

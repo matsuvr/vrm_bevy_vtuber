@@ -71,6 +71,30 @@ pub struct VrmcMaterialsExtensitions {
     #[serde(skip)]
     #[reflect(ignore)]
     pub legacy_alpha_mode: Option<LegacyAlphaMode>,
+    /// Legacy `_Color` override in linear RGBA, if present.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub legacy_base_color: Option<[f32; 4]>,
+    /// Legacy `_MainTex` image index, if present.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub legacy_base_texture: Option<usize>,
+    /// Legacy emission color in linear RGB, if present.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub legacy_emissive: Option<[f32; 3]>,
+    /// Legacy emission texture image index, if present.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub legacy_emissive_texture: Option<usize>,
+    /// Legacy `_Cull` override. `false` means double-sided.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub legacy_double_sided: Option<bool>,
+    /// Legacy `_MainTex_ST` as `[scale_x, scale_y, offset_x, offset_y]`.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub legacy_uv_transform: Option<[f32; 4]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,6 +129,14 @@ impl VrmcMaterialsExtensitions {
 /// material contract. Legacy values are normalized by name and texture index;
 /// the renderer remains the same `MToon` renderer used for VRM 1.0.
 pub fn convert_legacy_material_properties(value: &Value) -> Option<VrmcMaterialsExtensitions> {
+    convert_legacy_material_properties_with_texture_count(value, None)
+}
+
+/// Converts a legacy material while validating all referenced image indices.
+pub fn convert_legacy_material_properties_with_texture_count(
+    value: &Value,
+    texture_count: Option<usize>,
+) -> Option<VrmcMaterialsExtensitions> {
     let mut properties = json!({
         "specVersion": "1.0",
         "matcapFactor": [1.0, 1.0, 1.0],
@@ -190,6 +222,9 @@ pub fn convert_legacy_material_properties(value: &Value) -> Option<VrmcMaterials
             "_ZWrite" => {
                 properties.insert("transparentWithZWrite".into(), json!(value > 0.5));
             }
+            "_Cull" => {
+                properties.insert("legacyDoubleSided".into(), json!(value <= 0.5));
+            }
             "_ShadingShiftTextureScale" => {
                 properties.insert("shadingShiftTextureScale".into(), json!(value));
             }
@@ -210,25 +245,42 @@ pub fn convert_legacy_material_properties(value: &Value) -> Option<VrmcMaterials
             continue;
         };
         match name.as_str() {
+            "_Color" | "_MainColor" => {
+                if vector.len() >= 4 {
+                    properties.insert("legacyBaseColor".into(), json!(unity_color(&vector)));
+                }
+            }
+            "_MainTex_ST" => {
+                if vector.len() >= 4 {
+                    properties.insert("legacyUvTransform".into(), json!(&vector[..4]));
+                }
+            }
+            "_EmissionColor" | "_Emission" => {
+                if vector.len() >= 3 {
+                    properties.insert("legacyEmissive".into(), json!(unity_rgb(&vector[..3])));
+                }
+            }
             "_ShadeColor" => {
-                if let Some(color) = rgb(&vector) {
+                if vector.len() >= 3 {
+                    let color = unity_rgb(&vector);
                     properties.insert("shadeColorFactor".into(), json!(color));
                 }
             }
             "_RimColor" => {
-                if let Some(color) = rgb(&vector) {
+                if vector.len() >= 3 {
+                    let color = unity_rgb(&vector);
                     properties.insert("parametricRimColorFactor".into(), json!(color));
                 }
             }
             "_OutlineColor" => {
-                if let Some(color) = rgb(&vector) {
+                if vector.len() >= 3 {
+                    let color = unity_rgb(&vector);
                     properties.insert("outlineColorFactor".into(), json!(color));
                 }
             }
-            "_MatcapColor" | "_MatCapColor" => {
-                if let Some(color) = rgb(&vector) {
-                    properties.insert("matcapFactor".into(), json!(color));
-                }
+            "_MatcapColor" | "_MatCapColor" if vector.len() >= 3 => {
+                let color = unity_rgb(&vector);
+                properties.insert("matcapFactor".into(), json!(color));
             }
             _ => {}
         }
@@ -244,7 +296,20 @@ pub fn convert_legacy_material_properties(value: &Value) -> Option<VrmcMaterials
             continue;
         };
         let texture = texture_with_identity_transform(index);
+        if texture_count.is_some_and(|count| index >= count) {
+            #[cfg(feature = "log")]
+            bevy::log::warn!(
+                "Ignoring legacy material property {name}: texture index {index} is out of range"
+            );
+            continue;
+        }
         match name.as_str() {
+            "_MainTex" | "_MainTexture" => {
+                properties.insert("legacyBaseTexture".into(), json!(index));
+            }
+            "_EmissionMap" | "_EmissionTexture" => {
+                properties.insert("legacyEmissiveTexture".into(), json!(index));
+            }
             "_ShadeTexture" => {
                 properties.insert("shadeMultiplyTexture".into(), texture);
             }
@@ -280,6 +345,74 @@ pub fn convert_legacy_material_properties(value: &Value) -> Option<VrmcMaterials
     let mut converted: VrmcMaterialsExtensitions =
         serde_json::from_value(Value::Object(properties)).ok()?;
     converted.legacy_alpha_mode = legacy_alpha_mode(value);
+    converted.legacy_base_color = value
+        .get("vectorProperties")
+        .and_then(Value::as_object)
+        .and_then(|vectors| vectors.get("_Color").or_else(|| vectors.get("_MainColor")))
+        .and_then(finite_array)
+        .and_then(|values| (values.len() >= 4).then(|| unity_color(&values)));
+    converted.legacy_base_texture = value
+        .get("textureProperties")
+        .and_then(Value::as_object)
+        .and_then(|textures| {
+            textures
+                .get("_MainTex")
+                .or_else(|| textures.get("_MainTexture"))
+        })
+        .and_then(|index| index.as_u64())
+        .and_then(|index| index.try_into().ok())
+        .filter(|index| texture_count.is_none_or(|count| *index < count));
+    converted.legacy_emissive = value
+        .get("vectorProperties")
+        .and_then(Value::as_object)
+        .and_then(|vectors| {
+            vectors
+                .get("_EmissionColor")
+                .or_else(|| vectors.get("_Emission"))
+        })
+        .and_then(finite_array)
+        .and_then(|values| (values.len() >= 3).then(|| unity_rgb(&values[..3])));
+    converted.legacy_emissive_texture = value
+        .get("textureProperties")
+        .and_then(Value::as_object)
+        .and_then(|textures| {
+            textures
+                .get("_EmissionMap")
+                .or_else(|| textures.get("_EmissionTexture"))
+        })
+        .and_then(|index| index.as_u64())
+        .and_then(|index| index.try_into().ok())
+        .filter(|index| texture_count.is_none_or(|count| *index < count));
+    converted.legacy_double_sided = value
+        .get("floatProperties")
+        .and_then(Value::as_object)
+        .and_then(|floats| floats.get("_Cull"))
+        .and_then(finite_f32)
+        .map(|cull| cull <= 0.5);
+    converted.legacy_uv_transform = value
+        .get("vectorProperties")
+        .and_then(Value::as_object)
+        .and_then(|vectors| vectors.get("_MainTex_ST"))
+        .and_then(finite_array)
+        .and_then(|values| {
+            (values.len() >= 4).then(|| [values[0], values[1], values[2], values[3]])
+        });
+    for name in ["_BumpMap", "_BumpScale"] {
+        if value
+            .get("textureProperties")
+            .and_then(Value::as_object)
+            .is_some_and(|properties| properties.contains_key(name))
+            || value
+                .get("floatProperties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| properties.contains_key(name))
+        {
+            #[cfg(feature = "log")]
+            bevy::log::warn!(
+                "Legacy material property {name} is retained by glTF fallback because the existing MToon contract has no normal-map slot"
+            );
+        }
+    }
     Some(converted)
 }
 
@@ -322,8 +455,30 @@ fn finite_array(value: &Value) -> Option<Vec<f32>> {
         .map(|values| values.iter().filter_map(finite_f32).collect())
 }
 
-fn rgb(vector: &[f32]) -> Option<[f32; 3]> {
-    (vector.len() >= 3).then(|| [vector[0], vector[1], vector[2]])
+fn unity_rgb(vector: &[f32]) -> [f32; 3] {
+    [
+        srgb_to_linear(vector[0]),
+        srgb_to_linear(vector[1]),
+        srgb_to_linear(vector[2]),
+    ]
+}
+
+fn unity_color(vector: &[f32]) -> [f32; 4] {
+    [
+        srgb_to_linear(vector[0]),
+        srgb_to_linear(vector[1]),
+        srgb_to_linear(vector[2]),
+        vector[3].clamp(0.0, 1.0),
+    ]
+}
+
+fn srgb_to_linear(value: f32) -> f32 {
+    let value = value.clamp(0.0, 1.0);
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 fn texture_with_identity_transform(index: usize) -> Value {
@@ -356,10 +511,13 @@ mod tests {
                 "_Cutoff": 0.35
             },
             "vectorProperties": {
+                "_Color": [0.5, 0.25, 1.0, 0.75],
+                "_MainTex_ST": [0.8, 0.9, 0.1, 0.2],
                 "_ShadeColor": [0.1, 0.2, 0.3, 1.0],
                 "_OutlineColor": [0.4, 0.5, 0.6, 1.0]
             },
             "textureProperties": {
+                "_MainTex": 2,
                 "_ShadeTexture": 3,
                 "_MatCapTex": 4
             },
@@ -370,10 +528,27 @@ mod tests {
         assert_eq!(converted.outline_width_factor, Some(0.02));
         assert_eq!(converted.render_queue_offset_number, 500.0);
         assert!(converted.transparent_with_z_write);
-        assert_eq!(converted.shade_color_factor, [0.1, 0.2, 0.3]);
-        assert_eq!(converted.outline_color_factor, [0.4, 0.5, 0.6]);
+        assert_eq!(
+            converted.shade_color_factor,
+            [
+                srgb_to_linear(0.1),
+                srgb_to_linear(0.2),
+                srgb_to_linear(0.3)
+            ]
+        );
+        assert_eq!(
+            converted.outline_color_factor,
+            [
+                srgb_to_linear(0.4),
+                srgb_to_linear(0.5),
+                srgb_to_linear(0.6)
+            ]
+        );
         assert_eq!(converted.shade_multiply_texture.unwrap().index, 3);
         assert_eq!(converted.matcap_texture.unwrap().index, 4);
+        assert_eq!(converted.legacy_base_texture, Some(2));
+        assert_eq!(converted.legacy_base_color.unwrap()[3], 0.75);
+        assert_eq!(converted.legacy_uv_transform, Some([0.8, 0.9, 0.1, 0.2]));
         assert_eq!(
             converted.legacy_alpha_mode,
             Some(LegacyAlphaMode::Mask(0.35))

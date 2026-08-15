@@ -561,6 +561,13 @@ fn format_import_error(error: &ModelImportError) -> String {
         ModelImportError::InvalidNodeIndex { index } => {
             format!("Invalid node index: {index}")
         }
+        ModelImportError::InvalidMeshIndex { index } => format!("Invalid mesh index: {index}"),
+        ModelImportError::InvalidMorphTargetIndex { mesh, index } => {
+            format!("Invalid morph target index {index} for mesh {mesh}")
+        }
+        ModelImportError::InvalidVrmField { path, reason } => {
+            format!("Invalid VRM field {path}: {reason}")
+        }
         ModelImportError::Io(e) => format!("I/O error: {e}"),
         ModelImportError::LimitExceedsHardCap { .. } => "Configuration error".to_string(),
     }

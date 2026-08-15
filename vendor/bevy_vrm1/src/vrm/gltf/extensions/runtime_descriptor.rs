@@ -71,6 +71,8 @@ pub struct VrmHumanoid {
 pub struct VrmFirstPerson {
     /// Optional first-person reference bone from VRM 0.x.
     pub first_person_bone: Option<usize>,
+    /// Optional headset offset from the first-person bone.
+    pub first_person_bone_offset: Option<[f32; 3]>,
     /// Mesh/node visibility annotations.
     pub mesh_annotations: Vec<VrmMeshAnnotation>,
 }
@@ -145,6 +147,8 @@ pub enum VrmParseError {
     MissingField(String),
     /// A field had an invalid JSON type or value.
     InvalidField { path: String, reason: String },
+    /// A glTF index was outside the referenced array.
+    InvalidIndex { path: String, index: usize },
     /// A legacy human bone was declared more than once.
     DuplicateBone(String),
 }
@@ -164,6 +168,9 @@ impl fmt::Display for VrmParseError {
             }
             Self::MissingField(path) => write!(f, "missing required field {path}"),
             Self::InvalidField { path, reason } => write!(f, "invalid field {path}: {reason}"),
+            Self::InvalidIndex { path, index } => {
+                write!(f, "invalid index {path}={index}")
+            }
             Self::DuplicateBone(name) => write!(f, "duplicate Humanoid bone {name}"),
         }
     }
@@ -183,21 +190,36 @@ pub fn parse_runtime_descriptor(root: &Value) -> Result<VrmRuntimeDescriptor, Vr
 
     match (legacy, modern) {
         (Some(_), Some(_)) => Err(VrmParseError::AmbiguousGeneration),
-        (Some(vrm), None) => parse_vrm0(vrm),
+        (Some(vrm), None) => parse_vrm0(root, vrm),
         (None, Some(vrmc)) => parse_vrm1(vrmc),
         (None, None) => Err(VrmParseError::MissingGeneration),
     }
 }
 
-fn parse_vrm0(vrm: &Value) -> Result<VrmRuntimeDescriptor, VrmParseError> {
+fn parse_vrm0(
+    root: &Value,
+    vrm: &Value,
+) -> Result<VrmRuntimeDescriptor, VrmParseError> {
     let meta = parse_vrm0_meta(vrm.get("meta"));
-    let humanoid = parse_vrm0_humanoid(vrm.get("humanoid"))?;
+    let humanoid = parse_vrm0_humanoid(root, vrm.get("humanoid"))?;
     let first_person = vrm
         .get("firstPerson")
-        .map(parse_vrm0_first_person)
+        .map(|value| parse_vrm0_first_person(root, value))
         .transpose()?;
     let look_at = vrm
-        .get("lookAtMaster")
+        .get("firstPerson")
+        .and_then(|value| {
+            let has_look_at = value.get("lookAtTypeName").is_some()
+                || [
+                    "lookAtHorizontalInner",
+                    "lookAtHorizontalOuter",
+                    "lookAtVerticalDown",
+                    "lookAtVerticalUp",
+                ]
+                .iter()
+                .any(|field| value.get(*field).is_some());
+            has_look_at.then_some(value)
+        })
         .map(parse_vrm0_look_at)
         .transpose()?;
 
@@ -269,7 +291,10 @@ fn parse_vrm1_meta(meta: Option<&Value>) -> VrmMeta {
     }
 }
 
-fn parse_vrm0_humanoid(humanoid: Option<&Value>) -> Result<VrmHumanoid, VrmParseError> {
+fn parse_vrm0_humanoid(
+    root: &Value,
+    humanoid: Option<&Value>,
+) -> Result<VrmHumanoid, VrmParseError> {
     let bones = humanoid
         .and_then(|value| value.get("humanBones"))
         .and_then(Value::as_array)
@@ -282,6 +307,7 @@ fn parse_vrm0_humanoid(humanoid: Option<&Value>) -> Result<VrmHumanoid, VrmParse
             .and_then(Value::as_str)
             .ok_or_else(|| VrmParseError::MissingField(format!("{path}.bone")))?;
         let node = required_usize(bone, "node", &format!("{path}.node"))?;
+        validate_node_index(root, node, &format!("{path}.node"))?;
         if human_bones.insert(name.to_string(), node).is_some() {
             return Err(VrmParseError::DuplicateBone(name.into()));
         }
@@ -319,30 +345,48 @@ fn require_humanoid_bones(bones: &BTreeMap<String, usize>) -> Result<(), VrmPars
     Ok(())
 }
 
-fn parse_vrm0_first_person(value: &Value) -> Result<VrmFirstPerson, VrmParseError> {
+fn parse_vrm0_first_person(
+    root: &Value,
+    value: &Value,
+) -> Result<VrmFirstPerson, VrmParseError> {
     let first_person_bone = value
         .get("firstPersonBone")
-        .map(|_| required_usize(value, "firstPersonBone", "VRM.firstPerson.firstPersonBone"))
+        .map(|_| {
+            let index =
+                required_usize(value, "firstPersonBone", "VRM.firstPerson.firstPersonBone")?;
+            validate_node_index(root, index, "VRM.firstPerson.firstPersonBone")
+        })
+        .transpose()?;
+    let first_person_bone_offset = value
+        .get("firstPersonBoneOffset")
+        .map(|offset| array3_object(offset, "VRM.firstPerson.firstPersonBoneOffset"))
         .transpose()?;
     let mut mesh_annotations = Vec::new();
-    if let Some(annotations) = value.get("meshAnnotations").and_then(Value::as_array) {
+    let mut seen_nodes = std::collections::BTreeSet::new();
+    if let Some(raw_annotations) = value.get("meshAnnotations") {
+        let annotations = raw_annotations
+            .as_array()
+            .ok_or_else(|| VrmParseError::InvalidField {
+                path: "VRM.firstPerson.meshAnnotations".into(),
+                reason: "expected an array".into(),
+            })?;
         for (index, annotation) in annotations.iter().enumerate() {
             let path = format!("VRM.firstPerson.meshAnnotations[{index}]");
-            let node = annotation
-                .get("mesh")
-                .or_else(|| annotation.get("node"))
-                .and_then(Value::as_u64)
-                .and_then(|value| usize::try_from(value).ok())
-                .ok_or_else(|| VrmParseError::MissingField(format!("{path}.mesh")))?;
+            let mesh = required_usize(annotation, "mesh", &format!("{path}.mesh"))?;
             let flag = parse_first_person_flag(
                 annotation.get("firstPersonFlag"),
                 &format!("{path}.firstPersonFlag"),
             )?;
-            mesh_annotations.push(VrmMeshAnnotation { node, flag });
+            for node in mesh_instance_nodes(root, mesh, &format!("{path}.mesh"))? {
+                if seen_nodes.insert(node) {
+                    mesh_annotations.push(VrmMeshAnnotation { node, flag });
+                }
+            }
         }
     }
     Ok(VrmFirstPerson {
         first_person_bone,
+        first_person_bone_offset,
         mesh_annotations,
     })
 }
@@ -362,6 +406,7 @@ fn parse_vrm1_first_person(value: &Value) -> Result<VrmFirstPerson, VrmParseErro
     }
     Ok(VrmFirstPerson {
         first_person_bone: None,
+        first_person_bone_offset: None,
         mesh_annotations,
     })
 }
@@ -390,38 +435,61 @@ fn parse_first_person_flag(
 }
 
 fn parse_vrm0_look_at(value: &Value) -> Result<VrmLookAt, VrmParseError> {
-    let r#type = match required_string(value, "type")?.as_str() {
-        "Bone" | "bone" => VrmLookAtType::Bone,
-        "BlendShape" | "blendShape" | "Expression" | "expression" => VrmLookAtType::Expression,
+    let has_look_at = value.get("lookAtTypeName").is_some()
+        || [
+            "lookAtHorizontalInner",
+            "lookAtHorizontalOuter",
+            "lookAtVerticalDown",
+            "lookAtVerticalUp",
+        ]
+        .iter()
+        .any(|field| value.get(*field).is_some());
+    if !has_look_at {
+        return Err(VrmParseError::MissingField(
+            "VRM.firstPerson.lookAtTypeName".into(),
+        ));
+    }
+    let r#type = match required_string(value, "lookAtTypeName")?.as_str() {
+        "Bone" => VrmLookAtType::Bone,
+        "BlendShape" => VrmLookAtType::Expression,
         other => {
             return Err(VrmParseError::InvalidField {
-                path: "VRM.lookAtMaster.type".into(),
+                path: "VRM.firstPerson.lookAtTypeName".into(),
                 reason: format!("unknown look-at type {other}"),
             });
         }
     };
     Ok(VrmLookAt {
         r#type,
-        offset_from_head_bone: array3(value, "offsetFromHeadBone", "VRM.lookAtMaster")?,
+        offset_from_head_bone: array3_object(
+            value
+                .get("firstPersonBoneOffset")
+                .ok_or_else(|| {
+                    VrmParseError::MissingField(
+                        "VRM.firstPerson.firstPersonBoneOffset".into(),
+                    )
+                })?,
+            "VRM.firstPerson.firstPersonBoneOffset",
+        )?,
         range_map_horizontal_inner: parse_vrm0_range_map(
             value,
             "lookAtHorizontalInner",
-            "VRM.lookAtMaster.lookAtHorizontalInner",
+            "VRM.firstPerson.lookAtHorizontalInner",
         )?,
         range_map_horizontal_outer: parse_vrm0_range_map(
             value,
             "lookAtHorizontalOuter",
-            "VRM.lookAtMaster.lookAtHorizontalOuter",
+            "VRM.firstPerson.lookAtHorizontalOuter",
         )?,
         range_map_vertical_down: parse_vrm0_range_map(
             value,
             "lookAtVerticalDown",
-            "VRM.lookAtMaster.lookAtVerticalDown",
+            "VRM.firstPerson.lookAtVerticalDown",
         )?,
         range_map_vertical_up: parse_vrm0_range_map(
             value,
             "lookAtVerticalUp",
-            "VRM.lookAtMaster.lookAtVerticalUp",
+            "VRM.firstPerson.lookAtVerticalUp",
         )?,
     })
 }
@@ -431,13 +499,38 @@ fn parse_vrm0_range_map(
     field: &str,
     path: &str,
 ) -> Result<VrmRangeMap, VrmParseError> {
-    let curve = value
+    let range = value
         .get(field)
-        .and_then(|range| range.get("curve"))
-        .ok_or_else(|| VrmParseError::MissingField(format!("{path}.curve")))?;
+        .and_then(Value::as_object)
+        .ok_or_else(|| VrmParseError::MissingField(path.into()))?;
+    if let Some(curve) = range.get("curve") {
+        let values = curve
+            .as_array()
+            .ok_or_else(|| VrmParseError::InvalidField {
+                path: format!("{path}.curve"),
+                reason: "expected an array of curve coefficients".into(),
+            })?;
+        if values
+            .iter()
+            .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+        {
+            return Err(VrmParseError::InvalidField {
+                path: format!("{path}.curve"),
+                reason: "curve coefficients must be finite numbers".into(),
+            });
+        }
+    }
     Ok(VrmRangeMap {
-        input_max_value: required_f32(curve, "xRange", &format!("{path}.curve.xRange"))?,
-        output_scale: required_f32(curve, "yRange", &format!("{path}.curve.yRange"))?,
+        input_max_value: required_f32(
+            &Value::Object(range.clone()),
+            "xRange",
+            &format!("{path}.xRange"),
+        )?,
+        output_scale: required_f32(
+            &Value::Object(range.clone()),
+            "yRange",
+            &format!("{path}.yRange"),
+        )?,
     })
 }
 
@@ -538,6 +631,113 @@ fn required_f32(
         })
 }
 
+fn array3_object(
+    value: &Value,
+    path: &str,
+) -> Result<[f32; 3], VrmParseError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| VrmParseError::InvalidField {
+            path: path.into(),
+            reason: "expected an object with x, y, z".into(),
+        })?;
+    let mut result = [0.0; 3];
+    for (index, field) in ["x", "y", "z"].into_iter().enumerate() {
+        result[index] = object
+            .get(field)
+            .and_then(Value::as_f64)
+            .map(|value| value as f32)
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| VrmParseError::InvalidField {
+                path: format!("{path}.{field}"),
+                reason: "expected a finite number".into(),
+            })?;
+    }
+    Ok(result)
+}
+
+fn validate_node_index(
+    root: &Value,
+    index: usize,
+    path: &str,
+) -> Result<usize, VrmParseError> {
+    let count = root
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| VrmParseError::MissingField("nodes".into()))?
+        .len();
+    (index < count)
+        .then_some(index)
+        .ok_or_else(|| VrmParseError::InvalidIndex {
+            path: path.into(),
+            index,
+        })
+}
+
+fn mesh_instance_nodes(
+    root: &Value,
+    mesh: usize,
+    path: &str,
+) -> Result<Vec<usize>, VrmParseError> {
+    let meshes = root
+        .get("meshes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| VrmParseError::MissingField("meshes".into()))?;
+    meshes
+        .get(mesh)
+        .ok_or_else(|| VrmParseError::InvalidIndex {
+            path: path.into(),
+            index: mesh,
+        })?;
+    let nodes = root
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| VrmParseError::MissingField("nodes".into()))?;
+    let instances = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| {
+            (node.get("mesh").and_then(Value::as_u64) == Some(mesh as u64)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    Ok(instances)
+}
+
+fn validate_morph_target_index(
+    root: &Value,
+    mesh: usize,
+    morph_index: usize,
+    path: &str,
+) -> Result<(), VrmParseError> {
+    let meshes = root
+        .get("meshes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| VrmParseError::MissingField("meshes".into()))?;
+    let mesh_value = meshes
+        .get(mesh)
+        .ok_or_else(|| VrmParseError::InvalidIndex {
+            path: path.into(),
+            index: mesh,
+        })?;
+    let count = mesh_value
+        .get("primitives")
+        .and_then(Value::as_array)
+        .and_then(|primitives| {
+            primitives
+                .iter()
+                .filter_map(|primitive| primitive.get("targets").and_then(Value::as_array))
+                .map(Vec::len)
+                .max()
+        })
+        .unwrap_or(0);
+    (morph_index < count)
+        .then_some(())
+        .ok_or_else(|| VrmParseError::InvalidIndex {
+            path: path.into(),
+            index: morph_index,
+        })
+}
+
 fn array3(
     value: &Value,
     field: &str,
@@ -574,6 +774,8 @@ mod tests {
 
     fn vrm0_root() -> Value {
         json!({
+            "nodes": [{}, {}, {"mesh": 2}, {"mesh": 2}],
+            "meshes": [{}, {}, {"primitives": [{}]}],
             "extensions": {"VRM": {
                 "meta": {"title": "legacy", "author": "author", "otherLicenseUrl": "https://example.test/license"},
                 "humanoid": {"humanBones": [
@@ -582,14 +784,13 @@ mod tests {
                 ]},
                 "firstPerson": {"firstPersonBone": 1, "meshAnnotations": [
                     {"mesh": 2, "firstPersonFlag": "ThirdPersonOnly"}
-                ]},
-                "lookAtMaster": {
-                    "type": "BlendShape",
-                    "offsetFromHeadBone": [0.0, 0.1, 0.2],
-                    "lookAtHorizontalInner": {"curve": {"xRange": 90.0, "yRange": 10.0}},
-                    "lookAtHorizontalOuter": {"curve": {"xRange": 90.0, "yRange": 10.0}},
-                    "lookAtVerticalDown": {"curve": {"xRange": 90.0, "yRange": 10.0}},
-                    "lookAtVerticalUp": {"curve": {"xRange": 90.0, "yRange": 10.0}}
+                ],
+                "lookAtTypeName": "BlendShape",
+                "firstPersonBoneOffset": {"x": 0.0, "y": 0.1, "z": 0.2},
+                "lookAtHorizontalInner": {"curve": [0.0, 0.0, 1.0], "xRange": 90.0, "yRange": 10.0},
+                "lookAtHorizontalOuter": {"xRange": 90.0, "yRange": 10.0},
+                "lookAtVerticalDown": {"xRange": 90.0, "yRange": 10.0},
+                "lookAtVerticalUp": {"xRange": 90.0, "yRange": 10.0}
                 }
             }}
         })
@@ -634,6 +835,17 @@ mod tests {
             VrmFirstPersonFlag::ThirdPersonOnly
         );
         assert_eq!(
+            descriptor
+                .first_person
+                .as_ref()
+                .unwrap()
+                .mesh_annotations
+                .iter()
+                .map(|annotation| annotation.node)
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(
             descriptor.look_at.as_ref().unwrap().r#type,
             VrmLookAtType::Expression
         );
@@ -645,6 +857,14 @@ mod tests {
                 .range_map_horizontal_inner
                 .output_scale,
             10.0
+        );
+        assert_eq!(
+            descriptor
+                .first_person
+                .as_ref()
+                .unwrap()
+                .first_person_bone_offset,
+            Some([0.0, 0.1, 0.2])
         );
     }
 
@@ -693,5 +913,72 @@ mod tests {
             parse_runtime_descriptor(&root),
             Err(VrmParseError::DuplicateBone("head".into()))
         );
+    }
+
+    #[test]
+    fn rejects_legacy_mesh_annotation_out_of_range() {
+        let mut root = vrm0_root();
+        root["extensions"]["VRM"]["firstPerson"]["meshAnnotations"][0]["mesh"] = json!(99);
+        assert!(matches!(
+            parse_runtime_descriptor(&root),
+            Err(VrmParseError::InvalidIndex { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_legacy_look_at_without_official_bone_offset() {
+        let mut root = vrm0_root();
+        root["extensions"]["VRM"]["firstPerson"]
+            .as_object_mut()
+            .unwrap()
+            .remove("firstPersonBoneOffset");
+        assert!(matches!(
+            parse_runtime_descriptor(&root),
+            Err(VrmParseError::MissingField(path))
+                if path == "VRM.firstPerson.firstPersonBoneOffset"
+        ));
+    }
+
+    #[test]
+    fn parses_legacy_bone_look_at() {
+        let mut root = vrm0_root();
+        root["extensions"]["VRM"]["firstPerson"]["lookAtTypeName"] = json!("Bone");
+        let descriptor = parse_runtime_descriptor(&root).expect("Bone LookAt should parse");
+        assert_eq!(
+            descriptor.look_at.as_ref().unwrap().r#type,
+            VrmLookAtType::Bone
+        );
+    }
+
+    #[test]
+    fn accepts_legacy_first_person_without_look_at() {
+        let mut root = vrm0_root();
+        let first_person = root["extensions"]["VRM"]["firstPerson"]
+            .as_object_mut()
+            .unwrap();
+        for field in [
+            "lookAtTypeName",
+            "firstPersonBoneOffset",
+            "lookAtHorizontalInner",
+            "lookAtHorizontalOuter",
+            "lookAtVerticalDown",
+            "lookAtVerticalUp",
+        ] {
+            first_person.remove(field);
+        }
+        let descriptor = parse_runtime_descriptor(&root).expect("LookAt is optional");
+        assert!(descriptor.look_at.is_none());
+    }
+
+    #[test]
+    fn rejects_legacy_malformed_degree_map_curve() {
+        let mut root = vrm0_root();
+        root["extensions"]["VRM"]["firstPerson"]["lookAtHorizontalInner"]["curve"] =
+            json!("not-an-array");
+        assert!(matches!(
+            parse_runtime_descriptor(&root),
+            Err(VrmParseError::InvalidField { path, .. })
+                if path.ends_with("lookAtHorizontalInner.curve")
+        ));
     }
 }

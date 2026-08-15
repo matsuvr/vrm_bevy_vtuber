@@ -19,9 +19,10 @@ use crate::vrm::gltf::extensions::vrmc_vrm::{
 };
 use anyhow::Context;
 use bevy::gltf::Gltf;
-use bevy::platform::collections::{HashMap, HashSet};
+use bevy::platform::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 
 #[derive(Serialize, Deserialize)]
 pub struct VrmExtensions {
@@ -40,17 +41,34 @@ impl VrmExtensions {
         if let Value::Object(root_object) = &mut root {
             root_object.insert("extensions".into(), Value::Object(json.clone()));
         }
-        let runtime_descriptor = parse_runtime_descriptor(&root)?;
-        let vrmc_vrm = match json.get("VRMC_vrm") {
+        Self::from_root(&root)
+    }
+
+    /// Creates a normalized descriptor from the complete glTF JSON document.
+    ///
+    /// The complete document is required for legacy VRM because 0.x stores
+    /// mesh and morph references as glTF indices rather than scene entity
+    /// names.
+    pub fn from_root(root: &Value) -> AppResult<Self> {
+        let runtime_descriptor = parse_runtime_descriptor(root)?;
+        let extensions = root
+            .get("extensions")
+            .and_then(Value::as_object)
+            .context("Not found glTF extensions")?;
+        let vrmc_vrm = match extensions.get("VRMC_vrm") {
             Some(vrmc) => serde_json::from_value(vrmc.clone())?,
             None => normalized_legacy_vrm(
                 &runtime_descriptor,
-                json.get("VRM").context("Not found VRM extension")?,
-            ),
+                extensions.get("VRM").context("Not found VRM extension")?,
+                root,
+            )?,
         };
-        let vrmc_spring_bone = match json.get("VRMC_springBone") {
+        let vrmc_spring_bone = match extensions.get("VRMC_springBone") {
             Some(value) => Some(serde_json::from_value(value.clone())?),
-            None => json.get("VRM").and_then(normalized_legacy_spring_bone),
+            None => match extensions.get("VRM") {
+                Some(legacy) => normalized_legacy_spring_bone(root, legacy)?,
+                None => None,
+            },
         };
         Ok(Self {
             runtime_descriptor,
@@ -61,7 +79,9 @@ impl VrmExtensions {
 
     /// Creates a new [`VrmExtensions`] from the glTF asset.
     pub fn from_gltf(gltf: &Gltf) -> AppResult<Self> {
-        Self::new(obtain_extensions(gltf)?)
+        let source = gltf.source.as_ref().context("glTF source is unavailable")?;
+        let root = serde_json::to_value(source.as_json())?;
+        Self::from_root(&root)
     }
 
     /// Gets the name of the VRM avatar.
@@ -75,7 +95,8 @@ impl VrmExtensions {
 fn normalized_legacy_vrm(
     descriptor: &VrmRuntimeDescriptor,
     legacy: &Value,
-) -> VrmcVrm {
+    root: &Value,
+) -> AppResult<VrmcVrm> {
     let human_bones = descriptor
         .humanoid
         .human_bones
@@ -126,8 +147,8 @@ fn normalized_legacy_vrm(
         },
     });
 
-    VrmcVrm {
-        expressions: normalized_legacy_expressions(legacy),
+    Ok(VrmcVrm {
+        expressions: normalized_legacy_expressions(legacy, root)?,
         first_person,
         humanoid: Humanoid { human_bones },
         look_at,
@@ -149,41 +170,69 @@ fn normalized_legacy_vrm(
             version: None,
         }),
         spec_version: "1.0".into(),
-    }
+    })
 }
 
-fn normalized_legacy_expressions(legacy: &Value) -> Option<Expressions> {
+fn normalized_legacy_expressions(
+    legacy: &Value,
+    root: &Value,
+) -> AppResult<Option<Expressions>> {
     let groups = legacy
         .get("blendShapeMaster")
         .and_then(|master| master.get("blendShapeGroups"))
-        .and_then(Value::as_array)?;
+        .and_then(Value::as_array);
+    let Some(groups) = groups else {
+        return Ok(None);
+    };
     let mut preset = HashMap::default();
-    for group in groups {
-        let Some(name) = normalized_legacy_expression_name(group) else {
+    for (group_index, group) in groups.iter().enumerate() {
+        let Some(name) = normalized_legacy_expression_name(group, group_index) else {
             continue;
         };
         if preset.contains_key(&name) {
             continue;
         }
-        let morph_target_binds = group.get("binds").and_then(Value::as_array).map(|binds| {
-            binds
-                .iter()
-                .filter_map(|bind| {
-                    let node = bind.get("mesh")?.as_u64()?.try_into().ok()?;
-                    let index = bind.get("index")?.as_u64()?.try_into().ok()?;
-                    let weight = bind.get("weight")?.as_f64()? as f32 / 100.0;
-                    Some(MorphTargetBind {
-                        index,
-                        node,
-                        weight: if weight.is_finite() {
-                            weight.clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        },
+        let morph_target_binds = group
+            .get("binds")
+            .and_then(Value::as_array)
+            .map(|binds| {
+                binds
+                    .iter()
+                    .enumerate()
+                    .map(|(bind_index, bind)| {
+                        let path = format!(
+                            "VRM.blendShapeMaster.blendShapeGroups[{group_index}].binds[{bind_index}]"
+                        );
+                        let mesh = required_index(bind, "mesh", &format!("{path}.mesh"))?;
+                        let morph_index = required_index(
+                            bind,
+                            "index",
+                            &format!("{path}.index"),
+                        )?;
+                        validate_mesh_index(root, mesh, &format!("{path}.mesh"))?;
+                        validate_morph_target_index(
+                            root,
+                            mesh,
+                            morph_index,
+                            &format!("{path}.index"),
+                        )?;
+                        let weight = required_f32(bind, "weight", &format!("{path}.weight"))?;
+                        if !(0.0..=100.0).contains(&weight) {
+                            return Err(anyhow::anyhow!(
+                                "invalid field {path}.weight: expected 0..=100"
+                            ));
+                        }
+                        let nodes = mesh_instance_nodes(root, mesh, &format!("{path}.mesh"))?;
+                        Ok(nodes.into_iter().map(move |node| MorphTargetBind {
+                            index: morph_index,
+                            node,
+                            weight: weight / 100.0,
+                        }))
                     })
-                })
-                .collect()
-        });
+                    .collect::<AppResult<Vec<_>>>()
+                    .map(|binds| binds.into_iter().flatten().collect())
+            })
+            .transpose()?;
         preset.insert(
             name,
             VrmPreset {
@@ -198,42 +247,53 @@ fn normalized_legacy_expressions(legacy: &Value) -> Option<Expressions> {
             },
         );
     }
-    Some(Expressions { preset })
+    Ok(Some(Expressions { preset }))
 }
 
-fn normalized_legacy_expression_name(group: &Value) -> Option<String> {
+fn normalized_legacy_expression_name(
+    group: &Value,
+    group_index: usize,
+) -> Option<String> {
     let preset = group.get("presetName").and_then(Value::as_str);
     let name = group.get("name").and_then(Value::as_str);
     let source = preset
-        .filter(|value| !value.is_empty() && *value != "unknown")
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"))
         .or(name)
-        .filter(|value| !value.is_empty())?;
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("custom_{group_index}"));
     Some(
-        match source {
-            "A" => "aa",
-            "I" => "ih",
-            "U" => "ou",
-            "E" => "ee",
-            "O" => "oh",
-            "Blink" => "blink",
-            "Blink_L" => "blinkLeft",
-            "Blink_R" => "blinkRight",
-            "LookUp" => "lookUp",
-            "LookDown" => "lookDown",
-            "LookLeft" => "lookLeft",
-            "LookRight" => "lookRight",
-            "Joy" => "joy",
-            "Angry" => "angry",
-            "Sorrow" => "sorrow",
-            "Fun" => "fun",
+        match source.as_str() {
+            "A" | "a" => "aa",
+            "I" | "i" => "ih",
+            "U" | "u" => "ou",
+            "E" | "e" => "ee",
+            "O" | "o" => "oh",
+            "Blink" | "blink" => "blink",
+            "Blink_L" | "blink_l" => "blinkLeft",
+            "Blink_R" | "blink_r" => "blinkRight",
+            "LookUp" | "lookup" => "lookUp",
+            "LookDown" | "lookdown" => "lookDown",
+            "LookLeft" | "lookleft" => "lookLeft",
+            "LookRight" | "lookright" => "lookRight",
+            "Joy" | "joy" => "happy",
+            "Angry" | "angry" => "angry",
+            "Sorrow" | "sorrow" => "sad",
+            "Fun" | "fun" => "relaxed",
+            "Neutral" | "neutral" => "neutral",
             other => other,
         }
         .into(),
     )
 }
 
-fn normalized_legacy_spring_bone(legacy: &Value) -> Option<VRMCSpringBone> {
-    let secondary = legacy.get("secondaryAnimation")?;
+fn normalized_legacy_spring_bone(
+    root: &Value,
+    legacy: &Value,
+) -> AppResult<Option<VRMCSpringBone>> {
+    let Some(secondary) = legacy.get("secondaryAnimation") else {
+        return Ok(None);
+    };
     let mut colliders = Vec::new();
     let mut collider_groups = Vec::new();
 
@@ -243,37 +303,47 @@ fn normalized_legacy_spring_bone(legacy: &Value) -> Option<VRMCSpringBone> {
         .into_iter()
         .flatten()
     {
-        let Some(node) = group.get("node").and_then(node_index) else {
-            collider_groups.push(ColliderGroup {
-                name: None,
-                colliders: Vec::new(),
-            });
-            continue;
-        };
+        let group_index = collider_groups.len();
+        let node = required_index(
+            group,
+            "node",
+            &format!("VRM.secondaryAnimation.colliderGroups[{group_index}].node"),
+        )?;
+        validate_node_index(
+            root,
+            node,
+            &format!("VRM.secondaryAnimation.colliderGroups[{group_index}].node"),
+        )?;
         let group_colliders = group
             .get("colliders")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|collider| {
-                let offset = collider
-                    .get("offset")
-                    .and_then(vector3)
-                    .unwrap_or([0.0, 0.0, 0.0]);
-                let radius = collider
-                    .get("radius")
-                    .and_then(finite_f32)
-                    .map(|radius| radius.max(0.0))?;
+            .context("VRM.secondaryAnimation.colliderGroups[].colliders must be an array")?
+            .iter()
+            .enumerate()
+            .map(|(collider_index, collider)| {
+                let path = format!(
+                    "VRM.secondaryAnimation.colliderGroups[{group_index}].colliders[{collider_index}]"
+                );
+                let offset = required_vector3(collider, "offset", &format!("{path}.offset"))?;
+                let radius = required_f32(collider, "radius", &format!("{path}.radius"))?;
+                if radius < 0.0 {
+                    return Err(anyhow::anyhow!(
+                        "invalid field {path}.radius: expected a non-negative number"
+                    ));
+                }
                 let index = colliders.len() as u64;
                 colliders.push(Collider {
                     node,
                     shape: crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape::Sphere(
-                        Sphere { offset, radius },
+                        Sphere {
+                            offset: legacy_vector(offset),
+                            radius,
+                        },
                     ),
                 });
-                Some(index)
+                Ok(index)
             })
-            .collect();
+            .collect::<AppResult<Vec<_>>>()?;
         collider_groups.push(ColliderGroup {
             name: None,
             colliders: group_colliders,
@@ -286,99 +356,126 @@ fn normalized_legacy_spring_bone(legacy: &Value) -> Option<VRMCSpringBone> {
         .into_iter()
         .flatten()
         .enumerate()
-        .filter_map(|(index, group)| {
-            let joints = group
+        .map(|(index, group)| {
+            let roots = group
                 .get("bones")
                 .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(node_index)
-                .map(|node| SpringJoint {
-                    node,
-                    drag_force: Some(
-                        group
-                            .get("dragForce")
-                            .and_then(finite_f32)
-                            .unwrap_or(0.0)
-                            .clamp(0.0, 1.0),
-                    ),
-                    gravity_dir: Some(
-                        group
-                            .get("gravityDir")
-                            .and_then(vector3)
-                            .map(legacy_gravity_direction)
-                            .unwrap_or([0.0, -1.0, 0.0]),
-                    ),
-                    gravity_power: Some(
-                        group
-                            .get("gravityPower")
-                            .and_then(finite_f32)
-                            .unwrap_or(0.0)
-                            .max(0.0),
-                    ),
-                    hit_radius: Some(
-                        group
-                            .get("hitRadius")
-                            .and_then(finite_f32)
-                            .unwrap_or(0.0)
-                            .max(0.0),
-                    ),
-                    stiffness: Some(
-                        group
-                            .get("stiffiness")
-                            .or_else(|| group.get("stiffness"))
-                            .and_then(finite_f32)
-                            .unwrap_or(0.0)
-                            .clamp(0.0, 1.0),
-                    ),
-                })
-                .collect::<Vec<_>>();
-            if joints.is_empty() {
-                return None;
+                .context(format!(
+                    "VRM.secondaryAnimation.boneGroups[{index}].bones must be an array"
+                ))?;
+            let mut paths = Vec::new();
+            for (root_index, root_value) in roots.iter().enumerate() {
+                let root_node = root_value.as_u64().and_then(|value| value.try_into().ok())
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "invalid field VRM.secondaryAnimation.boneGroups[{index}].bones[{root_index}]"
+                    ))?;
+                validate_node_index(
+                    root,
+                    root_node,
+                    &format!("VRM.secondaryAnimation.boneGroups[{index}].bones[{root_index}]"),
+                )?;
+                let mut visiting = BTreeSet::new();
+                collect_spring_paths(root, root_node, &mut visiting, &mut Vec::new(), &mut paths)?;
             }
-            let collider_groups =
-                group
-                    .get("colliderGroups")
-                    .and_then(Value::as_array)
-                    .map(|groups| {
-                        groups
-                            .iter()
-                            .filter_map(|group| {
-                                group.as_u64().and_then(|index| index.try_into().ok())
-                            })
-                            .filter(|index: &usize| *index < collider_groups.len())
-                            .collect()
-                    });
-            Some(Spring {
-                name: format!("legacy-spring-{index}"),
-                joints,
-                collider_groups,
-                center: group.get("center").and_then(node_index),
-                terminal_length: Some(0.07),
-            })
+            let collider_groups = group
+                .get("colliderGroups")
+                .and_then(Value::as_array)
+                .map(|groups| {
+                    groups
+                        .iter()
+                        .enumerate()
+                        .map(|(group_index, value)| {
+                            let collider_group = value.as_u64()
+                                .and_then(|value| value.try_into().ok())
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "invalid field VRM.secondaryAnimation.boneGroups[{index}].colliderGroups[{group_index}]"
+                                ))?;
+                            (collider_group < collider_groups.len())
+                                .then_some(collider_group)
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "invalid index VRM.secondaryAnimation.boneGroups[{index}].colliderGroups[{group_index}]={collider_group}"
+                                ))
+                        })
+                        .collect::<AppResult<Vec<_>>>()
+                })
+                .transpose()?;
+            let center = match group.get("center") {
+                None => None,
+                Some(value) if value.as_i64() == Some(-1) => None,
+                Some(value) => {
+                    let center = value
+                        .as_u64()
+                        .and_then(|value| value.try_into().ok())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "invalid field VRM.secondaryAnimation.boneGroups[{index}].center"
+                            )
+                        })?;
+                    validate_node_index(
+                        root,
+                        center,
+                        &format!("VRM.secondaryAnimation.boneGroups[{index}].center"),
+                    )?;
+                    Some(center)
+                }
+            };
+            let gravity_dir = match group.get("gravityDir") {
+                None => [0.0, -1.0, 0.0],
+                Some(_) => legacy_gravity_direction(required_vector3(
+                    group,
+                    "gravityDir",
+                    &format!(
+                        "VRM.secondaryAnimation.boneGroups[{index}].gravityDir"
+                    ),
+                )?),
+            };
+            let mut springs = Vec::new();
+            for (path_index, path) in paths.into_iter().enumerate() {
+                let joints = path
+                    .into_iter()
+                    .map(|node| -> AppResult<SpringJoint> { Ok(SpringJoint {
+                        node,
+                        drag_force: Some(clamped_f32(group, "dragForce", 0.0, 1.0)?),
+                        gravity_dir: Some(gravity_dir),
+                        gravity_power: Some(non_negative_f32(group, "gravityPower")?),
+                        hit_radius: Some(non_negative_f32(group, "hitRadius")?),
+                        stiffness: Some(non_negative_f32(
+                            group,
+                            if group.get("stiffiness").is_some() { "stiffiness" } else { "stiffness" },
+                        )?),
+                    }) })
+                    .collect::<AppResult<Vec<_>>>()?;
+                springs.push((path_index, Spring {
+                    name: format!("legacy-spring-{index}-{path_index}"),
+                    joints,
+                    collider_groups: collider_groups.clone(),
+                    center,
+                    terminal_length: Some(0.07),
+                }));
+            }
+            Ok(springs)
         })
+        .collect::<AppResult<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
 
-    let mut claimed_nodes = HashSet::<usize>::default();
+    let mut claimed_nodes = BTreeSet::<usize>::new();
     let springs = springs
         .into_iter()
-        .filter_map(|mut spring| {
+        .filter_map(|(_, mut spring)| {
             spring
                 .joints
                 .retain(|joint| claimed_nodes.insert(joint.node));
             (!spring.joints.is_empty()).then_some(spring)
         })
         .collect();
-    Some(VRMCSpringBone {
+    Ok(Some(VRMCSpringBone {
         spec_version: "1.0".into(),
         colliders,
         collider_groups,
         springs,
-    })
-}
-
-fn node_index(value: &Value) -> Option<usize> {
-    value.as_u64()?.try_into().ok()
+    }))
 }
 
 fn finite_f32(value: &Value) -> Option<f32> {
@@ -401,6 +498,220 @@ fn legacy_gravity_direction([x, y, z]: [f32; 3]) -> [f32; 3] {
     // VRM 0.x faces -Z while the normalized runtime basis faces +Z. The
     // scene basis rotates node transforms; gravity is a world-space vector,
     // so it receives the same Y=pi conversion exactly once here.
+    [-x, y, -z]
+}
+
+fn required_index(
+    value: &Value,
+    field: &str,
+    path: &str,
+) -> AppResult<usize> {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| anyhow::anyhow!("invalid field {path}: expected a non-negative integer"))
+}
+
+fn required_f32(
+    value: &Value,
+    field: &str,
+    path: &str,
+) -> AppResult<f32> {
+    value
+        .get(field)
+        .and_then(finite_f32)
+        .ok_or_else(|| anyhow::anyhow!("invalid field {path}: expected a finite number"))
+}
+
+fn required_vector3(
+    value: &Value,
+    field: &str,
+    path: &str,
+) -> AppResult<[f32; 3]> {
+    value
+        .get(field)
+        .and_then(vector3)
+        .ok_or_else(|| anyhow::anyhow!("invalid field {path}: expected x, y, z numbers"))
+}
+
+fn clamped_f32(
+    value: &Value,
+    field: &str,
+    min: f32,
+    max: f32,
+) -> AppResult<f32> {
+    let number = value
+        .get(field)
+        .map(|_| {
+            required_f32(
+                value,
+                field,
+                &format!("VRM.secondaryAnimation.boneGroups[].{field}"),
+            )
+        })
+        .transpose()?
+        .unwrap_or(min);
+    if !(min..=max).contains(&number) {
+        return Err(anyhow::anyhow!(
+            "invalid field VRM.secondaryAnimation.boneGroups[].{field}: expected {min}..={max}"
+        ));
+    }
+    Ok(number)
+}
+
+fn non_negative_f32(
+    value: &Value,
+    field: &str,
+) -> AppResult<f32> {
+    let number = value
+        .get(field)
+        .map(|_| {
+            required_f32(
+                value,
+                field,
+                &format!("VRM.secondaryAnimation.boneGroups[].{field}"),
+            )
+        })
+        .transpose()?
+        .unwrap_or(0.0);
+    if number < 0.0 {
+        return Err(anyhow::anyhow!(
+            "invalid field VRM.secondaryAnimation.boneGroups[].{field}: expected a non-negative number"
+        ));
+    }
+    Ok(number)
+}
+
+fn validate_node_index(
+    root: &Value,
+    index: usize,
+    path: &str,
+) -> AppResult<()> {
+    let count = root
+        .get("nodes")
+        .and_then(Value::as_array)
+        .context("glTF nodes array is required for legacy VRM normalization")?
+        .len();
+    if index >= count {
+        return Err(anyhow::anyhow!("invalid index {path}={index}"));
+    }
+    Ok(())
+}
+
+fn validate_mesh_index(
+    root: &Value,
+    index: usize,
+    path: &str,
+) -> AppResult<()> {
+    let count = root
+        .get("meshes")
+        .and_then(Value::as_array)
+        .context("glTF meshes array is required for legacy VRM normalization")?
+        .len();
+    if index >= count {
+        return Err(anyhow::anyhow!("invalid index {path}={index}"));
+    }
+    Ok(())
+}
+
+fn mesh_instance_nodes(
+    root: &Value,
+    mesh: usize,
+    path: &str,
+) -> AppResult<Vec<usize>> {
+    validate_mesh_index(root, mesh, path)?;
+    let nodes = root
+        .get("nodes")
+        .and_then(Value::as_array)
+        .context("glTF nodes array is required for legacy VRM normalization")?;
+    let instances = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(node, value)| {
+            (value.get("mesh").and_then(Value::as_u64) == Some(mesh as u64)).then_some(node)
+        })
+        .collect::<Vec<_>>();
+    Ok(instances)
+}
+
+fn validate_morph_target_index(
+    root: &Value,
+    mesh: usize,
+    morph_index: usize,
+    path: &str,
+) -> AppResult<()> {
+    validate_mesh_index(root, mesh, path)?;
+    let mesh_value = root
+        .get("meshes")
+        .and_then(Value::as_array)
+        .and_then(|meshes| meshes.get(mesh))
+        .context("glTF mesh is unavailable")?;
+    let count = mesh_value
+        .get("primitives")
+        .and_then(Value::as_array)
+        .map(|primitives| {
+            primitives
+                .iter()
+                .filter_map(|primitive| primitive.get("targets").and_then(Value::as_array))
+                .map(Vec::len)
+                .max()
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    if morph_index >= count {
+        return Err(anyhow::anyhow!(
+            "invalid index {path}={morph_index}; mesh {mesh} has {count} morph targets"
+        ));
+    }
+    Ok(())
+}
+
+fn collect_spring_paths(
+    root: &Value,
+    node: usize,
+    visiting: &mut BTreeSet<usize>,
+    current: &mut Vec<usize>,
+    paths: &mut Vec<Vec<usize>>,
+) -> AppResult<()> {
+    if !visiting.insert(node) {
+        return Err(anyhow::anyhow!(
+            "cycle in glTF node hierarchy at node {node}"
+        ));
+    }
+    current.push(node);
+    let children = root
+        .get("nodes")
+        .and_then(Value::as_array)
+        .and_then(|nodes| nodes.get(node))
+        .and_then(|value| value.get("children"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if children.is_empty() {
+        paths.push(current.clone());
+    } else {
+        for (child_index, child) in children.iter().enumerate() {
+            let child = child
+                .as_u64()
+                .and_then(|value| value.try_into().ok())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("invalid child index at glTF node {node}, child {child_index}")
+                })?;
+            validate_node_index(
+                root,
+                child,
+                &format!("nodes[{node}].children[{child_index}]"),
+            )?;
+            collect_spring_paths(root, child, visiting, current, paths)?;
+        }
+    }
+    current.pop();
+    visiting.remove(&node);
+    Ok(())
+}
+
+fn legacy_vector([x, y, z]: [f32; 3]) -> [f32; 3] {
     [-x, y, -z]
 }
 
@@ -438,6 +749,8 @@ mod tests {
     #[test]
     fn normalizes_legacy_core_into_existing_vrm1_contract() {
         let root = json!({
+            "nodes": [{}, {}, {"mesh": 2}, {"mesh": 3}, {"mesh": 3}],
+            "meshes": [{}, {}, {"primitives": [{}]}, {"primitives": [{"targets": [{}, {}, {}, {}, {}]}]}],
             "extensions": {"VRM": {
                 "meta": {"title": "legacy", "author": "author"},
                 "humanoid": {"humanBones": [
@@ -449,21 +762,18 @@ mod tests {
                     ]},
                     {"name": "left-blink", "presetName": "Blink_L", "isBinary": true}
                 ]},
-                "firstPerson": {"meshAnnotations": [
-                    {"mesh": 2, "firstPersonFlag": "Both"}
-                ]},
-                "lookAtMaster": {
-                    "type": "Bone",
-                    "offsetFromHeadBone": [0.0, 0.0, 0.0],
-                    "lookAtHorizontalInner": {"curve": {"xRange": 90.0, "yRange": 10.0}},
-                    "lookAtHorizontalOuter": {"curve": {"xRange": 90.0, "yRange": 10.0}},
-                    "lookAtVerticalDown": {"curve": {"xRange": 90.0, "yRange": 10.0}},
-                    "lookAtVerticalUp": {"curve": {"xRange": 90.0, "yRange": 10.0}}
+                "firstPerson": {
+                    "meshAnnotations": [{"mesh": 2, "firstPersonFlag": "Both"}],
+                    "lookAtTypeName": "Bone",
+                    "firstPersonBoneOffset": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "lookAtHorizontalInner": {"xRange": 90.0, "yRange": 10.0},
+                    "lookAtHorizontalOuter": {"xRange": 90.0, "yRange": 10.0},
+                    "lookAtVerticalDown": {"xRange": 90.0, "yRange": 10.0},
+                    "lookAtVerticalUp": {"xRange": 90.0, "yRange": 10.0}
                 }
             }}
         });
-        let extensions = root["extensions"].as_object().unwrap().clone();
-        let normalized = VrmExtensions::new(&extensions).expect("legacy core should normalize");
+        let normalized = VrmExtensions::from_root(&root).expect("legacy core should normalize");
 
         assert_eq!(
             normalized.runtime_descriptor.generation,
@@ -482,6 +792,16 @@ mod tests {
         assert_eq!(bind.node, 3);
         assert_eq!(bind.index, 4);
         assert_eq!(bind.weight, 0.5);
+        assert_eq!(
+            expressions.preset["aa"]
+                .morph_target_binds
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|bind| bind.node)
+                .collect::<Vec<_>>(),
+            [3, 4]
+        );
         assert!(expressions.preset["blinkLeft"].is_binary);
         assert_eq!(
             normalized
@@ -502,20 +822,23 @@ mod tests {
     #[test]
     fn canonicalizes_legacy_expression_preset_names() {
         let groups = json!([
-            {"name": "a", "presetName": "A"},
+            {"name": "a", "presetName": "a"},
             {"name": "i", "presetName": "I"},
             {"name": "u", "presetName": "U"},
             {"name": "e", "presetName": "E"},
             {"name": "o", "presetName": "O"},
-            {"name": "blink", "presetName": "Blink"},
-            {"name": "joy", "presetName": "Joy"},
-            {"name": "look-up", "presetName": "LookUp"},
-            {"name": "custom", "presetName": "unknown"}
+            {"name": "blink", "presetName": "blink"},
+            {"name": "joy", "presetName": "joy"},
+            {"name": "look-up", "presetName": "lookup"},
+            {"name": "custom", "presetName": "Unknown"}
         ]);
         let legacy = json!({"blendShapeMaster": {"blendShapeGroups": groups}});
-        let expressions = normalized_legacy_expressions(&legacy).expect("groups should parse");
+        let root = json!({"nodes": [], "meshes": []});
+        let expressions = normalized_legacy_expressions(&legacy, &root)
+            .expect("groups should parse")
+            .expect("expressions should exist");
         for name in [
-            "aa", "ih", "ou", "ee", "oh", "blink", "joy", "lookUp", "custom",
+            "aa", "ih", "ou", "ee", "oh", "blink", "happy", "lookUp", "custom",
         ] {
             assert!(expressions.preset.contains_key(name), "missing {name}");
         }
@@ -523,6 +846,10 @@ mod tests {
 
     #[test]
     fn normalizes_legacy_secondary_animation_with_terminal_and_gravity_basis() {
+        let root = json!({
+            "nodes": [{}, {}, {}, {}, {"children": [5]}, {}],
+            "extensions": {}
+        });
         let legacy = json!({
             "secondaryAnimation": {
                 "colliderGroups": [{
@@ -533,21 +860,25 @@ mod tests {
                     }]
                 }],
                 "boneGroups": [{
-                    "stiffiness": 0.8,
+                    "stiffiness": 2.8,
                     "gravityPower": 0.5,
                     "gravityDir": {"x": 1.0, "y": -1.0, "z": 0.25},
                     "dragForce": 0.2,
-                    "center": 0,
+                    "center": -1,
                     "hitRadius": 0.02,
-                    "bones": [4, 5],
+                    "bones": [4],
                     "colliderGroups": [0]
                 }]
             }
         });
-        let spring = normalized_legacy_spring_bone(&legacy).expect("spring should parse");
+        let spring = normalized_legacy_spring_bone(&root, &legacy)
+            .expect("spring should parse")
+            .expect("spring should exist");
         assert_eq!(spring.springs.len(), 1);
         assert_eq!(spring.springs[0].joints.len(), 2);
         assert_eq!(spring.springs[0].terminal_length, Some(0.07));
+        assert_eq!(spring.springs[0].center, None);
+        assert_eq!(spring.springs[0].joints[0].stiffness, Some(2.8));
         assert_eq!(
             spring.springs[0].joints[0].gravity_dir,
             Some([-1.0, -1.0, -0.25])
@@ -558,6 +889,10 @@ mod tests {
 
     #[test]
     fn drops_duplicate_legacy_joint_writers() {
+        let root = json!({
+            "nodes": [{}, {}, {}, {}, {"children": [5]}, {}, {}],
+            "extensions": {}
+        });
         let legacy = json!({
             "secondaryAnimation": {
                 "boneGroups": [
@@ -566,7 +901,9 @@ mod tests {
                 ]
             }
         });
-        let spring = normalized_legacy_spring_bone(&legacy).expect("spring should parse");
+        let spring = normalized_legacy_spring_bone(&root, &legacy)
+            .expect("spring should parse")
+            .expect("spring should exist");
         assert_eq!(
             spring.springs[0]
                 .joints
@@ -584,4 +921,5 @@ mod tests {
             [6]
         );
     }
+
 }

@@ -1,14 +1,16 @@
+use crate::vrm::VrmNodeIndex;
 use bevy::app::{App, Plugin};
 use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, Handle, LoadContext};
+use bevy::ecs::world::World;
 use bevy::gltf::{
     DefaultGltfImageSampler, Gltf, GltfAssetLabel, GltfError, GltfLoader, GltfLoaderSettings,
-    extensions::GltfExtensionHandlers,
+    extensions::{ErasedGltfExtensionHandler, GltfExtensionHandler, GltfExtensionHandlers},
 };
 use bevy::image::{
     CompressedImageFormatSupport, CompressedImageFormats, Image, ImageSamplerDescriptor,
 };
-use bevy::prelude::{AssetApp, Component, TypePath};
+use bevy::prelude::{AssetApp, Children, Component, TypePath};
 use bevy::utils::default;
 
 pub struct VrmLoaderPlugin;
@@ -49,6 +51,9 @@ impl Plugin for VrmLoaderPlugin {
             app.insert_resource(resource);
             handlers
         };
+        extensions
+            .write_blocking()
+            .push(Box::new(VrmNodeIndexExtension));
         app.register_asset_loader(VrmLoader(GltfLoader {
             supported_compressed_formats,
             custom_vertex_attributes: Default::default(),
@@ -57,6 +62,49 @@ impl Plugin for VrmLoaderPlugin {
             extensions,
             default_skinned_mesh_bounds_policy: Default::default(),
         }));
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct VrmNodeIndexExtension;
+
+impl GltfExtensionHandler for VrmNodeIndexExtension {
+    fn dyn_clone(&self) -> Box<dyn ErasedGltfExtensionHandler> {
+        Box::new(*self)
+    }
+
+    fn on_scene_completed(
+        &mut self,
+        _load_context: &mut LoadContext<'_>,
+        scene: &bevy::gltf::gltf::Scene,
+        world_root_id: bevy::ecs::entity::Entity,
+        scene_world: &mut World,
+    ) {
+        let root_children = scene_world
+            .get::<Children>(world_root_id)
+            .map(|children| children.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut pending = scene.nodes().zip(root_children).collect::<Vec<_>>();
+        while let Some((node, entity)) = pending.pop() {
+            scene_world
+                .entity_mut(entity)
+                .insert(VrmNodeIndex(node.index()));
+            let child_entities = scene_world
+                .get::<Children>(entity)
+                .map(|children| children.iter().copied().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let source_children = node.children().collect::<Vec<_>>();
+            // Bevy's glTF loader appends mesh/light entities before recursively
+            // spawning source child nodes. The source child nodes therefore
+            // occupy the final `source_children.len()` entries.
+            let node_children_start = child_entities.len().saturating_sub(source_children.len());
+            for (child_node, child_entity) in source_children
+                .into_iter()
+                .zip(child_entities.into_iter().skip(node_children_start))
+            {
+                pending.push((child_node, child_entity));
+            }
+        }
     }
 }
 

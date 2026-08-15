@@ -10,7 +10,7 @@ use crate::vrm::node_constraint::initialize::RequestInitializeNodeConstraints;
 use crate::vrm::node_constraint::registry::NodeConstraintRegistry;
 use crate::vrm::spring_bone::initialize::RequestInitializeSpringBone;
 use crate::vrm::spring_bone::registry::*;
-use crate::vrm::{Initialized, Vrm, VrmCoordinateBasis, VrmPath};
+use crate::vrm::{Initialized, Vrm, VrmBasisRoot, VrmCoordinateBasis, VrmPath};
 use crate::vrma::Vrma;
 use crate::vrma::animation::animation_graph::RequestUpdateAnimationGraph;
 use bevy::app::{App, Update};
@@ -68,39 +68,44 @@ fn spawn_vrm(
             }
         };
         let coordinate_basis = extensions.runtime_descriptor.coordinate_basis;
+        let basis_transform = VrmCoordinateBasis(coordinate_basis).transform();
+        if let Some(transform) = basis_transform {
+            commands.spawn((
+                VrmBasisRoot,
+                transform,
+                GlobalTransform::IDENTITY,
+                Visibility::default(),
+                WorldAssetRoot(scene.clone()),
+                ChildOf(vrm_handle_entity),
+            ));
+        }
         let mut cmd = commands.entity(vrm_handle_entity);
         cmd.insert((
             Vrm,
             VrmCoordinateBasis(coordinate_basis),
             Name::new(extensions.name().unwrap_or_else(|| "VRM".to_string())),
-            WorldAssetRoot(scene),
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            Visibility::default(),
             VrmcMaterialRegistry::new(&vrm.gltf, vrm.images.clone(), &asset_server),
-            VrmExpressionRegistry::new(&extensions, &node_assets, &vrm.gltf.nodes),
+            VrmExpressionRegistry::new(&extensions),
             HumanoidBoneRegistry::new(
                 &extensions.vrmc_vrm.humanoid.human_bones,
                 &node_assets,
                 &vrm.gltf.nodes,
             ),
             NodeConstraintRegistry::new(&vrm.gltf, &node_assets),
-            FirstPersonRegistry::new(
-                extensions.vrmc_vrm.first_person.as_ref(),
-                &node_assets,
-                &vrm.gltf.nodes,
-            ),
+            FirstPersonRegistry::new(extensions.vrmc_vrm.first_person.as_ref()),
         ));
-        if let Some(transform) = VrmCoordinateBasis(coordinate_basis).transform() {
-            cmd.insert(transform);
+        if basis_transform.is_none() {
+            cmd.insert(WorldAssetRoot(scene));
         }
 
         if let Some(spring_bone) = extensions.vrmc_spring_bone.as_ref() {
             cmd.insert((
-                SpringJointPropsRegistry::new(
-                    &spring_bone.all_joints(),
-                    &node_assets,
-                    &vrm.gltf.nodes,
-                ),
-                SpringColliderRegistry::new(&spring_bone.colliders, &node_assets, &vrm.gltf.nodes),
-                SpringNodeRegistry::new(spring_bone, &node_assets, &vrm.gltf.nodes),
+                SpringJointPropsRegistry::new(&spring_bone.all_joints()),
+                SpringColliderRegistry::new(&spring_bone.colliders),
+                SpringNodeRegistry::new(spring_bone),
             ));
         }
 
@@ -126,7 +131,6 @@ fn spawn_vrm(
 fn request_initialize(
     mut commands: Commands,
     models: Query<(Entity, &HumanoidBoneRegistry, Has<Vrma>), Without<Initialized>>,
-    parents: Query<&ChildOf>,
     searcher: ChildSearcher,
 ) {
     for (root, registry, has_vrma) in models.iter() {

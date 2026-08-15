@@ -69,6 +69,28 @@ pub enum ModelImportError {
         /// Node index that is out of range.
         index: usize,
     },
+    /// Invalid glTF mesh index referenced by a VRM 0.x extension.
+    #[error("MODEL_FILE_INVALID: invalid mesh index {index}")]
+    InvalidMeshIndex {
+        /// Mesh index that is out of range.
+        index: usize,
+    },
+    /// Invalid morph target index referenced by a VRM 0.x bind.
+    #[error("MODEL_FILE_INVALID: invalid morph target index {index} for mesh {mesh}")]
+    InvalidMorphTargetIndex {
+        /// glTF mesh index.
+        mesh: usize,
+        /// Morph target index.
+        index: usize,
+    },
+    /// Invalid official VRM field shape or value.
+    #[error("MODEL_FILE_INVALID: invalid VRM field {path}: {reason}")]
+    InvalidVrmField {
+        /// JSON field path.
+        path: String,
+        /// Stable validation reason.
+        reason: String,
+    },
 }
 
 /// Supported VRM generation detected by preflight.
@@ -307,6 +329,9 @@ fn inspect_vrm0(
     let head = required_legacy_bone_index(human_bones, "head", node_count)?;
     let neck = optional_legacy_bone_index(human_bones, "neck", node_count)?;
 
+    validate_vrm0_first_person(document, vrm)?;
+    validate_vrm0_expression_binds(document, vrm)?;
+
     let mut expression_presets = vrm
         .get("blendShapeMaster")
         .and_then(|master| master.get("blendShapeGroups"))
@@ -314,25 +339,15 @@ fn inspect_vrm0(
         .map(|groups| {
             groups
                 .iter()
-                .filter_map(|group| {
-                    let preset = group.get("presetName").and_then(|value| value.as_str());
-                    let name = group.get("name").and_then(|value| value.as_str());
-                    match preset.filter(|value| !value.is_empty() && *value != "unknown") {
-                        Some(value) => Some(value.to_string()),
-                        None => name.filter(|value| !value.is_empty()).map(String::from),
-                    }
-                })
+                .enumerate()
+                .map(|(index, group)| normalize_legacy_expression_name(group, index))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
     expression_presets.sort();
     expression_presets.dedup();
 
-    let look_at_type = vrm
-        .get("lookAtMaster")
-        .and_then(|look_at| look_at.get("type"))
-        .and_then(|value| value.as_str())
-        .map(normalize_legacy_look_at_type);
+    let look_at_type = validate_vrm0_look_at(vrm)?;
 
     Ok(VrmInspectionSummary {
         generation: VrmGeneration::Vrm0,
@@ -432,12 +447,293 @@ fn inspect_vrm1(
     })
 }
 
-fn normalize_legacy_look_at_type(value: &str) -> String {
-    match value {
-        "Bone" | "bone" => "bone".into(),
-        "BlendShape" | "Expression" | "blendShape" | "expression" => "expression".into(),
-        other => other.to_string(),
+fn validate_vrm0_look_at(vrm: &serde_json::Value) -> Result<Option<String>, ModelImportError> {
+    let Some(first_person) = vrm.get("firstPerson") else {
+        return Ok(None);
+    };
+    let look_at_fields = [
+        "lookAtTypeName",
+        "lookAtHorizontalInner",
+        "lookAtHorizontalOuter",
+        "lookAtVerticalDown",
+        "lookAtVerticalUp",
+    ];
+    let has_look_at = look_at_fields
+        .iter()
+        .any(|field| first_person.get(*field).is_some());
+    if !has_look_at {
+        return Ok(None);
     }
+    let look_at_type = first_person
+        .get("lookAtTypeName")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| ModelImportError::InvalidVrmField {
+            path: "VRM.firstPerson.lookAtTypeName".into(),
+            reason: "expected Bone or BlendShape".into(),
+        })?;
+    let normalized = match look_at_type {
+        "Bone" => "bone",
+        "BlendShape" => "expression",
+        other => {
+            return Err(ModelImportError::InvalidVrmField {
+                path: "VRM.firstPerson.lookAtTypeName".into(),
+                reason: format!("unknown value {other}"),
+            });
+        }
+    };
+    let offset = first_person.get("firstPersonBoneOffset").ok_or_else(|| {
+        ModelImportError::InvalidVrmField {
+            path: "VRM.firstPerson.firstPersonBoneOffset".into(),
+            reason: "required when LookAt is declared".into(),
+        }
+    })?;
+    validate_vector3_object(offset, "VRM.firstPerson.firstPersonBoneOffset")?;
+    for field in [
+        "lookAtHorizontalInner",
+        "lookAtHorizontalOuter",
+        "lookAtVerticalDown",
+        "lookAtVerticalUp",
+    ] {
+        let path = format!("VRM.firstPerson.{field}");
+        let map = first_person
+            .get(field)
+            .ok_or_else(|| ModelImportError::InvalidVrmField {
+                path: path.clone(),
+                reason: "all four DegreeMap objects are required".into(),
+            })?;
+        let object = map
+            .as_object()
+            .ok_or_else(|| ModelImportError::InvalidVrmField {
+                path: path.clone(),
+                reason: "expected an object".into(),
+            })?;
+        for range in ["xRange", "yRange"] {
+            let valid = object
+                .get(range)
+                .and_then(|value| value.as_f64())
+                .is_some_and(f64::is_finite);
+            if !valid {
+                return Err(ModelImportError::InvalidVrmField {
+                    path: format!("{path}.{range}"),
+                    reason: "expected a finite number".into(),
+                });
+            }
+        }
+        if let Some(curve) = object.get("curve") {
+            let values = curve
+                .as_array()
+                .ok_or_else(|| ModelImportError::InvalidVrmField {
+                    path: format!("{path}.curve"),
+                    reason: "expected an array".into(),
+                })?;
+            if values
+                .iter()
+                .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+            {
+                return Err(ModelImportError::InvalidVrmField {
+                    path: format!("{path}.curve"),
+                    reason: "curve coefficients must be finite numbers".into(),
+                });
+            }
+        }
+    }
+    Ok(Some(normalized.into()))
+}
+
+fn validate_vector3_object(value: &serde_json::Value, path: &str) -> Result<(), ModelImportError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ModelImportError::InvalidVrmField {
+            path: path.into(),
+            reason: "expected an object with x, y, z".into(),
+        })?;
+    for field in ["x", "y", "z"] {
+        if object
+            .get(field)
+            .and_then(|value| value.as_f64())
+            .is_none_or(|value| !value.is_finite())
+        {
+            return Err(ModelImportError::InvalidVrmField {
+                path: format!("{path}.{field}"),
+                reason: "expected a finite number".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_vrm0_first_person(
+    document: &gltf::Document,
+    vrm: &serde_json::Value,
+) -> Result<(), ModelImportError> {
+    let Some(first_person) = vrm.get("firstPerson") else {
+        return Ok(());
+    };
+    let node_count = document.nodes().len();
+    if let Some(value) = first_person.get("firstPersonBone") {
+        let index = value
+            .as_u64()
+            .and_then(|value| value.try_into().ok())
+            .ok_or_else(|| ModelImportError::InvalidVrmField {
+                path: "VRM.firstPerson.firstPersonBone".into(),
+                reason: "expected a non-negative integer".into(),
+            })?;
+        if index >= node_count {
+            return Err(ModelImportError::InvalidNodeIndex { index });
+        }
+    }
+    let annotations = match first_person.get("meshAnnotations") {
+        None => return Ok(()),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| ModelImportError::InvalidVrmField {
+                path: "VRM.firstPerson.meshAnnotations".into(),
+                reason: "expected an array".into(),
+            })?,
+    };
+    for annotation in annotations {
+        let mesh = annotation
+            .get("mesh")
+            .and_then(|value| value.as_u64())
+            .map(|value| value as usize)
+            .ok_or_else(|| ModelImportError::InvalidVrmField {
+                path: "VRM.firstPerson.meshAnnotations[].mesh".into(),
+                reason: "expected a non-negative integer".into(),
+            })?;
+        if mesh >= document.meshes().len() {
+            return Err(ModelImportError::InvalidMeshIndex { index: mesh });
+        }
+        let flag = annotation
+            .get("firstPersonFlag")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| ModelImportError::InvalidVrmField {
+                path: "VRM.firstPerson.meshAnnotations[].firstPersonFlag".into(),
+                reason: "expected Auto, Both, ThirdPersonOnly, or FirstPersonOnly".into(),
+            })?;
+        if !matches!(
+            flag,
+            "Auto"
+                | "auto"
+                | "Both"
+                | "both"
+                | "ThirdPersonOnly"
+                | "thirdPersonOnly"
+                | "FirstPersonOnly"
+                | "firstPersonOnly"
+        ) {
+            return Err(ModelImportError::InvalidVrmField {
+                path: "VRM.firstPerson.meshAnnotations[].firstPersonFlag".into(),
+                reason: format!("unknown value {flag}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_vrm0_expression_binds(
+    document: &gltf::Document,
+    vrm: &serde_json::Value,
+) -> Result<(), ModelImportError> {
+    let Some(groups) = vrm
+        .get("blendShapeMaster")
+        .and_then(|master| master.get("blendShapeGroups"))
+        .and_then(|groups| groups.as_array())
+    else {
+        return Ok(());
+    };
+    let root = serde_json::to_value(document.as_json())
+        .map_err(|error| ModelImportError::GlbParse(error.to_string()))?;
+    for group in groups {
+        let Some(binds) = group.get("binds").and_then(|binds| binds.as_array()) else {
+            continue;
+        };
+        for bind in binds {
+            let mesh = bind
+                .get("mesh")
+                .and_then(|value| value.as_u64())
+                .map(|value| value as usize)
+                .ok_or_else(|| ModelImportError::InvalidVrmField {
+                    path: "VRM.blendShapeMaster.blendShapeGroups[].binds[].mesh".into(),
+                    reason: "expected a non-negative integer".into(),
+                })?;
+            let index = bind
+                .get("index")
+                .and_then(|value| value.as_u64())
+                .map(|value| value as usize)
+                .ok_or_else(|| ModelImportError::InvalidVrmField {
+                    path: "VRM.blendShapeMaster.blendShapeGroups[].binds[].index".into(),
+                    reason: "expected a non-negative integer".into(),
+                })?;
+            let weight = bind
+                .get("weight")
+                .and_then(|value| value.as_f64())
+                .ok_or_else(|| ModelImportError::InvalidVrmField {
+                    path: "VRM.blendShapeMaster.blendShapeGroups[].binds[].weight".into(),
+                    reason: "expected a finite number in 0..=100".into(),
+                })?;
+            if !weight.is_finite() || !(0.0..=100.0).contains(&weight) {
+                return Err(ModelImportError::InvalidVrmField {
+                    path: "VRM.blendShapeMaster.blendShapeGroups[].binds[].weight".into(),
+                    reason: "expected a finite number in 0..=100".into(),
+                });
+            }
+            if mesh >= document.meshes().len() {
+                return Err(ModelImportError::InvalidMeshIndex { index: mesh });
+            }
+            let count = root
+                .get("meshes")
+                .and_then(|meshes| meshes.as_array())
+                .and_then(|meshes| meshes.get(mesh))
+                .and_then(|mesh| mesh.get("primitives"))
+                .and_then(|primitives| primitives.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|primitive| {
+                    primitive
+                        .get("targets")
+                        .and_then(|targets| targets.as_array())
+                })
+                .map(Vec::len)
+                .max()
+                .unwrap_or(0);
+            if index >= count {
+                return Err(ModelImportError::InvalidMorphTargetIndex { mesh, index });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_legacy_expression_name(group: &serde_json::Value, group_index: usize) -> String {
+    let preset = group.get("presetName").and_then(|value| value.as_str());
+    let name = group.get("name").and_then(|value| value.as_str());
+    let source = preset
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"))
+        .or(name)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("custom_{group_index}"));
+    match source.as_str() {
+        "A" | "a" => "aa",
+        "I" | "i" => "ih",
+        "U" | "u" => "ou",
+        "E" | "e" => "ee",
+        "O" | "o" => "oh",
+        "Blink" | "blink" => "blink",
+        "Blink_L" | "blink_l" => "blinkLeft",
+        "Blink_R" | "blink_r" => "blinkRight",
+        "Joy" | "joy" => "happy",
+        "Angry" | "angry" => "angry",
+        "Sorrow" | "sorrow" => "sad",
+        "Fun" | "fun" => "relaxed",
+        "LookUp" | "lookup" => "lookUp",
+        "LookDown" | "lookdown" => "lookDown",
+        "LookLeft" | "lookleft" => "lookLeft",
+        "LookRight" | "lookright" => "lookRight",
+        "Neutral" | "neutral" => "neutral",
+        other => other,
+    }
+    .into()
 }
 
 fn required_legacy_bone_index(
@@ -675,10 +971,17 @@ mod tests {
         "asset": {"version": "2.0", "generator": "vtuber-app hermetic test"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
+        "buffers": [{"byteLength": 12}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 12}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 1, "type": "VEC3", "min": [0.0, 0.0, 0.0], "max": [0.0, 0.0, 0.0]}],
+        "meshes": [{"name": "Face", "primitives": [{"attributes": {"POSITION": 0}, "targets": [{"POSITION": 0}, {"POSITION": 0}]}]}],
+        "materials": [{"name": "Body"}, {"name": "Body"}],
         "nodes": [
-            {"name": "Hips", "children": [1, 2]},
+            {"name": "Hips", "children": [1, 2, 3, 4]},
             {"name": "Head"},
-            {"name": "Neck"}
+            {"name": "Neck"},
+            {"name": "Face", "mesh": 0},
+            {"name": "Face", "mesh": 0}
         ],
         "extensionsUsed": ["VRM"],
         "extensions": {
@@ -691,15 +994,32 @@ mod tests {
                         {"bone": "neck", "node": 2}
                     ]
                 },
-                "lookAtMaster": {"type": "BlendShape"},
+                "firstPerson": {
+                    "firstPersonBone": 1,
+                    "firstPersonBoneOffset": {"x": 0.0, "y": 0.1, "z": 0.2},
+                    "meshAnnotations": [{"mesh": 0, "firstPersonFlag": "Both"}],
+                    "lookAtTypeName": "BlendShape",
+                    "lookAtHorizontalInner": {"curve": [0.0, 0.0, 1.0], "xRange": 90.0, "yRange": 10.0},
+                    "lookAtHorizontalOuter": {"xRange": 90.0, "yRange": 10.0},
+                    "lookAtVerticalDown": {"xRange": 90.0, "yRange": 10.0},
+                    "lookAtVerticalUp": {"xRange": 90.0, "yRange": 10.0}
+                },
                 "blendShapeMaster": {
                     "blendShapeGroups": [
-                        {"name": "blink", "presetName": "blink"},
+                        {"name": "vowel-a", "presetName": "A", "binds": [{"mesh": 0, "index": 1, "weight": 100}]},
+                        {"name": "blink", "presetName": "Blink_L"},
+                        {"name": "joy", "presetName": "Joy"},
                         {"name": "customSmile", "presetName": "unknown"}
                     ]
                 },
-                "materialProperties": [],
-                "secondaryAnimation": {"boneGroups": []}
+                "materialProperties": [
+                    {"name": "Body", "shader": "VRM/MToon", "floatProperties": {"_Cull": 0.0}},
+                    {"name": "Body", "shader": "VRM/MToon", "floatProperties": {"_Cull": 2.0}}
+                ],
+                "secondaryAnimation": {
+                    "colliderGroups": [{"node": 2, "colliders": [{"offset": {"x": 0.0, "y": 0.1, "z": 0.0}, "radius": 0.02}]}],
+                    "boneGroups": [{"bones": [3], "center": 1, "colliderGroups": [0], "gravityDir": {"x": 0.0, "y": -1.0, "z": 0.0}, "gravityPower": 0.5, "stiffiness": 0.8, "dragForce": 0.2, "hitRadius": 0.01}]
+                }
             }
         }
     }"#;
@@ -734,7 +1054,8 @@ mod tests {
             json_chunk.push(b' ');
         }
 
-        let total_length = 12 + 8 + json_chunk.len();
+        let bin_chunk = [0_u8; 12];
+        let total_length = 12 + 8 + json_chunk.len() + 8 + bin_chunk.len();
         let mut bytes = Vec::with_capacity(total_length);
         bytes.extend_from_slice(&0x46546C67_u32.to_le_bytes());
         bytes.extend_from_slice(&2_u32.to_le_bytes());
@@ -742,6 +1063,9 @@ mod tests {
         bytes.extend_from_slice(&(json_chunk.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&0x4E4F534A_u32.to_le_bytes());
         bytes.extend_from_slice(&json_chunk);
+        bytes.extend_from_slice(&(bin_chunk.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0x004E4942_u32.to_le_bytes());
+        bytes.extend_from_slice(&bin_chunk);
 
         let path = dir.path().join(file_name);
         fs::write(&path, bytes).unwrap();
@@ -784,7 +1108,10 @@ mod tests {
         assert_eq!(summary.name, "Hermetic VRM 0.x");
         assert_eq!(summary.authors, vec!["Legacy Author"]);
         assert_eq!(summary.look_at_type.as_deref(), Some("expression"));
-        assert_eq!(summary.expression_presets, vec!["blink", "customSmile"]);
+        assert_eq!(
+            summary.expression_presets,
+            vec!["aa", "blinkLeft", "customSmile", "happy"]
+        );
         assert!(summary.has_spring_bone);
         assert!(summary.has_mtoon_materials);
         assert_eq!(summary.humanoid_nodes.neck, Some(2));
@@ -800,6 +1127,53 @@ mod tests {
         assert!(summary.humanoid_nodes.hips < 1000);
         assert!(summary.humanoid_nodes.head < 1000);
         assert!(summary.has_spring_bone);
+    }
+
+    #[test]
+    fn rejects_legacy_mesh_and_morph_indices_during_preflight() {
+        let dir = TempDir::new().unwrap();
+        let invalid_mesh = VRM0_GLTF_JSON.replace(
+            "\"meshAnnotations\": [{\"mesh\": 0",
+            "\"meshAnnotations\": [{\"mesh\": 99",
+        );
+        let mesh_path = write_glb_fixture(&dir, "invalid-mesh.vrm", &invalid_mesh);
+        assert!(matches!(
+            inspect_vrm(mesh_path),
+            Err(ModelImportError::InvalidMeshIndex { index: 99 })
+        ));
+
+        let invalid_morph =
+            VRM0_GLTF_JSON.replace("\"index\": 1, \"weight\"", "\"index\": 99, \"weight\"");
+        let morph_path = write_glb_fixture(&dir, "invalid-morph.vrm", &invalid_morph);
+        assert!(matches!(
+            inspect_vrm(morph_path),
+            Err(ModelImportError::InvalidMorphTargetIndex { mesh: 0, index: 99 })
+        ));
+    }
+
+    #[test]
+    fn accepts_legacy_bone_look_at_during_preflight() {
+        let dir = TempDir::new().unwrap();
+        let bone = VRM0_GLTF_JSON.replace(
+            "\"lookAtTypeName\": \"BlendShape\"",
+            "\"lookAtTypeName\": \"Bone\"",
+        );
+        let path = write_glb_fixture(&dir, "bone-look-at.vrm", &bone);
+        let summary = inspect_vrm(path).expect("Bone LookAt should be valid");
+        assert_eq!(summary.look_at_type.as_deref(), Some("bone"));
+    }
+
+    #[test]
+    fn rejects_malformed_legacy_degree_map_during_preflight() {
+        let dir = TempDir::new().unwrap();
+        let malformed =
+            VRM0_GLTF_JSON.replace("\"curve\": [0.0, 0.0, 1.0]", "\"curve\": \"not-an-array\"");
+        let path = write_glb_fixture(&dir, "malformed-degree-map.vrm", &malformed);
+        assert!(matches!(
+            inspect_vrm(path),
+            Err(ModelImportError::InvalidVrmField { path, .. })
+                if path.ends_with("lookAtHorizontalInner.curve")
+        ));
     }
 
     #[test]

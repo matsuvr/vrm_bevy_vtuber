@@ -42,6 +42,22 @@ The pinned specification references for this work are:
    animation at the boundary. A secondary-animation terminal receives a
    7 cm synthetic joint; resolved node indices are deduplicated before writer
    registration, and gravity is transformed once with the same basis.
+7. Treat glTF node index as runtime identity. Legacy mesh references are
+   validated against `meshes`, expanded to every node that instantiates the
+   mesh, and morph indices are validated against primitive target counts.
+   Runtime scene entities retain the source node index through Bevy's existing
+   GLTF extension hook, so duplicate or missing node names cannot change the
+   binding target.
+8. Read VRM 0.x LookAt only from `firstPerson`: `lookAtTypeName` is mapped
+   from `Bone`/`BlendShape`, `firstPersonBoneOffset` is the official `{x,y,z}`
+   object, and the four DegreeMap objects use direct `xRange`/`yRange` values
+   with an optional numeric `curve` array. The obsolete synthetic
+   `lookAtMaster` shape is not accepted.
+9. Legacy materialProperties are indexed by glTF material index, never by
+   material name or occurrence. Known Unlit and unknown shaders retain the
+   generic glTF material fallback with a warning; valid MToon properties are
+   converted into the existing renderer, including validated texture indices,
+   alpha/cull/queue, UV, emission, outline, and color-space conversion.
 
 ## Consequences
 
