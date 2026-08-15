@@ -162,11 +162,11 @@ pub fn convert_legacy_material_properties_with_texture_count(
     )
 }
 
-/// Plans the VRM 0.x render-queue offsets using the fixed UniVRM migration.
+/// Plans the VRM 0.x render-queue offsets using the fixed `UniVRM` migration.
 ///
 /// Transparent materials are ordered from the largest source queue toward
 /// zero, while transparent-with-Z-write materials are ordered from zero
-/// upward. Opaque and cutout materials always use their MToon 1.0 default.
+/// upward. Opaque and cutout materials always use their `MToon` 1.0 default.
 #[must_use]
 pub fn plan_legacy_render_queue_offsets(values: &[Value]) -> Vec<i32> {
     let mut modes = Vec::with_capacity(values.len());

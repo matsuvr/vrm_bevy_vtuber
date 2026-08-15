@@ -42,9 +42,9 @@ pub enum VrmCompatibilityWarningCode {
 /// Exact VRM 0.x shader classification shared by diagnostics and migration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LegacyShaderKind {
-    /// The only shader migrated through the MToon path.
+    /// The only shader migrated through the `MToon` path.
     MToon,
-    /// One of the four known StandardMaterial fallbacks.
+    /// One of the four known `StandardMaterial` fallbacks.
     SupportedUnlit,
     /// A known glTF/legacy passthrough shader with no VRM migration.
     Passthrough,
