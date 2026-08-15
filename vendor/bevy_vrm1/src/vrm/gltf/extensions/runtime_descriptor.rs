@@ -421,7 +421,10 @@ pub fn collect_legacy_compatibility_warnings(
             "lookAtVerticalUp",
         ] {
             if let Some(range) = first_person.get(field).and_then(Value::as_object)
-                && range.get("curve").is_some()
+                && range
+                    .get("curve")
+                    .and_then(Value::as_array)
+                    .is_some_and(|curve| !legacy_curve_is_linear(curve))
             {
                 warnings.push(VrmCompatibilityWarning::new(
                     VrmCompatibilityWarningCode::NonLinearLegacyLookAtCurve,
@@ -567,29 +570,80 @@ fn is_known_legacy_material_property(key: &str) -> bool {
         "_Color"
             | "_MainColor"
             | "_ShadeColor"
-            | "_EmissionColor"
-            | "_OutlineColor"
-            | "_RimColor"
             | "_MainTex"
-            | "_MainTexture"
             | "_ShadeTexture"
-            | "_EmissionMap"
-            | "_BumpMap"
-            | "_MainTex_ST"
-            | "_Cutoff"
             | "_BumpScale"
+            | "_BumpMap"
+            | "_ReceiveShadowRate"
+            | "_ReceiveShadowTexture"
+            | "_ShadingGradeRate"
+            | "_ShadingGradeTexture"
+            | "_ShadeShift"
+            | "_ShadeToony"
+            | "_LightColorAttenuation"
+            | "_IndirectLightIntensity"
+            | "_EmissionColor"
+            | "_EmissionMap"
+            | "_OutlineColor"
+            | "_OutlineWidthTexture"
             | "_OutlineWidth"
             | "_OutlineScaledMaxDistance"
             | "_OutlineLightingMix"
-            | "_ShadeShift"
-            | "_ShadeToony"
-            | "_ReceiveShadowRate"
-            | "_ShadingGradeRate"
+            | "_RimColor"
+            | "_RimTexture"
             | "_RimLightingMix"
             | "_RimFresnelPower"
             | "_RimLift"
+            | "_SphereAdd"
+            | "_UvAnimMaskTexture"
+            | "_UvAnimScrollX"
+            | "_UvAnimScrollY"
+            | "_UvAnimRotation"
+            | "_MToonVersion"
+            | "_DebugMode"
+            | "_BlendMode"
+            | "_OutlineWidthMode"
+            | "_OutlineColorMode"
+            | "_CullMode"
+            | "_OutlineCullMode"
+            | "_SrcBlend"
+            | "_DstBlend"
+            | "_ZWrite"
+            // Compatibility aliases found in older non-official fixtures.
+            | "_MainTexture"
+            | "_MainTex_ST"
+            | "_Cutoff"
             | "_Cull"
     )
+}
+
+fn legacy_curve_is_linear(curve: &[Value]) -> bool {
+    let keys = curve.chunks_exact(4).collect::<Vec<_>>();
+    if keys.is_empty() || curve.len() < 8 {
+        return true;
+    }
+    if curve.len() % 4 != 0 {
+        return false;
+    }
+
+    // UniVRM serializes the identity AnimationCurve as keys on y=x. The
+    // endpoint tangents may be zero because they are not used outside the
+    // interval; the tangents joining each adjacent pair must be one.
+    if keys.iter().any(|key| {
+        let time = key[0].as_f64();
+        let value = key[1].as_f64();
+        time.zip(value)
+            .is_none_or(|(time, value)| (time - value).abs() > 1.0e-6)
+    }) {
+        return false;
+    }
+    keys.windows(2).all(|pair| {
+        let outgoing = pair[0][3].as_f64();
+        let incoming = pair[1][2].as_f64();
+        outgoing.zip(incoming).is_some_and(|(outgoing, incoming)| {
+            (outgoing - 1.0).abs() <= 1.0e-6 && (incoming - 1.0).abs() <= 1.0e-6
+        })
+    })
 }
 
 fn normalized_legacy_expression_name(
@@ -1180,7 +1234,7 @@ mod tests {
                 ],
                 "lookAtTypeName": "BlendShape",
                 "firstPersonBoneOffset": {"x": 0.0, "y": 0.1, "z": 0.2},
-                "lookAtHorizontalInner": {"curve": [0.0, 0.0, 0.0, 0.0], "xRange": 90.0, "yRange": 10.0},
+                "lookAtHorizontalInner": {"curve": [0.0, 0.0, 0.0, 1.0, 1.0, 0.5, 1.0, 0.0], "xRange": 90.0, "yRange": 10.0},
                 "lookAtHorizontalOuter": {"xRange": 90.0, "yRange": 10.0},
                 "lookAtVerticalDown": {"xRange": 90.0, "yRange": 10.0},
                 "lookAtVerticalUp": {"xRange": 90.0, "yRange": 10.0}
@@ -1380,6 +1434,92 @@ mod tests {
             Err(VrmParseError::InvalidField { path, .. })
                 if path.ends_with("lookAtHorizontalInner.curve")
         ));
+    }
+
+    #[test]
+    fn linear_legacy_degree_map_curves_do_not_warn() {
+        for curve in [
+            json!([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            json!([0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0]),
+            json!([0.0, 0.0, 0.0, 0.0]),
+        ] {
+            let mut root = vrm0_root();
+            root["extensions"]["VRM"]["firstPerson"]["lookAtHorizontalInner"]["curve"] =
+                curve;
+            let warnings = collect_legacy_compatibility_warnings(
+                &root,
+                &root["extensions"]["VRM"],
+            );
+            assert!(!warnings.iter().any(|warning| {
+                warning.code == VrmCompatibilityWarningCode::NonLinearLegacyLookAtCurve
+            }));
+        }
+    }
+
+    #[test]
+    fn nonlinear_legacy_degree_map_curve_warns() {
+        let mut root = vrm0_root();
+        root["extensions"]["VRM"]["firstPerson"]["lookAtHorizontalInner"]["curve"] =
+            json!([0.0, 0.0, 0.0, 1.0, 1.0, 0.5, 1.0, 0.0]);
+        let warnings = collect_legacy_compatibility_warnings(
+            &root,
+            &root["extensions"]["VRM"],
+        );
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|warning| {
+                    warning.code == VrmCompatibilityWarningCode::NonLinearLegacyLookAtCurve
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn official_legacy_mtoon_property_set_is_not_unknown() {
+        let mut root = vrm0_root();
+        root["materials"] = json!([{}]);
+        let legacy = &mut root["extensions"]["VRM"];
+        legacy["materialProperties"] = json!([{
+            "shader": "VRM/MToon",
+            "floatProperties": {
+                "_Cutoff": 0.5, "_BumpScale": 1.0, "_ReceiveShadowRate": 1.0,
+                "_ShadingGradeRate": 1.0, "_ShadeShift": 0.0, "_ShadeToony": 0.9,
+                "_LightColorAttenuation": 0.5, "_IndirectLightIntensity": 0.5,
+                "_RimLightingMix": 1.0, "_RimFresnelPower": 5.0, "_RimLift": 0.0,
+                "_UvAnimScrollX": 0.0, "_UvAnimScrollY": 0.0, "_UvAnimRotation": 0.0,
+                "_MToonVersion": 30.0, "_DebugMode": 0.0, "_BlendMode": 0.0,
+                "_OutlineWidthMode": 0.0, "_OutlineColorMode": 0.0, "_CullMode": 2.0,
+                "_OutlineCullMode": 1.0, "_SrcBlend": 1.0, "_DstBlend": 0.0, "_ZWrite": 1.0
+            },
+            "vectorProperties": {
+                "_Color": [1.0, 1.0, 1.0, 1.0], "_ShadeColor": [0.5, 0.5, 0.5, 1.0],
+                "_MainTex": [0.0, 0.0, 1.0, 1.0], "_ShadeTexture": [0.0, 0.0, 1.0, 1.0],
+                "_BumpMap": [0.0, 0.0, 1.0, 1.0], "_ReceiveShadowTexture": [0.0, 0.0, 1.0, 1.0],
+                "_ShadingGradeTexture": [0.0, 0.0, 1.0, 1.0], "_RimColor": [1.0, 1.0, 1.0, 1.0],
+                "_RimTexture": [0.0, 0.0, 1.0, 1.0], "_EmissionColor": [0.0, 0.0, 0.0, 1.0],
+                "_EmissionMap": [0.0, 0.0, 1.0, 1.0], "_OutlineWidthTexture": [0.0, 0.0, 1.0, 1.0],
+                "_OutlineColor": [0.0, 0.0, 0.0, 1.0], "_UvAnimMaskTexture": [0.0, 0.0, 1.0, 1.0]
+            },
+            "textureProperties": {
+                "_MainTex": 0, "_ShadeTexture": 0, "_BumpMap": 0,
+                "_ReceiveShadowTexture": 0, "_ShadingGradeTexture": 0,
+                "_EmissionMap": 0, "_RimTexture": 0, "_SphereAdd": 0,
+                "_OutlineWidthTexture": 0, "_UvAnimMaskTexture": 0
+            }
+        }]);
+        let legacy = root["extensions"]["VRM"].clone();
+        let warnings = collect_legacy_compatibility_warnings(&root, &legacy);
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|warning| {
+                    warning.code == VrmCompatibilityWarningCode::UnknownLegacyMaterialProperty
+                })
+                .count(),
+            0
+        );
     }
 
     #[test]
