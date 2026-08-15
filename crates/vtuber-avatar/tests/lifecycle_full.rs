@@ -10,7 +10,9 @@
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
-use bevy_vrm1::vrm::spring_bone::{SpringCenterNode, SpringColliders};
+use bevy_vrm1::vrm::spring_bone::{
+    SpringCenterNode, SpringColliders, SpringJointState, VrmSpringBonePlugin,
+};
 
 use vtuber_avatar::bind::BindTriggered;
 use vtuber_avatar::binding::{AvatarBinding, bind_humanoid_bones};
@@ -30,6 +32,7 @@ use vtuber_avatar::unload::{
 fn test_app() -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+        .add_plugins(VrmSpringBonePlugin)
         .init_asset::<bevy_vrm1::prelude::VrmAsset>()
         .init_resource::<AvatarLifecycle>()
         .init_resource::<ActiveControlFrame>()
@@ -149,6 +152,13 @@ fn count_active_markers(app: &mut App) -> usize {
         .count()
 }
 
+fn count_spring_joint_states(app: &mut App) -> usize {
+    app.world_mut()
+        .query::<&SpringJointState>()
+        .iter(app.world())
+        .count()
+}
+
 #[derive(Clone, Copy, Debug)]
 enum SyntheticGeneration {
     Vrm0,
@@ -157,6 +167,13 @@ enum SyntheticGeneration {
 
 fn spawn_generation_avatar_root(app: &mut App, generation: SyntheticGeneration) -> Entity {
     let head = spawn_bone(app);
+    if matches!(generation, SyntheticGeneration::Vrm0) {
+        let terminal_source_transform = Transform::from_translation(Vec3::Y);
+        app.world_mut().entity_mut(head).insert((
+            terminal_source_transform,
+            GlobalTransform::from(terminal_source_transform),
+        ));
+    }
     let root = app
         .world_mut()
         .spawn((
@@ -232,6 +249,15 @@ fn assert_generation_state(app: &mut App, root: Entity, generation: SyntheticGen
         1
     );
     assert_eq!(
+        count_spring_joint_states(app),
+        if matches!(generation, SyntheticGeneration::Vrm0) {
+            1
+        } else {
+            0
+        },
+        "VRM 0.x owns one finite terminal SpringJointState; VRM 1.0 has no legacy terminal"
+    );
+    assert_eq!(
         app.world_mut()
             .query::<&ExpressionEntityMap>()
             .iter(app.world())
@@ -266,6 +292,13 @@ fn assert_avatar_owned_state_empty(app: &mut App) {
     assert_eq!(
         app.world_mut()
             .query::<&SpringRoot>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&SpringJointState>()
             .iter(app.world())
             .count(),
         0
@@ -694,6 +727,15 @@ fn generation_transition_matrix_has_no_stale_avatar_state() {
                         previous_root
                             .is_some_and(|previous| !app.world().entities().contains(previous)),
                         "the previous avatar root must be gone after replacement"
+                    );
+                    assert_eq!(
+                        count_spring_joint_states(&mut app),
+                        if matches!(generation, SyntheticGeneration::Vrm0) {
+                            1
+                        } else {
+                            0
+                        },
+                        "replacement must not retain SpringJointState from the previous avatar"
                     );
                 }
 

@@ -17,7 +17,7 @@ use bevy::prelude::*;
 #[reflect(Default, Component)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-pub(crate) struct SpringJointState {
+pub struct SpringJointState {
     prev_tail: Vec3,
     current_tail: Vec3,
     bone_axis: Vec3,
