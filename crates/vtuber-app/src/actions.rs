@@ -6,12 +6,14 @@
 
 use std::path::PathBuf;
 
+use vtuber_avatar::ArmPoseProfileOverride;
+
 /// Actions that the UI can emit.
 ///
 /// These are processed by the orchestrator, which translates them into
 /// domain service calls. The UI layer should only construct these values
 /// and send them — it should not perform the actual operations.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum UiAction {
     // --- Screen navigation ---
     /// Switch to a different screen.
@@ -56,6 +58,15 @@ pub enum UiAction {
     TogglePreview,
     /// Toggle mirror-style avatar motion.
     ToggleAvatarMotionMirror,
+
+    // --- Avatar pose settings ---
+    /// Store a bounded per-model default-arm profile and re-resolve it.
+    SetArmPoseProfile {
+        /// The six validated profile parameters edited by the settings UI.
+        profile: ArmPoseProfileOverride,
+    },
+    /// Remove the active model's override and return to geometry-derived pose.
+    ResetArmPoseProfile,
 
     // --- Error actions ---
     /// Dismiss the current error (does not clear domain failure state).

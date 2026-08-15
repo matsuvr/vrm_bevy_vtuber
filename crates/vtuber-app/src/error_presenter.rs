@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use crate::actions::UiAction;
 
 /// A user-facing error presentation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ErrorPresentation {
     /// Stable error code for diagnostics.
     pub code: &'static str,
@@ -60,6 +60,11 @@ pub fn present_error(error: &crate::orchestrator::OrchestratorError) -> ErrorPre
             code: "AVATAR_LIFECYCLE_FAILED",
             user_message: "The avatar failed during loading or binding. Try again.".to_string(),
             suggested_actions: vec![UiAction::RetryAfterError, UiAction::DismissError],
+        },
+        OrchestratorError::ArmPoseSettingsFailed(_) => ErrorPresentation {
+            code: "ARM_POSE_SETTINGS_FAILED",
+            user_message: "The avatar pose setting could not be saved.".to_string(),
+            suggested_actions: vec![UiAction::DismissError],
         },
         OrchestratorError::CameraFailed(_) => ErrorPresentation {
             code: "CAMERA_FAILED",

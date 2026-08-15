@@ -23,9 +23,10 @@ use crate::metrics_export::{MetricsExportState, export_diagnostics_system};
 use crate::orchestrator::{Orchestrator, process_ui_actions_system, sync_avatar_lifecycle_system};
 use crate::preview::PreviewState;
 use crate::preview_landmarks::{PreviewLandmarkState, sync_preview_landmark_system};
+use crate::settings::{ArmPoseSettings, restore_arm_pose_settings_system};
 use crate::tracking_runtime::{TrackingRuntime, tracking_bridge_system};
 use crate::ui_model::{Screen, UiViewModel};
-use vtuber_avatar::AvatarMotionMirror;
+use vtuber_avatar::{AvatarMotionMirror, apply_arm_pose_profile_changes};
 
 use super::diagnostics::render_diagnostics_screen;
 use super::live::render_live_screen;
@@ -62,6 +63,7 @@ impl Plugin for UiShellPlugin {
         app.init_resource::<UiState>()
             .init_resource::<UiViewModel>()
             .init_resource::<Orchestrator>()
+            .init_resource::<ArmPoseSettings>()
             .init_resource::<PreviewState>()
             .init_resource::<PreviewLandmarkState>()
             .init_resource::<AvatarMotionMirror>()
@@ -80,10 +82,17 @@ impl Plugin for UiShellPlugin {
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         app.insert_resource(InferenceRuntime::new(frame_slot, project_root))
             .init_resource::<TrackingRuntime>()
-            // Action processing then lifecycle sync, chained in Update.
+            .add_systems(Startup, restore_arm_pose_settings_system)
+            // Action processing, avatar pose re-resolution, and lifecycle
+            // sync are chained so a settings action reaches the compositor in
+            // the same Update frame.
             .add_systems(
                 Update,
-                (process_ui_actions_system, sync_avatar_lifecycle_system)
+                (
+                    process_ui_actions_system,
+                    apply_arm_pose_profile_changes,
+                    sync_avatar_lifecycle_system,
+                )
                     .chain(),
             )
             .add_systems(Update, sync_error_presenter.before(inference_bridge_system))

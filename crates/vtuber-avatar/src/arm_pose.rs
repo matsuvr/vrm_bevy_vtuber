@@ -121,6 +121,20 @@ impl std::fmt::Display for ArmPoseOverrideStoreError {
 
 impl std::error::Error for ArmPoseOverrideStoreError {}
 
+/// Requests that the active avatar re-resolve its model-specific default pose.
+///
+/// The application settings layer owns persistence and writes the validated
+/// override into [`ArmPoseOverrideStore`] before sending this message. The
+/// avatar side then reads the immutable cached binding geometry and routes the
+/// new target through the existing compositor.
+#[derive(Message, Clone, Debug, PartialEq, Eq)]
+pub struct ArmPoseProfileChange {
+    /// Stable model identity whose profile changed.
+    pub model_id: AvatarAssetId,
+    /// Whether this change is a reset back to the automatic profile.
+    pub return_to_default: bool,
+}
+
 /// A resolved default pose for one complete arm chain.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResolvedArmPose {
@@ -298,6 +312,27 @@ impl ArmPoseBlendState {
     pub fn return_right_to_default(&mut self, target: ResolvedArmPose) {
         self.transition_right(target, DEFAULT_ARM_RETURN_SECONDS);
     }
+
+    /// Replaces the resolved default target while preserving each side's
+    /// current compositor output as the transition source.
+    pub fn transition_to_default(&mut self, default_pose: &DefaultArmPose, duration_seconds: f32) {
+        self.generation = default_pose.generation;
+        self.left = transition_side(self.left, default_pose.left, duration_seconds);
+        self.right = transition_side(self.right, default_pose.right, duration_seconds);
+    }
+}
+
+fn transition_side(
+    current: Option<ArmPoseBlendSide>,
+    target: Option<ResolvedArmPose>,
+    duration_seconds: f32,
+) -> Option<ArmPoseBlendSide> {
+    target.map(|target| {
+        let from = current
+            .map(ArmPoseBlendSide::current)
+            .unwrap_or_else(|| neutral_pose(target));
+        ArmPoseBlendSide::new(from, target, duration_seconds)
+    })
 }
 
 /// One side of an arm-pose source transition.
@@ -719,6 +754,47 @@ pub fn apply_default_arm_pose(
                 &children,
                 &mut HashSet::new(),
             );
+        }
+    }
+}
+
+/// Re-resolves the active model's default pose after a validated settings
+/// update. This system never traverses or reconstructs the arm hierarchy: it
+/// uses the immutable `ArmBinding` geometry cached during binding and hands the
+/// result to the existing generation-scoped compositor state.
+pub fn apply_arm_pose_profile_changes(
+    mut changes: MessageReader<ArmPoseProfileChange>,
+    overrides: Res<ArmPoseOverrideStore>,
+    mut roots: Query<
+        (
+            &AvatarBinding,
+            &AvatarAssetId,
+            &mut DefaultArmPose,
+            &mut ArmPoseBlendState,
+        ),
+        With<ActiveAvatar>,
+    >,
+) {
+    for change in changes.read() {
+        for (binding, model_id, mut pose, mut blend_state) in roots.iter_mut() {
+            if model_id != &change.model_id {
+                continue;
+            }
+
+            let profile = overrides.profile_for(model_id).unwrap_or_default();
+            let resolved = DefaultArmPose::from_chains_with_profile(
+                binding.generation,
+                binding.left_arm,
+                binding.right_arm,
+                profile,
+            );
+            let duration = if change.return_to_default {
+                DEFAULT_ARM_RETURN_SECONDS
+            } else {
+                DEFAULT_ARM_TRANSITION_SECONDS
+            };
+            blend_state.transition_to_default(&resolved, duration);
+            *pose = resolved;
         }
     }
 }

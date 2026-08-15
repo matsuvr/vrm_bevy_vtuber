@@ -2,11 +2,12 @@
 
 use bevy::prelude::*;
 use vtuber_avatar::{
-    ARM_POSE_PROFILE_OVERRIDE_VERSION, ArmChainBinding, ArmChainCapabilities, ArmPoseBlendSide,
-    ArmPoseBlendState, ArmPoseOverrideStore, ArmPoseProfile, ArmPoseProfileOverride,
-    ArmPoseProfileOverrideError, ArmRestGeometry, ArmSide, AvatarAssetId, AvatarGeneration,
-    DEFAULT_ARM_RETURN_SECONDS, DEFAULT_ARM_TRANSITION_SECONDS, DefaultArmPose, FingerReferences,
-    FingerRestReferences, ResolvedArmPose, RestSpaceBonePose,
+    ARM_POSE_PROFILE_OVERRIDE_VERSION, ActiveAvatar, ArmChainBinding, ArmChainCapabilities,
+    ArmPoseBlendSide, ArmPoseBlendState, ArmPoseOverrideStore, ArmPoseProfile,
+    ArmPoseProfileChange, ArmPoseProfileOverride, ArmPoseProfileOverrideError, ArmRestGeometry,
+    ArmSide, AvatarAssetId, AvatarBinding, AvatarGeneration, DEFAULT_ARM_RETURN_SECONDS,
+    DEFAULT_ARM_TRANSITION_SECONDS, DefaultArmPose, FingerReferences, FingerRestReferences,
+    ResolvedArmPose, RestSpaceBonePose, apply_arm_pose_profile_changes,
 };
 
 const EPSILON: f32 = 1.0e-5;
@@ -158,6 +159,79 @@ fn model_profile_is_consumed_by_default_pose_resolution() {
     ));
     assert!(tuned.upper_arm_delta.is_finite());
     assert!(tuned.lower_arm_delta.is_finite());
+}
+
+#[test]
+fn active_profile_change_re_resolves_cached_geometry_through_the_compositor() {
+    let generation = AvatarGeneration(9);
+    let model_id = AvatarAssetId::new("sha256:active");
+    let root = Entity::from_raw_u32(100).unwrap();
+    let mut binding =
+        AvatarBinding::head_only(root, Entity::from_raw_u32(101).unwrap(), generation);
+    binding.left_arm = Some(simple_chain());
+    let automatic = DefaultArmPose::from_chains(generation, binding.left_arm, None);
+    let tuned_profile = ArmPoseProfile {
+        arm_drop_radians: 0.2,
+        forward_hand_offset_ratio: -0.15,
+        ..Default::default()
+    };
+
+    let mut app = App::new();
+    app.add_message::<ArmPoseProfileChange>()
+        .init_resource::<ArmPoseOverrideStore>()
+        .add_systems(Update, apply_arm_pose_profile_changes);
+    app.world_mut().spawn((
+        ActiveAvatar,
+        model_id.clone(),
+        binding,
+        automatic,
+        ArmPoseBlendState::from_default(&automatic),
+    ));
+    app.world_mut()
+        .resource_mut::<ArmPoseOverrideStore>()
+        .set(
+            model_id.0.clone(),
+            ArmPoseProfileOverride::from_profile(tuned_profile),
+        )
+        .unwrap();
+    app.world_mut()
+        .resource_mut::<Messages<ArmPoseProfileChange>>()
+        .write(ArmPoseProfileChange {
+            model_id: model_id.clone(),
+            return_to_default: false,
+        });
+
+    app.update();
+
+    let mut query = app
+        .world_mut()
+        .query::<(&DefaultArmPose, &ArmPoseBlendState)>();
+    let (resolved, blend) = query.single(app.world()).unwrap();
+    let tuned =
+        DefaultArmPose::from_chains_with_profile(generation, binding.left_arm, None, tuned_profile);
+    assert_ne!(resolved.left, automatic.left);
+    assert_eq!(resolved.left, tuned.left);
+    assert!(blend.current_left().is_some());
+    assert!(blend.current_left().unwrap().upper_arm_delta.is_finite());
+
+    app.world_mut()
+        .resource_mut::<ArmPoseOverrideStore>()
+        .reset(&model_id);
+    app.world_mut()
+        .resource_mut::<Messages<ArmPoseProfileChange>>()
+        .write(ArmPoseProfileChange {
+            model_id,
+            return_to_default: true,
+        });
+    app.update();
+
+    let mut query = app
+        .world_mut()
+        .query::<(&DefaultArmPose, &mut ArmPoseBlendState)>();
+    let (resolved, mut blend) = query.single_mut(app.world_mut()).unwrap();
+    assert_eq!(resolved.left, automatic.left);
+    blend.advance(DEFAULT_ARM_RETURN_SECONDS);
+    assert_eq!(blend.current_left(), automatic.left);
 }
 
 fn simulate_to(fps: u32, seconds: f32) -> ResolvedArmPose {

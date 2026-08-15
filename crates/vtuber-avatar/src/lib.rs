@@ -33,8 +33,9 @@ pub use arm::{
 };
 pub use arm_pose::{
     ArmPoseBlendSide, ArmPoseBlendState, ArmPoseOverrideStore, ArmPoseOverrideStoreError,
-    DEFAULT_ARM_RETURN_SECONDS, DEFAULT_ARM_TRANSITION_SECONDS, DefaultArmPose, ResolvedArmPose,
-    ResolvedBoneDelta, ResolvedFingerJointPose, ResolvedFingerPose, apply_default_arm_pose,
+    ArmPoseProfileChange, DEFAULT_ARM_RETURN_SECONDS, DEFAULT_ARM_TRANSITION_SECONDS,
+    DefaultArmPose, ResolvedArmPose, ResolvedBoneDelta, ResolvedFingerJointPose,
+    ResolvedFingerPose, apply_arm_pose_profile_changes, apply_default_arm_pose,
 };
 pub use bevy_vrm1::prelude::{
     LegacyShaderKind, Vrm0MetaDiagnostics, VrmCompatibilityWarning, VrmCompatibilityWarningCode,
