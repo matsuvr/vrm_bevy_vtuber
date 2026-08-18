@@ -15,6 +15,7 @@ use crate::bind::observe_initialized;
 use crate::binding::bind_humanoid_bones;
 use crate::breathing::apply_breathing_hips_translation;
 use crate::expression::apply_tracked_expressions;
+use crate::framing::camera_control::AvatarCameraControl;
 use crate::framing::fixed_fov_fit::FIXED_VERTICAL_FOV;
 use crate::framing::{AvatarViewportCamera, frame_avatar_camera};
 use crate::gaze::update_direct_look_at_input;
@@ -42,6 +43,7 @@ impl Plugin for VtuberAvatarPlugin {
         app.add_plugins(VrmPlugin)
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
+            .init_resource::<AvatarCameraControl>()
             .init_resource::<ArmPoseOverrideStore>()
             .add_message::<crate::arm_pose::ArmPoseProfileChange>()
             .init_resource::<ActiveControlFrame>()
@@ -146,15 +148,16 @@ fn setup_scene(
     ));
 
     // Camera framing the upper body.
+    let camera_transform = Transform::from_translation(Vec3::new(0.0, 0.0, 2.5))
+        .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y);
     commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
             fov: FIXED_VERTICAL_FOV,
             ..default()
         }),
-        AvatarViewportCamera,
-        Transform::from_translation(Vec3::new(0.0, 0.0, 2.5))
-            .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
+        AvatarViewportCamera::from_default_transform(camera_transform),
+        camera_transform,
     ));
 }
 
