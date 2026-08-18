@@ -69,13 +69,14 @@ mod tests {
             .add_message::<ResetCameraRequest>()
             .add_systems(Update, reset_avatar_camera);
 
+        let camera_transform = Transform::from_translation(Vec3::new(0.0, 1.0, 5.0))
+            .looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y);
         let camera = app
             .world_mut()
             .spawn((
                 Camera3d::default(),
-                super::super::AvatarViewportCamera,
-                Transform::from_translation(Vec3::new(0.0, 1.0, 5.0))
-                    .looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+                super::super::AvatarViewportCamera::from_default_transform(camera_transform),
+                camera_transform,
             ))
             .id();
         let root = app.world_mut().spawn_empty().id();

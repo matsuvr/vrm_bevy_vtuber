@@ -366,7 +366,15 @@ mod tests {
         app.init_resource::<AvatarLifecycle>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<AvatarCameraControl>()
-            .add_systems(Update, frame_avatar_camera);
+            .init_resource::<crate::framing::camera_input::CameraPointerGesture>()
+            .add_message::<crate::framing::camera_reset::ResetCameraRequest>()
+            .add_systems(
+                Update,
+                (
+                    frame_avatar_camera,
+                    crate::framing::camera_reset::reset_avatar_camera,
+                ),
+            );
         let camera = app
             .world_mut()
             .spawn((
@@ -442,6 +450,7 @@ mod tests {
         let replacement_default = controls
             .default_for(replacement_generation)
             .expect("replacement generation has a default pose");
+        assert_ne!(replacement_default, first_default);
         assert_eq!(
             controls.current_for(replacement_generation),
             Some(replacement_default)
@@ -469,6 +478,60 @@ mod tests {
         assert!((replacement_default.distance() - expected_fit.distance).abs() < 1e-5);
         let projection = app.world().get::<Projection>(camera).unwrap();
         let Projection::Perspective(perspective) = projection else {
+            panic!("avatar viewport camera must use perspective projection");
+        };
+        assert!((perspective.fov - FIXED_VERTICAL_FOV).abs() < f32::EPSILON);
+
+        let replacement_manual =
+            crate::framing::camera_control::geometry::orbit(replacement_default, -0.4, -0.15)
+                .and_then(|pose| {
+                    crate::framing::camera_control::geometry::pan(
+                        pose,
+                        Vec2::new(80.0, 30.0),
+                        Vec2::new(1600.0, 900.0),
+                    )
+                })
+                .expect("replacement manual camera operation is valid");
+        assert_ne!(replacement_manual, replacement_default);
+        *app.world_mut()
+            .get_mut::<Transform>(camera)
+            .expect("avatar camera transform") = replacement_manual.transform();
+        assert!(
+            app.world_mut()
+                .resource_mut::<AvatarCameraControl>()
+                .set_current(replacement_generation, replacement_manual)
+        );
+        *app.world_mut()
+            .resource_mut::<crate::framing::camera_input::CameraPointerGesture>() =
+            crate::framing::camera_input::CameraPointerGesture::Orbit {
+                generation: replacement_generation,
+            };
+        app.world_mut()
+            .resource_mut::<Messages<crate::framing::camera_reset::ResetCameraRequest>>()
+            .write(crate::framing::camera_reset::ResetCameraRequest {
+                generation: replacement_generation,
+            });
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<AvatarCameraControl>()
+                .current_for(replacement_generation),
+            Some(replacement_default)
+        );
+        assert_eq!(
+            *app.world()
+                .get::<Transform>(camera)
+                .expect("avatar camera transform"),
+            replacement_default.transform()
+        );
+        assert_eq!(
+            *app.world()
+                .resource::<crate::framing::camera_input::CameraPointerGesture>(),
+            crate::framing::camera_input::CameraPointerGesture::None
+        );
+        let Projection::Perspective(perspective) = app.world().get::<Projection>(camera).unwrap()
+        else {
             panic!("avatar viewport camera must use perspective projection");
         };
         assert!((perspective.fov - FIXED_VERTICAL_FOV).abs() < f32::EPSILON);
