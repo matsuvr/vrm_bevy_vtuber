@@ -1,0 +1,20 @@
+[package]
+name = "vtuber-ndi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Optional NDI video sender boundary for vrm-bevy-vtuber."
+
+[dependencies]
+vtuber-core = { path = "../vtuber-core" }
+grafton-ndi = { version = "=1.0.0", default-features = false, optional = true }
+
+[features]
+default = []
+ndi-sdk = ["dep:grafton-ndi"]
+
+[lints]
+workspace = true

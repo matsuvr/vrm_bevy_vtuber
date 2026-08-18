@@ -5,6 +5,7 @@ members = [
   "crates/vtuber-inference",
   "crates/vtuber-tracking",
   "crates/vtuber-avatar",
+  "crates/vtuber-ndi",
   "crates/vtuber-app",
   "apps/desktop",
   "tools/xtask",

@@ -534,6 +534,7 @@ vtuber-camera    -> vtuber-core
 vtuber-inference -> vtuber-core
 vtuber-tracking  -> vtuber-core
 vtuber-avatar    -> vtuber-core
+vtuber-ndi       -> vtuber-core
 
 vtuber-app -> vtuber-camera
 vtuber-app -> vtuber-inference
@@ -542,6 +543,7 @@ vtuber-app -> vtuber-avatar
 vtuber-app -> vtuber-core
 
 vtuber-desktop -> vtuber-app
+vtuber-desktop -> vtuber-ndi (optional `ndi-output` feature)
 xtask          -> repository tooling only
 ```
 
@@ -579,6 +581,7 @@ vtuber-inference -X-> Bevy / bevy_vrm1
 | hash | `sha2` | lockfile固定 |
 | file dialog | `rfd` | `=0.17.2`候補 |
 | app dirs | `directories` | lockfile固定 |
+| optional NDI sender | `grafton-ndi` | `=1.0.0`、`ndi-output` featureでのみ有効、ADR-012 |
 
 versionは実装開始時に`cargo tree`とlicenseを確認し、Cargo.lockをcommitする。表の候補を無検証で追加してはならない。
 
