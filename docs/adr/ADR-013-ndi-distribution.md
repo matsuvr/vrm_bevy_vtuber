@@ -24,10 +24,13 @@ whether application-local runtime distribution is permitted.
   system directory, edit PATH, or include NDI Tools.
 - Generate NDI_RUNTIME_MANIFEST.txt with runtime/license hashes and explicit
   exclusions for Advanced/HX, audio, and system installation.
+- Include the approved MediaPipe Face Landmarker task bundle at
+  `assets/models/face_landmarker.task`, together with its source manifest and
+  Apache-2.0 license, and record their hashes in NDI_RUNTIME_MANIFEST.txt.
 - Require THIRD_PARTY_NOTICES.md to contain the NDI attribution and official
   link. The Live UI also links to the official NDI site.
-- Verify a flat, allow-listed package before it is treated as a staging
-  result.
+- Verify an allow-listed package layout before it is treated as a staging
+  result; the only nested resource path is `assets/models/`.
 - Do not commit runtime DLLs, SDK headers, import libraries, or the exact
   agreement to the normal source tree.
 

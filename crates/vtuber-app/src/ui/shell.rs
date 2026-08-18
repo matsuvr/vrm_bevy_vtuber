@@ -40,6 +40,11 @@ use super::setup::render_setup_screen;
 
 const CONTROL_WINDOW_WIDTH: f32 = 350.0;
 const CONTROL_WINDOW_HEIGHT: f32 = 600.0;
+const JAPANESE_FONT_NAME: &str = "LINESeedJP_A_Rg";
+static JAPANESE_FONT_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/fonts/LINESeedJP_A_TTF_Rg.ttf"
+));
 
 fn control_window() -> bevy_egui::egui::Window<'static> {
     // `default_width`/`default_height` only apply before egui has a Resize
@@ -67,6 +72,7 @@ impl Plugin for UiShellPlugin {
         );
 
         app.init_resource::<UiState>()
+            .init_resource::<JapaneseFontState>()
             .init_resource::<UiViewModel>()
             .init_resource::<Orchestrator>()
             .init_resource::<ArmPoseSettings>()
@@ -158,8 +164,12 @@ impl Plugin for UiShellPlugin {
                     .after(EguiPostUpdateSet::ProcessOutput)
                     .before(CameraInputSet),
             )
-            // egui rendering in EguiPrimaryContextPass.
-            .add_systems(EguiPrimaryContextPass, ui_render_system);
+            // Install the embedded Japanese font before rendering the UI in
+            // EguiPrimaryContextPass.
+            .add_systems(
+                EguiPrimaryContextPass,
+                (configure_japanese_font, ui_render_system).chain(),
+            );
 
         // The synthetic source is an explicit diagnostic build mode. It
         // replaces the real bridge rather than running beside it, so two
@@ -219,6 +229,46 @@ pub struct UiState {
     pub pending_actions: Vec<UiAction>,
     /// Session-local visibility state for the main Controls window.
     control_window: ControlWindowState,
+}
+
+/// Tracks whether the embedded application font has been installed in egui.
+#[derive(Resource, Debug, Default)]
+struct JapaneseFontState {
+    configured: bool,
+}
+
+/// Build the egui font definitions with LINE Seed JP as the primary UI font.
+fn japanese_font_definitions() -> bevy_egui::egui::FontDefinitions {
+    let mut fonts = bevy_egui::egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        JAPANESE_FONT_NAME.to_owned(),
+        std::sync::Arc::new(bevy_egui::egui::FontData::from_static(JAPANESE_FONT_BYTES)),
+    );
+
+    for family in [
+        bevy_egui::egui::FontFamily::Proportional,
+        bevy_egui::egui::FontFamily::Monospace,
+    ] {
+        if let Some(fonts_for_family) = fonts.families.get_mut(&family) {
+            fonts_for_family.insert(0, JAPANESE_FONT_NAME.to_owned());
+        }
+    }
+
+    fonts
+}
+
+/// Installs the bundled Japanese-capable font once the egui context exists.
+fn configure_japanese_font(
+    mut contexts: EguiContexts,
+    mut font_state: ResMut<JapaneseFontState>,
+) -> Result {
+    if font_state.configured {
+        return Ok(());
+    }
+
+    contexts.ctx_mut()?.set_fonts(japanese_font_definitions());
+    font_state.configured = true;
+    Ok(())
 }
 
 /// Session-local visibility state for the main Controls window.
@@ -421,6 +471,30 @@ mod tests {
     fn ui_state_default_is_empty() {
         let state = UiState::default();
         assert!(state.pending_actions.is_empty());
+    }
+
+    #[test]
+    fn japanese_font_is_primary_for_both_ui_families() {
+        let definitions = japanese_font_definitions();
+        let font = definitions
+            .font_data
+            .get(JAPANESE_FONT_NAME)
+            .expect("the bundled Japanese font must be registered");
+
+        assert_eq!(font.font.as_ref(), JAPANESE_FONT_BYTES);
+        for family in [
+            bevy_egui::egui::FontFamily::Proportional,
+            bevy_egui::egui::FontFamily::Monospace,
+        ] {
+            assert_eq!(
+                definitions
+                    .families
+                    .get(&family)
+                    .and_then(|fonts| fonts.first())
+                    .map(String::as_str),
+                Some(JAPANESE_FONT_NAME)
+            );
+        }
     }
 
     #[test]

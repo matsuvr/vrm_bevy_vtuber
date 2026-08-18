@@ -21,10 +21,10 @@ cargo build -p vtuber-desktop --release --features ndi-output
 ~~~~
 
 The runtime is not committed to Git and must not be copied to System32, PATH,
-or an NDI Tools directory. The package contains only the application, the
+or an NDI Tools directory. The package contains the application, the
 explicitly supplied Standard SDK x64 runtime DLL, the exact license/notice
-file supplied by that SDK package, the project notices, and a generated hash
-manifest.
+file supplied by that SDK package, the project notices, the approved MediaPipe
+task bundle with its manifest and license, and a generated hash manifest.
 
 ## Exact SDK license gate
 
@@ -64,9 +64,9 @@ cargo run -p xtask -- ndi verify-package target/ndi-package
 ~~~~
 
 The staging command rejects another DLL name, requires the project
-attribution/link, records runtime and license hashes, and rejects extra files
-in the package directory. It does not download or delete the SDK, and it does
-not make a legal determination.
+attribution/link, records runtime/license/face-task hashes, and rejects extra
+files outside the allow-listed model resource directory. It does not download
+or delete the SDK, and it does not make a legal determination.
 
 Expected top-level package:
 
@@ -76,6 +76,11 @@ Processing.NDI.Lib.x64.dll
 NDI_SDK_LICENSE_AGREEMENT.pdf
 THIRD_PARTY_NOTICES.md
 NDI_RUNTIME_MANIFEST.txt
+assets/
+  models/
+    face_landmarker.task
+    manifest.toml
+    LICENSE.mediapipe.txt
 ~~~~
 
 The generated manifest must say application_local=true,
