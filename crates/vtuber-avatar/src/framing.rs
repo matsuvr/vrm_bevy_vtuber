@@ -1,5 +1,6 @@
 //! Avatar-aware viewport camera framing.
 
+pub mod camera_control;
 pub(crate) mod fixed_fov_fit;
 pub(crate) mod head_subtree_bounds;
 
@@ -7,9 +8,10 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_vrm1::prelude::{HeadBoneEntity, HipsBoneEntity};
 
+use self::camera_control::{AvatarCameraControl, CameraControlPose};
 use self::fixed_fov_fit::{FIXED_VERTICAL_FOV, solve_fixed_fov_fit};
 use self::head_subtree_bounds::{HeadSubtreeBounds, WorldBounds, collect_head_subtree_bounds};
-use crate::lifecycle::{AvatarGeneration, AvatarLifecycle, AvatarLifecycleState};
+use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
 
 const TARGET_FROM_HIPS: f32 = 0.60;
 const VERTICAL_HALF_EXTENT_IN_HIPS_HEADS: f32 = 0.75;
@@ -34,13 +36,14 @@ pub(crate) fn frame_avatar_camera(
     lifecycle: Res<AvatarLifecycle>,
     world: FramingWorld,
     mut cameras: Query<(&Camera, &mut Transform, &mut Projection), With<AvatarViewportCamera>>,
-    mut framed_generation: Local<Option<AvatarGeneration>>,
+    mut camera_control: ResMut<AvatarCameraControl>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Ready {
+        camera_control.invalidate();
         return;
     }
     let generation = lifecycle.current_generation();
-    if *framed_generation == Some(generation) {
+    if camera_control.current_for(generation).is_some() {
         return;
     }
     let Some(root) = lifecycle.active_root() else {
@@ -72,7 +75,7 @@ pub(crate) fn frame_avatar_camera(
         HeadSubtreeBounds::Ready(subtree_bounds) => upper_body_bounds.union(subtree_bounds),
     };
 
-    let mut framed = false;
+    let mut framed_pose = None;
     for (camera, mut transform, mut projection) in &mut cameras {
         let Some(viewport_size) = camera.physical_viewport_size() else {
             continue;
@@ -96,10 +99,13 @@ pub(crate) fn frame_avatar_camera(
             continue;
         }
         transform.translation = fit.translation;
-        framed = true;
+        framed_pose = CameraControlPose::from_parts(*transform, fit.target, fit.distance).ok();
+        if framed_pose.is_some() {
+            break;
+        }
     }
-    if framed {
-        *framed_generation = Some(generation);
+    if let Some(pose) = framed_pose {
+        camera_control.initialize(generation, pose);
     }
 }
 
@@ -188,6 +194,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<AvatarLifecycle>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<AvatarCameraControl>()
             .add_systems(Update, frame_avatar_camera);
         app.world_mut().spawn((
             Camera3d::default(),
@@ -313,6 +320,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<AvatarLifecycle>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<AvatarCameraControl>()
             .add_systems(Update, frame_avatar_camera);
         let camera = app
             .world_mut()
@@ -334,6 +342,13 @@ mod tests {
 
         app.update();
         let first_x = app.world().get::<Transform>(camera).unwrap().translation.x;
+        let first_generation = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .current_generation();
+        let controls = app.world().resource::<AvatarCameraControl>();
+        assert!(controls.default_for(first_generation).is_some());
+        assert!(controls.current_for(first_generation).is_some());
 
         let replacement = spawn_humanoid(&mut app, 3.0);
         {
@@ -347,9 +362,17 @@ mod tests {
         }
         app.update();
         let replacement_x = app.world().get::<Transform>(camera).unwrap().translation.x;
+        let replacement_generation = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .current_generation();
 
         assert!(first_x.abs() < 1e-6);
         assert!((replacement_x - 3.0).abs() < 1e-6);
+        let controls = app.world().resource::<AvatarCameraControl>();
+        assert!(controls.current_for(first_generation).is_none());
+        assert!(controls.default_for(replacement_generation).is_some());
+        assert!(controls.current_for(replacement_generation).is_some());
         let projection = app.world().get::<Projection>(camera).unwrap();
         let Projection::Perspective(perspective) = projection else {
             panic!("avatar viewport camera must use perspective projection");
@@ -374,6 +397,10 @@ mod tests {
                 .expect("camera transform"),
             &before
         );
+        assert_eq!(
+            app.world().resource::<AvatarCameraControl>().state(),
+            crate::framing::camera_control::AvatarCameraControlState::Unavailable
+        );
 
         make_ready(&mut app, root);
         app.update();
@@ -387,6 +414,27 @@ mod tests {
             panic!("avatar viewport camera must use perspective projection");
         };
         assert!((projection.fov - FIXED_VERTICAL_FOV).abs() < f32::EPSILON);
+
+        let generation = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .current_generation();
+        assert!(
+            app.world()
+                .resource::<AvatarCameraControl>()
+                .current_for(generation)
+                .is_some()
+        );
+
+        app.world_mut()
+            .resource_mut::<AvatarLifecycle>()
+            .request_unload()
+            .expect("ready avatar can be unloaded");
+        app.update();
+        assert_eq!(
+            app.world().resource::<AvatarCameraControl>().state(),
+            crate::framing::camera_control::AvatarCameraControlState::Unavailable
+        );
     }
 
     #[test]
@@ -422,6 +470,16 @@ mod tests {
                 .get::<Transform>(camera)
                 .expect("camera transform"),
             &before
+        );
+        let generation = app
+            .world()
+            .resource::<AvatarLifecycle>()
+            .current_generation();
+        assert!(
+            app.world()
+                .resource::<AvatarCameraControl>()
+                .default_for(generation)
+                .is_some()
         );
     }
 

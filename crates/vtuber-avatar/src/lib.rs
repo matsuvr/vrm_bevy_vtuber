@@ -55,6 +55,11 @@ pub use capabilities::{
     ExpressionCapabilities, GazeFallbackReason, LookDirectionSet, MouthMode, SelectedGazeBackend,
     select_gaze_backend,
 };
+pub use framing::camera_control::geometry as camera_control_geometry;
+pub use framing::camera_control::{
+    AvatarCameraControl, AvatarCameraControlState, CameraControlConfig, CameraControlGeometryError,
+    CameraControlPose, CameraDistanceLimits, FIXED_VERTICAL_FOV,
+};
 pub use lifecycle::*;
 pub use load::{
     AssetPathError, AvatarAssetId, ExpectedVrmGeneration, ImportedAvatar, LoadImportedAvatarError,
