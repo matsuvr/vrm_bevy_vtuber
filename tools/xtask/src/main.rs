@@ -12,6 +12,7 @@ mod face_image_probe;
 mod face_pipeline_smoke;
 mod mediapipe_face_smoke;
 mod mediapipe_pose_probe;
+mod ndi;
 mod vrm_compatibility;
 mod vrm_managed_compatibility;
 
@@ -29,6 +30,7 @@ fn main() {
         println!("  face-pipeline-smoke       Legacy research detector/crop/landmark probe");
         println!("  mediapipe-face-smoke      Windows MSMF MediaPipe Face Landmarker gate");
         println!("  mediapipe-pose-probe      Guided MediaPipe neutral-relative pose proof");
+        println!("  ndi <command>             Stage or verify a Windows NDI release package");
         return;
     }
 
@@ -102,6 +104,14 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        "ndi" => {
+            if let Err(error) = ndi::run(&args[1..])
+                && error != "help requested"
+            {
+                eprintln!("ndi command failed: {error}");
+                process::exit(1);
+            }
+        }
         other => {
             eprintln!("unknown task: {other}");
             process::exit(1);

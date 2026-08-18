@@ -34,6 +34,18 @@ Webカメラで一人の顔を追跡し、VRM 1.0モデルを動かすWindows／
 - `docs/MODEL_COMPATIBILITY_TEMPLATE.md`
 - `docs/PERFORMANCE_TEST_PLAN.md`
 
+## NDI output and OBS
+
+The optional Live-screen NDI® output uses a fixed transparent BGRA profile and
+is disabled in the default build. Build-time SDK prerequisites and the guarded
+Windows x64 package procedure are documented in docs/NDI_RELEASE.md. The
+project does not commit or silently download the proprietary NDI runtime,
+redistribute NDI Tools, or install anything into PATH.
+
+For receiving in OBS, install [DistroAV](https://github.com/DistroAV/DistroAV)
+separately and add its NDI Source. NDI® is a registered trademark of Vizrt
+NDI AB; see the [official NDI developer site](https://ndi.video/).
+
 ## AI_AGENTでの使い方
 
 設計一式をrepository rootへ配置し、最初に`AI_AGENT_BOOTSTRAP_PROMPT.md`を渡す。以後は`AI_AGENT_TASKS.md`からtask IDを一つだけ指定する。

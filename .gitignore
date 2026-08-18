@@ -40,5 +40,10 @@ desktop.ini
 /logs/
 /run/
 
+# NDI SDK/runtime staging is local release input, never normal repository data.
+/release/
+/target/ndi-package/
+/tools/ndi-sdk-staging/
+
 # Bevy / wgpu cached pipeline data (if generated locally)
 *.cached_pipeline

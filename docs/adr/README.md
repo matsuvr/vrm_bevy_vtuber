@@ -14,5 +14,7 @@
 | ADR-009 | Accepted for M1-08-015 | MediaPipe Face Landmarker production runtime |
 | ADR-010 | Accepted | Head-relative gaze coordination |
 | ADR-011 | Accepted | VRM 0.x/1.0 normalization into the existing `bevy_vrm1` runtime |
+| ADR-012 | Accepted | Optional NDI sender boundary and bounded latest-value transport |
+| ADR-013 | Accepted for Issue #49; release gate pending | Guarded application-local NDI runtime staging |
 
 番号は再利用しない。採用済み判断を変更するときは元ADRを削除せず、Statusを`Superseded`へ変更し、新しいADRから参照する。
