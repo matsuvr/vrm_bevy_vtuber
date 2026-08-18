@@ -58,8 +58,9 @@ pub use capabilities::{
 pub use framing::camera_control::geometry as camera_control_geometry;
 pub use framing::camera_control::{
     AvatarCameraControl, AvatarCameraControlState, CameraControlConfig, CameraControlGeometryError,
-    CameraControlPose, CameraDistanceLimits, FIXED_VERTICAL_FOV,
+    CameraControlPose, CameraDistanceLimits, CameraPointerInputGate, FIXED_VERTICAL_FOV,
 };
+pub use framing::camera_input::{CameraInputSet, CameraPointerGesture, normalized_vertical_scroll};
 pub use lifecycle::*;
 pub use load::{
     AssetPathError, AvatarAssetId, ExpectedVrmGeneration, ImportedAvatar, LoadImportedAvatarError,

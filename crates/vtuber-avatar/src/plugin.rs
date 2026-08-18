@@ -16,6 +16,10 @@ use crate::binding::bind_humanoid_bones;
 use crate::breathing::apply_breathing_hips_translation;
 use crate::expression::apply_tracked_expressions;
 use crate::framing::camera_control::AvatarCameraControl;
+use crate::framing::camera_control::CameraPointerInputGate;
+use crate::framing::camera_input::{
+    CameraInputSet, CameraPointerGesture, apply_camera_pointer_input,
+};
 use crate::framing::fixed_fov_fit::FIXED_VERTICAL_FOV;
 use crate::framing::{AvatarViewportCamera, frame_avatar_camera};
 use crate::gaze::update_direct_look_at_input;
@@ -44,6 +48,8 @@ impl Plugin for VtuberAvatarPlugin {
             .add_plugins(crate::compatibility::VrmCompatibilityPlugin)
             .init_resource::<AvatarLifecycle>()
             .init_resource::<AvatarCameraControl>()
+            .init_resource::<CameraPointerInputGate>()
+            .init_resource::<CameraPointerGesture>()
             .init_resource::<ArmPoseOverrideStore>()
             .add_message::<crate::arm_pose::ArmPoseProfileChange>()
             .init_resource::<ActiveControlFrame>()
@@ -72,6 +78,14 @@ impl Plugin for VtuberAvatarPlugin {
             .add_systems(Update, clear_control_cache_on_lifecycle_change)
             .add_systems(Update, log_loaded_vrm)
             .add_systems(Update, log_head_bone)
+            .configure_sets(
+                PostUpdate,
+                CameraInputSet.before(TransformSystems::Propagate),
+            )
+            .add_systems(
+                PostUpdate,
+                apply_camera_pointer_input.in_set(CameraInputSet),
+            )
             .add_systems(
                 PostUpdate,
                 frame_avatar_camera.after(TransformSystems::Propagate),

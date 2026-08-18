@@ -4,7 +4,7 @@
 //! three main screens: Setup, Live, and Diagnostics.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass};
 
 use crate::actions::UiAction;
 #[cfg(not(feature = "dev-synthetic-input"))]
@@ -26,7 +26,9 @@ use crate::preview_landmarks::{PreviewLandmarkState, sync_preview_landmark_syste
 use crate::settings::{ArmPoseSettings, restore_arm_pose_settings_system};
 use crate::tracking_runtime::{TrackingRuntime, tracking_bridge_system};
 use crate::ui_model::{Screen, UiViewModel};
-use vtuber_avatar::{AvatarMotionMirror, apply_arm_pose_profile_changes};
+use vtuber_avatar::{
+    AvatarMotionMirror, CameraInputSet, CameraPointerInputGate, apply_arm_pose_profile_changes,
+};
 
 use super::diagnostics::render_diagnostics_screen;
 use super::live::render_live_screen;
@@ -67,6 +69,7 @@ impl Plugin for UiShellPlugin {
             .init_resource::<PreviewState>()
             .init_resource::<PreviewLandmarkState>()
             .init_resource::<AvatarMotionMirror>()
+            .init_resource::<CameraPointerInputGate>()
             .init_resource::<DiagnosticsSnapshot>()
             .init_resource::<MetricsExportState>()
             .init_resource::<ErrorPresenter>()
@@ -135,6 +138,12 @@ impl Plugin for UiShellPlugin {
                     .before(shutdown_workers_on_exit),
             )
             .add_systems(Last, shutdown_workers_on_exit)
+            .add_systems(
+                PostUpdate,
+                sync_camera_pointer_input_gate
+                    .after(EguiPostUpdateSet::ProcessOutput)
+                    .before(CameraInputSet),
+            )
             // egui rendering in EguiPrimaryContextPass.
             .add_systems(EguiPrimaryContextPass, ui_render_system);
 
@@ -162,6 +171,15 @@ impl Plugin for UiShellPlugin {
                 sync_avatar_diagnostics.after(crate::synthetic_tracking::synthetic_tracking_system),
             );
     }
+}
+
+/// Bridges the official egui pointer-ownership resource into the avatar camera
+/// domain without letting UI code touch a camera transform or projection.
+fn sync_camera_pointer_input_gate(
+    egui_wants_input: Res<bevy_egui::input::EguiWantsInput>,
+    mut gate: ResMut<CameraPointerInputGate>,
+) {
+    gate.set_egui_owns_pointer(egui_wants_input.wants_any_pointer_input());
 }
 
 /// Performs the explicit reverse-order shutdown required by the worker

@@ -1,6 +1,7 @@
 //! Avatar-aware viewport camera framing.
 
 pub mod camera_control;
+pub mod camera_input;
 pub(crate) mod fixed_fov_fit;
 pub(crate) mod head_subtree_bounds;
 
