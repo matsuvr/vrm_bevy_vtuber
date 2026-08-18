@@ -20,6 +20,15 @@ NDI SDK headers and bindgen environment:
 cargo build -p vtuber-desktop --release --features ndi-output
 ~~~~
 
+For an NDI-enabled local build, `apps/desktop/build.rs` reads the x64 import
+library and stages the matching Standard SDK runtime beside
+`vtuber-desktop.exe` in `target/debug` or `target/release`. It does not download
+or install anything. Set `NDI_RUNTIME_DLL` to an explicitly selected SDK DLL
+when the runtime is not at the SDK's `Bin\x64` directory; otherwise the build
+fails before producing an unlaunchable NDI artifact. Both the current
+`Processing.NDI.Lib.x64.dll` name and the legacy
+`Processing.NDI.Lib_x64.dll` name are resolved from the import library.
+
 The runtime is not committed to Git and must not be copied to System32, PATH,
 or an NDI Tools directory. The package contains the application, the
 explicitly supplied Standard SDK x64 runtime DLL, the exact license/notice
@@ -63,16 +72,19 @@ cargo run -p xtask -- ndi package --output target/ndi-package --runtime-dll 'C:\
 cargo run -p xtask -- ndi verify-package target/ndi-package
 ~~~~
 
-The staging command rejects another DLL name, requires the project
-attribution/link, records runtime/license/face-task hashes, and rejects extra
-files outside the allow-listed model resource directory. It does not download
-or delete the SDK, and it does not make a legal determination.
+The staging command accepts only the runtime name imported by the supplied
+executable (`Processing.NDI.Lib.x64.dll` or the legacy
+`Processing.NDI.Lib_x64.dll`), requires the project attribution/link, records
+runtime/license/face-task hashes, and rejects extra files outside the
+allow-listed model resource directory. It does not download or delete the SDK,
+and it does not make a legal determination.
 
 Expected top-level package:
 
 ~~~~text
 vtuber-desktop.exe
 Processing.NDI.Lib.x64.dll
+# or Processing.NDI.Lib_x64.dll when that is the executable's import name
 NDI_SDK_LICENSE_AGREEMENT.pdf
 THIRD_PARTY_NOTICES.md
 NDI_RUNTIME_MANIFEST.txt

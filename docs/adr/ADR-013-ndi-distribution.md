@@ -16,8 +16,11 @@ whether application-local runtime distribution is permitted.
 
 - Keep the default workspace and source package SDK-free.
 - Enable the sender only with the explicit ndi-output feature.
-- Stage only the exact Standard SDK x64 runtime filename
-  Processing.NDI.Lib.x64.dll, supplied explicitly by the build operator.
+- For an NDI-enabled local build, inspect the x64 import library and stage
+  only its matching Standard SDK runtime filename beside the executable. The
+  supported names are `Processing.NDI.Lib.x64.dll` and the legacy
+  `Processing.NDI.Lib_x64.dll`; the runtime is supplied by the build operator
+  or the local SDK installation and is never downloaded.
 - Require the exact SDK license agreement file, SDK version, and SDK package
   SHA-256 as package inputs.
 - Place the runtime beside vtuber-desktop.exe; never install it into a

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const RUNTIME_FILE: &str = "Processing.NDI.Lib.x64.dll";
+const RUNTIME_FILE_NAMES: [&str; 2] = ["Processing.NDI.Lib.x64.dll", "Processing.NDI.Lib_x64.dll"];
 const LICENSE_FILE: &str = "NDI_SDK_LICENSE_AGREEMENT.pdf";
 const NOTICES_FILE: &str = "THIRD_PARTY_NOTICES.md";
 const MANIFEST_FILE: &str = "NDI_RUNTIME_MANIFEST.txt";
@@ -68,9 +68,10 @@ fn package(args: &[String]) -> Result<(), String> {
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| "runtime DLL path has no valid UTF-8 filename".to_string())?;
-    if runtime_name != RUNTIME_FILE {
+    let imported_runtime_name = detect_runtime_name_in_file(&options.executable)?;
+    if runtime_name != imported_runtime_name {
         return Err(format!(
-            "only the Windows x64 Standard SDK runtime {RUNTIME_FILE} may be staged; got {runtime_name}"
+            "runtime DLL {runtime_name} does not match the executable's NDI import {imported_runtime_name}"
         ));
     }
     if options
@@ -88,7 +89,7 @@ fn package(args: &[String]) -> Result<(), String> {
         .map_err(|error| format!("cannot create package model directory: {error}"))?;
     let destinations = [
         options.output.join(EXECUTABLE_FILE),
-        options.output.join(RUNTIME_FILE),
+        options.output.join(runtime_name),
         options.output.join(LICENSE_FILE),
         options.output.join(NOTICES_FILE),
         options.output.join(MANIFEST_FILE),
@@ -117,7 +118,7 @@ fn package(args: &[String]) -> Result<(), String> {
          target=windows-x86_64\n\
          sdk_version={}\n\
          sdk_package_sha256={}\n\
-         runtime_file={RUNTIME_FILE}\n\
+         runtime_file={runtime_name}\n\
          runtime_sha256={}\n\
          license_file={LICENSE_FILE}\n\
          license_sha256={}\n\
@@ -154,16 +155,21 @@ fn verify_package(package_dir: &Path) -> Result<(), String> {
         ));
     }
 
-    let expected = [
-        EXECUTABLE_FILE,
-        RUNTIME_FILE,
-        LICENSE_FILE,
-        NOTICES_FILE,
-        MANIFEST_FILE,
-    ];
+    let runtime_name = RUNTIME_FILE_NAMES
+        .iter()
+        .copied()
+        .find(|name| package_dir.join(name).is_file())
+        .ok_or_else(|| {
+            format!(
+                "package is missing one of the supported NDI runtime DLLs: {}",
+                RUNTIME_FILE_NAMES.join(", ")
+            )
+        })?;
+    let expected = [EXECUTABLE_FILE, LICENSE_FILE, NOTICES_FILE, MANIFEST_FILE];
     for file in expected {
         require_file(&package_dir.join(file), file)?;
     }
+    require_file(&package_dir.join(runtime_name), runtime_name)?;
 
     for entry in fs::read_dir(package_dir)
         .map_err(|error| format!("cannot read package directory: {error}"))?
@@ -190,7 +196,7 @@ fn verify_package(package_dir: &Path) -> Result<(), String> {
         }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !expected.iter().any(|allowed| *allowed == name) {
+        if name != runtime_name && !expected.iter().any(|allowed| *allowed == name) {
             return Err(format!("unexpected package file: {name}"));
         }
     }
@@ -203,7 +209,7 @@ fn verify_package(package_dir: &Path) -> Result<(), String> {
 
     let manifest = parse_manifest(&package_dir.join(MANIFEST_FILE))?;
     require_manifest(&manifest, "target", "windows-x86_64")?;
-    require_manifest(&manifest, "runtime_file", RUNTIME_FILE)?;
+    require_manifest(&manifest, "runtime_file", runtime_name)?;
     require_manifest(&manifest, "license_file", LICENSE_FILE)?;
     require_manifest(&manifest, "application_local", "true")?;
     require_manifest(&manifest, "system_path_install", "false")?;
@@ -215,7 +221,7 @@ fn verify_package(package_dir: &Path) -> Result<(), String> {
     let runtime_hash = manifest
         .get("runtime_sha256")
         .ok_or_else(|| "manifest is missing runtime_sha256".to_string())?;
-    if runtime_hash != &sha256_file(&package_dir.join(RUNTIME_FILE))? {
+    if runtime_hash != &sha256_file(&package_dir.join(runtime_name))? {
         return Err("packaged runtime SHA-256 does not match the manifest".to_string());
     }
     let license_hash = manifest
@@ -431,6 +437,31 @@ fn require_file(path: &Path, description: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn detect_runtime_name_in_file(path: &Path) -> Result<&'static str, String> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("cannot read executable {}: {error}", path.display()))?;
+    let matches: Vec<_> = RUNTIME_FILE_NAMES
+        .iter()
+        .copied()
+        .filter(|name| {
+            bytes
+                .windows(name.len())
+                .any(|window| window == name.as_bytes())
+        })
+        .collect();
+    match matches.as_slice() {
+        [name] => Ok(*name),
+        [] => Err(format!(
+            "executable {} does not import a supported NDI runtime DLL",
+            path.display()
+        )),
+        _ => Err(format!(
+            "executable {} imports multiple supported NDI runtime DLL names",
+            path.display()
+        )),
+    }
+}
+
 fn sha256_file(path: &Path) -> Result<String, String> {
     let bytes =
         fs::read(path).map_err(|error| format!("cannot hash {}: {error}", path.display()))?;
@@ -544,7 +575,7 @@ fn print_help() {
 
 fn print_package_help() {
     println!("  cargo xtask ndi package --output <dir> \\");
-    println!("    --runtime-dll <Processing.NDI.Lib.x64.dll> \\");
+    println!("    --runtime-dll <Processing.NDI.Lib.x64.dll or Processing.NDI.Lib_x64.dll> \\");
     println!("    --sdk-license <NDI SDK License Agreement.pdf> \\");
     println!("    --sdk-version <version> --sdk-package-sha256 <sha256> \\");
     println!("    [--executable <vtuber-desktop.exe>] [--force]");
@@ -598,12 +629,26 @@ mod tests {
     }
 
     #[test]
+    fn executable_import_name_supports_legacy_runtime() {
+        let directory = temporary_directory();
+        fs::create_dir_all(&directory).expect("test directory should be creatable");
+        let executable = directory.join(EXECUTABLE_FILE);
+        fs::write(&executable, b"MZ Processing.NDI.Lib_x64.dll\0").expect("executable");
+
+        assert_eq!(
+            detect_runtime_name_in_file(&executable).expect("legacy import should be detected"),
+            "Processing.NDI.Lib_x64.dll"
+        );
+        fs::remove_dir_all(directory).expect("test directory should be removable");
+    }
+
+    #[test]
     fn verify_accepts_packaged_mediapipe_resources() {
         let directory = temporary_directory();
         let model_dir = directory.join("assets/models");
         fs::create_dir_all(&model_dir).expect("model directory should be creatable");
         fs::write(directory.join(EXECUTABLE_FILE), b"exe").expect("executable");
-        fs::write(directory.join(RUNTIME_FILE), b"runtime").expect("runtime");
+        fs::write(directory.join(RUNTIME_FILE_NAMES[0]), b"runtime").expect("runtime");
         fs::write(directory.join(LICENSE_FILE), b"license").expect("license");
         fs::write(
             directory.join(NOTICES_FILE),
@@ -633,8 +678,8 @@ mod tests {
              hx_codecs_included=false\n\
              audio_included=false\n",
             "A".repeat(64),
-            RUNTIME_FILE,
-            sha256_file(&directory.join(RUNTIME_FILE)).expect("runtime hash"),
+            RUNTIME_FILE_NAMES[0],
+            sha256_file(&directory.join(RUNTIME_FILE_NAMES[0])).expect("runtime hash"),
             LICENSE_FILE,
             sha256_file(&directory.join(LICENSE_FILE)).expect("license hash"),
             MODEL_TASK_FILE,
