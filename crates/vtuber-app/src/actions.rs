@@ -45,6 +45,12 @@ pub enum UiAction {
     /// Stop all workers in reverse order.
     Stop,
 
+    // --- NDI output actions ---
+    /// Start the optional transparent avatar NDI output.
+    StartNdiOutput,
+    /// Stop the optional transparent avatar NDI output.
+    StopNdiOutput,
+
     // --- Calibration actions ---
     /// Begin calibration sequence.
     BeginCalibration,
@@ -114,6 +120,14 @@ mod tests {
     #[test]
     fn actions_stop_does_not_require_pipeline() {
         assert!(!UiAction::Stop.requires_running_pipeline());
+    }
+
+    #[test]
+    fn ndi_output_actions_are_independent_of_tracking_pipeline() {
+        assert!(!UiAction::StartNdiOutput.requires_running_pipeline());
+        assert!(!UiAction::StopNdiOutput.requires_running_pipeline());
+        assert!(!UiAction::StartNdiOutput.is_navigation());
+        assert!(!UiAction::StopNdiOutput.is_navigation());
     }
 
     #[test]

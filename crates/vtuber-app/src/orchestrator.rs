@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use crate::actions::UiAction;
 use crate::import::VrmGeneration;
 use crate::import::{self, ImportedModel, ModelImportError};
+use crate::ndi_output::NdiOutputIntent;
 use crate::preview::PreviewState;
 use crate::settings::ArmPoseSettings;
 use crate::ui::UiState;
@@ -599,6 +600,7 @@ pub fn process_ui_actions_system(
     mut orchestrator: ResMut<Orchestrator>,
     mut ui_state: ResMut<UiState>,
     mut view_model: ResMut<UiViewModel>,
+    mut ndi_intent: Option<ResMut<NdiOutputIntent>>,
     mut preview: ResMut<PreviewState>,
     mut avatar_motion_mirror: ResMut<AvatarMotionMirror>,
     mut arm_pose_overrides: Option<ResMut<ArmPoseOverrideStore>>,
@@ -639,6 +641,16 @@ pub fn process_ui_actions_system(
                     requests.write(vtuber_avatar::ResetCameraRequest {
                         generation: lifecycle.current_generation(),
                     });
+                }
+            }
+            UiAction::StartNdiOutput => {
+                if let Some(intent) = ndi_intent.as_deref_mut() {
+                    intent.request_start();
+                }
+            }
+            UiAction::StopNdiOutput => {
+                if let Some(intent) = ndi_intent.as_deref_mut() {
+                    intent.request_stop();
                 }
             }
             _ => orchestrator.process_action(action),
@@ -889,6 +901,40 @@ mod tests {
         assert!(!view_model.preview_visible);
         assert!(!view_model.mirror_preview);
         assert!(!view_model.mirror_avatar_motion);
+    }
+
+    #[test]
+    fn ndi_output_actions_update_session_intent_without_starting_tracking() {
+        let mut app = App::new();
+        app.init_resource::<Orchestrator>()
+            .init_resource::<UiState>()
+            .init_resource::<UiViewModel>()
+            .init_resource::<crate::ndi_output::NdiOutputIntent>()
+            .init_resource::<PreviewState>()
+            .init_resource::<AvatarMotionMirror>()
+            .add_systems(Update, process_ui_actions_system);
+
+        app.world_mut()
+            .resource_mut::<UiState>()
+            .emit(UiAction::StartNdiOutput);
+        app.update();
+        let intent = app.world().resource::<crate::ndi_output::NdiOutputIntent>();
+        assert!(intent.is_requested());
+        assert_eq!(intent.generation(), 1);
+        assert_eq!(
+            app.world().resource::<Orchestrator>().pipeline_state(),
+            PipelineState::Idle
+        );
+
+        app.world_mut()
+            .resource_mut::<UiState>()
+            .emit(UiAction::StopNdiOutput);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<crate::ndi_output::NdiOutputIntent>()
+                .is_requested()
+        );
     }
 
     #[test]

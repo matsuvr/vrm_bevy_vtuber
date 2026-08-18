@@ -35,6 +35,9 @@ pub mod model_catalog;
 /// App orchestrator — processes UI actions and manages domain state.
 pub mod orchestrator;
 
+/// Optional NDI output orchestration and UI snapshot bridge.
+pub mod ndi_output;
+
 /// User-owned persistent settings, including per-model arm-pose overrides.
 pub mod settings;
 

@@ -14,6 +14,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use vtuber_core::{FrameSeq, VideoOutputFrame, VideoOutputPixelFormat, VideoOutputProfile};
 
+/// Returns whether this build includes the explicit NDI SDK backend.
+#[must_use]
+pub const fn is_sdk_feature_enabled() -> bool {
+    cfg!(feature = "ndi-sdk")
+}
+
 /// Stable error codes emitted by the optional output backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NdiErrorCode {

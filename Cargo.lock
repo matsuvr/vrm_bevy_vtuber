@@ -6772,6 +6772,7 @@ dependencies = [
  "vtuber-camera",
  "vtuber-core",
  "vtuber-inference",
+ "vtuber-ndi",
  "vtuber-tracking",
 ]
 
@@ -6807,7 +6808,6 @@ dependencies = [
  "directories",
  "vtuber-app",
  "vtuber-avatar",
- "vtuber-ndi",
 ]
 
 [[package]]

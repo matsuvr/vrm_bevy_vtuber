@@ -20,6 +20,10 @@ use crate::inference_runtime::{
     InferenceProjectRoot, InferenceRuntime, inference_bridge_system, read_inference_output_system,
 };
 use crate::metrics_export::{MetricsExportState, export_diagnostics_system};
+use crate::ndi_output::{
+    NdiOutputIntent, NdiOutputRuntime, ndi_output_bridge_system, shutdown_ndi_output,
+    sync_ndi_output_view_model_system,
+};
 use crate::orchestrator::{Orchestrator, process_ui_actions_system, sync_avatar_lifecycle_system};
 use crate::preview::PreviewState;
 use crate::preview_landmarks::{PreviewLandmarkState, sync_preview_landmark_system};
@@ -68,6 +72,8 @@ impl Plugin for UiShellPlugin {
             .init_resource::<ArmPoseSettings>()
             .init_resource::<PreviewState>()
             .init_resource::<PreviewLandmarkState>()
+            .init_resource::<NdiOutputIntent>()
+            .init_resource::<NdiOutputRuntime>()
             .init_resource::<AvatarMotionMirror>()
             .init_resource::<CameraPointerInputGate>()
             .init_resource::<DiagnosticsSnapshot>()
@@ -107,6 +113,14 @@ impl Plugin for UiShellPlugin {
                 sync_error_presenter
                     .after(sync_avatar_lifecycle_system)
                     .after(sync_capture_diagnostics),
+            )
+            .add_systems(
+                Update,
+                ndi_output_bridge_system.after(sync_avatar_lifecycle_system),
+            )
+            .add_systems(
+                Update,
+                sync_ndi_output_view_model_system.after(ndi_output_bridge_system),
             )
             // Capture bridge: connects orchestrator intent to real camera.
             .add_systems(
@@ -188,8 +202,11 @@ fn shutdown_workers_on_exit(
     mut exit_messages: MessageReader<AppExit>,
     mut inference: ResMut<InferenceRuntime>,
     mut capture: ResMut<CaptureRuntime>,
+    ndi_output: Option<ResMut<crate::ndi_output::NdiOutputRuntime>>,
+    output_state: Option<ResMut<vtuber_avatar::AvatarOutputState>>,
 ) {
     if exit_messages.read().next().is_some() {
+        shutdown_ndi_output(ndi_output, output_state);
         inference.stop_model();
         capture.shutdown();
     }

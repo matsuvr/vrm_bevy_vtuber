@@ -5,7 +5,7 @@ use bevy_egui::egui::{Color32, Rect, Ui};
 use crate::actions::UiAction;
 use crate::preview::PreviewState;
 use crate::preview_landmarks::PreviewLandmarkState;
-use crate::ui_model::UiViewModel;
+use crate::ui_model::{NdiOutputUiState, UiViewModel};
 use vtuber_avatar::AvatarMotionMirror;
 use vtuber_core::{FaceLandmark, MonoTimeNs, monotonic_now};
 
@@ -186,6 +186,71 @@ pub fn render_live_screen(
             ui.label("Waiting for camera frames…");
         }
     }
+    ui.separator();
+
+    // Optional transparent NDI output. This section intentionally exposes
+    // only the fixed application profile; source, resolution, FPS, codec,
+    // network, and group configuration remain outside the Live UI contract.
+    ui.heading("NDI® Output");
+    let source_name = vm
+        .ndi_output
+        .source_name
+        .as_deref()
+        .unwrap_or("vrm-bevy-vtuber");
+    ui.horizontal(|ui| {
+        ui.label("Source:");
+        ui.monospace(source_name);
+    });
+    let status = match vm.ndi_output.state {
+        NdiOutputUiState::Off => "Off".to_string(),
+        NdiOutputUiState::Starting => "Starting…".to_string(),
+        NdiOutputUiState::Live => vm
+            .ndi_output
+            .connections
+            .map(|count| format!("Live ({count} receiver(s))"))
+            .unwrap_or_else(|| "Live".to_string()),
+        NdiOutputUiState::Error => "Error".to_string(),
+    };
+    ui.label(format!("Status: {status}"));
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                vm.can_start_ndi_output(),
+                bevy_egui::egui::Button::new("Start"),
+            )
+            .clicked()
+        {
+            ui_state.emit(UiAction::StartNdiOutput);
+        }
+        if ui
+            .add_enabled(
+                vm.can_stop_ndi_output(),
+                bevy_egui::egui::Button::new("Stop"),
+            )
+            .clicked()
+        {
+            ui_state.emit(UiAction::StopNdiOutput);
+        }
+    });
+    if !vm.ndi_output.available {
+        ui.small("NDI output is not included in this build.");
+    }
+    if let (Some(code), Some(message)) = (
+        vm.ndi_output.error_code.as_deref(),
+        vm.ndi_output.error_message.as_deref(),
+    ) {
+        ui.colored_label(
+            bevy_egui::egui::Color32::LIGHT_RED,
+            format!("{code}: {message}"),
+        );
+    }
+    if vm.ndi_output.dropped_frames > 0 || vm.ndi_output.replaced_frames > 0 {
+        ui.small(format!(
+            "Mailbox: {} dropped, {} replaced",
+            vm.ndi_output.dropped_frames, vm.ndi_output.replaced_frames
+        ));
+    }
+    ui.hyperlink_to("NDI® SDK information", "https://ndi.video");
     ui.separator();
 
     // Start/Stop buttons.

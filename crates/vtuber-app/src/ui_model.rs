@@ -162,6 +162,41 @@ pub enum TrackingState {
     Lost,
 }
 
+/// Display state for the optional NDI output sender.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NdiOutputUiState {
+    /// No sender is active.
+    #[default]
+    Off,
+    /// The sender is being initialized.
+    Starting,
+    /// Frames are being offered to the sender.
+    Live,
+    /// The last start/send operation failed.
+    Error,
+}
+
+/// Small immutable snapshot of the optional NDI output state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NdiOutputViewModel {
+    /// Whether this build contains the explicit NDI SDK feature.
+    pub available: bool,
+    /// Current sender state.
+    pub state: NdiOutputUiState,
+    /// Fixed source name used by the application.
+    pub source_name: Option<String>,
+    /// Number of currently connected receivers, when reported by the backend.
+    pub connections: Option<u32>,
+    /// Frames discarded because the sender mailbox was not running.
+    pub dropped_frames: u64,
+    /// Frames replaced in the bounded latest-value mailbox.
+    pub replaced_frames: u64,
+    /// Stable backend error code, when present.
+    pub error_code: Option<String>,
+    /// Short backend error message, when present.
+    pub error_message: Option<String>,
+}
+
 /// Complete UI view model snapshot.
 #[derive(Clone, Debug, Default, Resource)]
 pub struct UiViewModel {
@@ -179,6 +214,8 @@ pub struct UiViewModel {
     pub calibration: CalibrationViewModel,
     /// Tracking state.
     pub tracking: TrackingViewModel,
+    /// Optional NDI output state.
+    pub ndi_output: NdiOutputViewModel,
     /// Whether preview mirroring is enabled.
     pub mirror_preview: bool,
     /// Whether avatar motion is reflected for the operator.
@@ -214,6 +251,27 @@ impl UiViewModel {
     #[must_use]
     pub fn can_reset_camera(&self) -> bool {
         self.avatar.is_ready && self.avatar.lifecycle == AvatarLifecycleState::Ready
+    }
+
+    /// Check if NDI output can be started for the current ready avatar.
+    #[must_use]
+    pub fn can_start_ndi_output(&self) -> bool {
+        self.avatar.is_ready
+            && self.avatar.lifecycle == AvatarLifecycleState::Ready
+            && self.ndi_output.available
+            && matches!(
+                self.ndi_output.state,
+                NdiOutputUiState::Off | NdiOutputUiState::Error
+            )
+    }
+
+    /// Check if an active or starting NDI sender can be stopped.
+    #[must_use]
+    pub fn can_stop_ndi_output(&self) -> bool {
+        matches!(
+            self.ndi_output.state,
+            NdiOutputUiState::Starting | NdiOutputUiState::Live
+        )
     }
 }
 
@@ -267,6 +325,30 @@ mod tests {
     fn ui_model_cannot_stop_when_idle() {
         let vm = UiViewModel::default();
         assert!(!vm.can_stop());
+    }
+
+    #[test]
+    fn ui_model_ndi_start_requires_ready_avatar_but_not_tracking() {
+        let mut vm = UiViewModel::default();
+        vm.ndi_output.available = true;
+        assert!(!vm.can_start_ndi_output());
+
+        vm.avatar.is_ready = true;
+        vm.avatar.lifecycle = AvatarLifecycleState::Ready;
+        assert!(vm.can_start_ndi_output());
+
+        vm.lifecycle = AppLifecycle::Running;
+        assert!(vm.can_start_ndi_output());
+    }
+
+    #[test]
+    fn ui_model_ndi_stop_is_available_only_while_starting_or_live() {
+        let mut vm = UiViewModel::default();
+        assert!(!vm.can_stop_ndi_output());
+        vm.ndi_output.state = NdiOutputUiState::Starting;
+        assert!(vm.can_stop_ndi_output());
+        vm.ndi_output.state = NdiOutputUiState::Live;
+        assert!(vm.can_stop_ndi_output());
     }
 
     #[test]
