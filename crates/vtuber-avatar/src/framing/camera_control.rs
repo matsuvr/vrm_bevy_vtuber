@@ -324,6 +324,26 @@ pub struct AvatarCameraControl {
     config: CameraControlConfig,
 }
 
+/// Gate published by the UI layer to distinguish egui-owned pointer input
+/// from the main 3D background. The avatar crate remains independent of egui.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CameraPointerInputGate {
+    egui_owns_pointer: bool,
+}
+
+impl CameraPointerInputGate {
+    /// Sets whether egui currently owns the pointer.
+    pub fn set_egui_owns_pointer(&mut self, owns_pointer: bool) {
+        self.egui_owns_pointer = owns_pointer;
+    }
+
+    /// Returns `true` when the viewport may capture camera input.
+    #[must_use]
+    pub const fn allows_camera_input(&self) -> bool {
+        !self.egui_owns_pointer
+    }
+}
+
 impl Default for AvatarCameraControl {
     fn default() -> Self {
         Self {
@@ -356,6 +376,15 @@ impl AvatarCameraControl {
                 ..
             } if active == generation => Some(current),
             _ => None,
+        }
+    }
+
+    /// Returns the generation currently eligible for manual camera control.
+    #[must_use]
+    pub fn active_generation(&self) -> Option<AvatarGeneration> {
+        match self.state {
+            AvatarCameraControlState::Ready { generation, .. } => Some(generation),
+            AvatarCameraControlState::Unavailable => None,
         }
     }
 
