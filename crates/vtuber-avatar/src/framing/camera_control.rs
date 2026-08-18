@@ -212,7 +212,8 @@ pub mod geometry {
     /// Pans camera and target together in screen space using the fixed FOV.
     ///
     /// `pixel_delta.y` follows window coordinates, where positive is downward;
-    /// therefore a downward drag moves the target along camera local down.
+    /// therefore a downward drag moves the target along camera local up so
+    /// the scene follows the mouse as it is grabbed.
     pub fn pan(
         pose: CameraControlPose,
         pixel_delta: Vec2,
@@ -237,8 +238,8 @@ pub mod geometry {
             return Err(CameraControlGeometryError::NonFiniteInput);
         }
 
-        let translation = pose.transform().right() * (pixel_delta.x * world_per_pixel_x)
-            - pose.transform().up() * (pixel_delta.y * world_per_pixel_y);
+        let translation = -pose.transform().right() * (pixel_delta.x * world_per_pixel_x)
+            + pose.transform().up() * (pixel_delta.y * world_per_pixel_y);
         if !translation.is_finite() {
             return Err(CameraControlGeometryError::NonFiniteInput);
         }
@@ -454,10 +455,12 @@ mod tests {
     #[test]
     fn pan_moves_camera_and_target_together_and_scales_with_distance() {
         let before = pose();
-        let after = geometry::pan(before, Vec2::new(100.0, -50.0), Vec2::new(1600.0, 900.0))
+        let after = geometry::pan(before, Vec2::new(100.0, 50.0), Vec2::new(1600.0, 900.0))
             .expect("pan should be finite");
         let delta = after.target() - before.target();
 
+        assert!(delta.x < 0.0, "right drag must move camera/target left");
+        assert!(delta.y > 0.0, "down drag must move camera/target up");
         assert_eq!(after.transform().rotation, before.transform().rotation);
         assert!((after.distance() - before.distance()).abs() < 1e-5);
         assert_eq!(
@@ -473,6 +476,28 @@ mod tests {
             geometry::pan(farther, Vec2::new(100.0, -50.0), Vec2::new(1600.0, 900.0))
                 .expect("farther pan should be finite");
         assert!((farther_after.target() - farther.target()).length() > delta.length() * 1.9);
+    }
+
+    #[test]
+    fn pan_uses_standard_grab_direction_for_each_screen_axis() {
+        let before = pose();
+        let after = geometry::pan(before, Vec2::new(100.0, 100.0), Vec2::new(1600.0, 900.0))
+            .expect("pan should be finite");
+        let translation = after.target() - before.target();
+        let visible_height = 2.0 * before.distance() * (FIXED_VERTICAL_FOV * 0.5).tan();
+        let expected = Vec3::new(
+            -100.0 * visible_height * (1600.0 / 900.0) / 1600.0,
+            100.0 * visible_height / 900.0,
+            0.0,
+        );
+
+        assert!((translation - expected).length() < 1e-6);
+        assert_eq!(
+            after.transform().translation - before.transform().translation,
+            translation
+        );
+        assert_eq!(after.transform().rotation, before.transform().rotation);
+        assert_eq!(after.distance(), before.distance());
     }
 
     #[test]

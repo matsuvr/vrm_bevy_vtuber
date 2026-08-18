@@ -148,15 +148,16 @@ fn setup_scene(
     ));
 
     // Camera framing the upper body.
+    let camera_transform = Transform::from_translation(Vec3::new(0.0, 0.0, 2.5))
+        .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y);
     commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
             fov: FIXED_VERTICAL_FOV,
             ..default()
         }),
-        AvatarViewportCamera,
-        Transform::from_translation(Vec3::new(0.0, 0.0, 2.5))
-            .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
+        AvatarViewportCamera::from_default_transform(camera_transform),
+        camera_transform,
     ));
 }
 

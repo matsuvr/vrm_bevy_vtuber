@@ -19,7 +19,28 @@ const MIN_HIPS_HEAD_HEIGHT: f32 = 0.05;
 
 /// Marks the single camera used to render the avatar viewport.
 #[derive(Component)]
-pub(crate) struct AvatarViewportCamera;
+pub(crate) struct AvatarViewportCamera {
+    /// Rotation used by every generation's automatic framing solve.
+    ///
+    /// This is deliberately separate from the camera's mutable transform:
+    /// manual orbit changes the latter, but never this generation-independent
+    /// framing authority.
+    default_framing_rotation: Quat,
+}
+
+impl AvatarViewportCamera {
+    /// Captures the camera's formal startup transform as immutable framing
+    /// authority.
+    pub(crate) fn from_default_transform(transform: Transform) -> Self {
+        Self {
+            default_framing_rotation: transform.rotation,
+        }
+    }
+
+    fn default_framing_rotation(&self) -> Quat {
+        self.default_framing_rotation
+    }
+}
 
 #[derive(SystemParam)]
 pub(crate) struct FramingWorld<'w, 's> {
@@ -35,7 +56,15 @@ pub(crate) struct FramingWorld<'w, 's> {
 pub(crate) fn frame_avatar_camera(
     lifecycle: Res<AvatarLifecycle>,
     world: FramingWorld,
-    mut cameras: Query<(&Camera, &mut Transform, &mut Projection), With<AvatarViewportCamera>>,
+    mut cameras: Query<
+        (
+            &Camera,
+            &AvatarViewportCamera,
+            &mut Transform,
+            &mut Projection,
+        ),
+        With<AvatarViewportCamera>,
+    >,
     mut camera_control: ResMut<AvatarCameraControl>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Ready {
@@ -76,7 +105,7 @@ pub(crate) fn frame_avatar_camera(
     };
 
     let mut framed_pose = None;
-    for (camera, mut transform, mut projection) in &mut cameras {
+    for (camera, viewport_camera, mut transform, mut projection) in &mut cameras {
         let Some(viewport_size) = camera.physical_viewport_size() else {
             continue;
         };
@@ -84,25 +113,38 @@ pub(crate) fn frame_avatar_camera(
             continue;
         }
         let aspect_ratio = viewport_size.x as f32 / viewport_size.y as f32;
-        let Projection::Perspective(perspective) = &mut *projection else {
+        let Projection::Perspective(perspective) = &*projection else {
             continue;
         };
-        perspective.fov = FIXED_VERTICAL_FOV;
-        perspective.aspect_ratio = aspect_ratio;
 
-        let Ok(fit) =
-            solve_fixed_fov_fit(bounds, transform.rotation, aspect_ratio, perspective.near)
+        let framing_rotation = viewport_camera.default_framing_rotation();
+        let Ok(fit) = solve_fixed_fov_fit(bounds, framing_rotation, aspect_ratio, perspective.near)
         else {
             continue;
         };
         if !fit.translation.is_finite() {
             continue;
         }
-        transform.translation = fit.translation;
-        framed_pose = CameraControlPose::from_parts(*transform, fit.target, fit.distance).ok();
-        if framed_pose.is_some() {
-            break;
-        }
+        let mut framed_transform = *transform;
+        framed_transform.translation = fit.translation;
+        framed_transform.rotation = framing_rotation;
+        let Some(pose) =
+            CameraControlPose::from_parts(framed_transform, fit.target, fit.distance).ok()
+        else {
+            continue;
+        };
+
+        // Commit the camera and projection together only after the fit and
+        // control pose have both succeeded. Pending or failed bounds must not
+        // leave a partially updated camera behind.
+        let Projection::Perspective(perspective) = &mut *projection else {
+            continue;
+        };
+        perspective.fov = FIXED_VERTICAL_FOV;
+        perspective.aspect_ratio = aspect_ratio;
+        *transform = framed_transform;
+        framed_pose = Some(pose);
+        break;
     }
     if let Some(pose) = framed_pose {
         camera_control.initialize(generation, pose);
@@ -196,6 +238,7 @@ mod tests {
             .init_resource::<Assets<Mesh>>()
             .init_resource::<AvatarCameraControl>()
             .add_systems(Update, frame_avatar_camera);
+        let camera_transform = Transform::from_xyz(0.0, 0.0, 2.5);
         app.world_mut().spawn((
             Camera3d::default(),
             Camera {
@@ -205,8 +248,8 @@ mod tests {
                 }),
                 ..default()
             },
-            AvatarViewportCamera,
-            Transform::from_xyz(0.0, 0.0, 2.5),
+            AvatarViewportCamera::from_default_transform(camera_transform),
+            camera_transform,
         ));
         app
     }
@@ -333,7 +376,7 @@ mod tests {
                     }),
                     ..default()
                 },
-                AvatarViewportCamera,
+                AvatarViewportCamera::from_default_transform(Transform::from_xyz(0.0, 0.0, 2.5)),
                 Transform::from_xyz(0.0, 0.0, 2.5),
             ))
             .id();
@@ -347,8 +390,31 @@ mod tests {
             .resource::<AvatarLifecycle>()
             .current_generation();
         let controls = app.world().resource::<AvatarCameraControl>();
-        assert!(controls.default_for(first_generation).is_some());
-        assert!(controls.current_for(first_generation).is_some());
+        let first_default = controls
+            .default_for(first_generation)
+            .expect("first generation has a default pose");
+        assert_eq!(controls.current_for(first_generation), Some(first_default));
+
+        let first_manual = crate::framing::camera_control::geometry::orbit(first_default, 0.7, 0.2)
+            .expect("first generation manual orbit is valid");
+        assert!(
+            app.world_mut()
+                .resource_mut::<AvatarCameraControl>()
+                .set_current(first_generation, first_manual)
+        );
+        *app.world_mut()
+            .get_mut::<Transform>(camera)
+            .expect("avatar camera transform") = first_manual.transform();
+        assert_eq!(
+            app.world()
+                .resource::<AvatarCameraControl>()
+                .current_for(first_generation),
+            Some(first_manual)
+        );
+        assert_ne!(
+            first_manual.transform().rotation,
+            first_default.transform().rotation
+        );
 
         let replacement = spawn_humanoid(&mut app, 3.0);
         {
@@ -361,18 +427,44 @@ mod tests {
             lifecycle.finish_ready();
         }
         app.update();
-        let replacement_x = app.world().get::<Transform>(camera).unwrap().translation.x;
+        let replacement_transform = *app.world().get::<Transform>(camera).unwrap();
         let replacement_generation = app
             .world()
             .resource::<AvatarLifecycle>()
             .current_generation();
 
         assert!(first_x.abs() < 1e-6);
-        assert!((replacement_x - 3.0).abs() < 1e-6);
+        assert!((replacement_transform.translation.x - 3.0).abs() < 1e-6);
         let controls = app.world().resource::<AvatarCameraControl>();
         assert!(controls.current_for(first_generation).is_none());
-        assert!(controls.default_for(replacement_generation).is_some());
-        assert!(controls.current_for(replacement_generation).is_some());
+        let replacement_default = controls
+            .default_for(replacement_generation)
+            .expect("replacement generation has a default pose");
+        assert_eq!(
+            controls.current_for(replacement_generation),
+            Some(replacement_default)
+        );
+        let canonical_rotation = app
+            .world()
+            .get::<AvatarViewportCamera>(camera)
+            .expect("avatar viewport camera marker")
+            .default_framing_rotation();
+        assert_eq!(replacement_transform.rotation, canonical_rotation);
+        assert_ne!(
+            replacement_transform.rotation,
+            first_manual.transform().rotation
+        );
+        assert_ne!(replacement_default.target(), first_manual.target());
+        assert!((replacement_default.target().x - 3.0).abs() < 1e-6);
+
+        let replacement_bounds =
+            upper_body_bounds(Vec3::new(3.0, 1.8, 0.0), Vec3::new(3.0, 1.0, 0.0))
+                .expect("replacement bounds");
+        let expected_fit =
+            solve_fixed_fov_fit(replacement_bounds, canonical_rotation, 1600.0 / 900.0, 0.1)
+                .expect("replacement bounds fit");
+        assert_eq!(replacement_default.target(), expected_fit.target);
+        assert!((replacement_default.distance() - expected_fit.distance).abs() < 1e-5);
         let projection = app.world().get::<Projection>(camera).unwrap();
         let Projection::Perspective(perspective) = projection else {
             panic!("avatar viewport camera must use perspective projection");
