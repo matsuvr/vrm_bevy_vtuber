@@ -213,7 +213,7 @@ impl UiViewModel {
     /// Check if the current avatar has a camera default that can be reset.
     #[must_use]
     pub fn can_reset_camera(&self) -> bool {
-        self.avatar.is_ready
+        self.avatar.is_ready && self.avatar.lifecycle == AvatarLifecycleState::Ready
     }
 }
 
@@ -275,6 +275,9 @@ mod tests {
         assert!(!vm.can_reset_camera());
 
         vm.avatar.is_ready = true;
+        assert!(!vm.can_reset_camera());
+
+        vm.avatar.lifecycle = AvatarLifecycleState::Ready;
         assert!(vm.can_reset_camera());
     }
 
