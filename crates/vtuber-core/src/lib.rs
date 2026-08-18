@@ -24,6 +24,8 @@ pub mod slot;
 pub mod stop;
 /// Process-wide monotonic clock.
 pub mod time;
+/// Transport-neutral contract for transparent avatar video output.
+pub mod video_output;
 /// Deterministic worker supervision helpers.
 pub mod worker;
 
@@ -34,4 +36,5 @@ pub use slot::{LatestSlot, ReadResult};
 pub use stop::StopToken;
 pub use time::now as monotonic_now;
 pub use types::*;
+pub use video_output::*;
 pub use worker::{WorkerHandle, WorkerResult};

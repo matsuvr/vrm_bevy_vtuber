@@ -5,6 +5,7 @@
 //! re-exported from the crate facade.
 
 use bevy::app::AnimationSystems;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 use bevy_vrm1::vrm::body_tracking::apply_direct_body_tracking;
@@ -34,6 +35,9 @@ use crate::load::{
 use crate::mirror::AvatarMotionMirror;
 use crate::pose::{
     PoseApplyMetrics, reset_pose_metrics_on_lifecycle_change, update_body_tracking_pose_input,
+};
+use crate::render_output::{
+    AVATAR_RENDER_LAYER, VIEWPORT_ONLY_RENDER_LAYER, register_output_systems,
 };
 use crate::unload::{
     ActiveControlFrame, clear_control_cache_on_lifecycle_change, despawn_unloading_avatar,
@@ -135,6 +139,7 @@ impl Plugin for VtuberAvatarPlugin {
                     .before(VrmSystemSets::Expressions),
             )
             .add_systems(Update, reset_pose_metrics_on_lifecycle_change);
+        register_output_systems(app);
     }
 }
 
@@ -159,6 +164,7 @@ fn setup_scene(
             ..default()
         })),
         Transform::from_translation(Vec3::new(0.0, -1.0, 0.0)),
+        RenderLayers::layer(VIEWPORT_ONLY_RENDER_LAYER),
     ));
 
     // Key light.
@@ -168,6 +174,7 @@ fn setup_scene(
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.5, 0.5, 0.0)),
+        RenderLayers::from_layers(&[AVATAR_RENDER_LAYER, VIEWPORT_ONLY_RENDER_LAYER]),
     ));
 
     // Camera framing the upper body.
@@ -181,6 +188,7 @@ fn setup_scene(
         }),
         AvatarViewportCamera::from_default_transform(camera_transform),
         camera_transform,
+        RenderLayers::from_layers(&[AVATAR_RENDER_LAYER, VIEWPORT_ONLY_RENDER_LAYER]),
     ));
 }
 
