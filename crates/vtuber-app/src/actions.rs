@@ -27,6 +27,8 @@ pub enum UiAction {
         /// Camera index from the available list.
         index: usize,
     },
+    /// Restore the current avatar's last successful auto-framed camera pose.
+    ResetAvatarCamera,
 
     // --- Avatar actions ---
     /// Import a VRM model from the given path.
@@ -145,6 +147,12 @@ mod tests {
             UiAction::SelectCamera { index } => assert_eq!(index, 3),
             _ => panic!("expected SelectCamera"),
         }
+    }
+
+    #[test]
+    fn reset_camera_is_a_distinct_one_shot_action() {
+        assert!(!UiAction::ResetAvatarCamera.is_navigation());
+        assert!(!UiAction::ResetAvatarCamera.requires_running_pipeline());
     }
 
     #[test]

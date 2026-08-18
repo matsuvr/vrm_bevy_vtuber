@@ -209,6 +209,12 @@ impl UiViewModel {
             && !self.calibration.is_calibrating
             && !self.calibration.is_complete
     }
+
+    /// Check if the current avatar has a camera default that can be reset.
+    #[must_use]
+    pub fn can_reset_camera(&self) -> bool {
+        self.avatar.is_ready && self.avatar.lifecycle == AvatarLifecycleState::Ready
+    }
 }
 
 #[cfg(test)]
@@ -261,6 +267,18 @@ mod tests {
     fn ui_model_cannot_stop_when_idle() {
         let vm = UiViewModel::default();
         assert!(!vm.can_stop());
+    }
+
+    #[test]
+    fn ui_model_can_reset_camera_only_for_a_ready_avatar() {
+        let mut vm = UiViewModel::default();
+        assert!(!vm.can_reset_camera());
+
+        vm.avatar.is_ready = true;
+        assert!(!vm.can_reset_camera());
+
+        vm.avatar.lifecycle = AvatarLifecycleState::Ready;
+        assert!(vm.can_reset_camera());
     }
 
     #[test]

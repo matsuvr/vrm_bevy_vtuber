@@ -61,6 +61,7 @@ pub use framing::camera_control::{
     CameraControlPose, CameraDistanceLimits, CameraPointerInputGate, FIXED_VERTICAL_FOV,
 };
 pub use framing::camera_input::{CameraInputSet, CameraPointerGesture, normalized_vertical_scroll};
+pub use framing::camera_reset::ResetCameraRequest;
 pub use lifecycle::*;
 pub use load::{
     AssetPathError, AvatarAssetId, ExpectedVrmGeneration, ImportedAvatar, LoadImportedAvatarError,
