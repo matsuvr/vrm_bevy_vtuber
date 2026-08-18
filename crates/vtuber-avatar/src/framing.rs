@@ -2,6 +2,7 @@
 
 pub mod camera_control;
 pub mod camera_input;
+pub mod camera_reset;
 pub(crate) mod fixed_fov_fit;
 pub(crate) mod head_subtree_bounds;
 

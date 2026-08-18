@@ -102,6 +102,19 @@ pub fn render_live_screen(
     ));
     ui.separator();
 
+    // Main viewport camera controls. The renderer emits an intent only; the
+    // avatar domain owns the camera transform, target, and FOV state.
+    ui.heading("Camera");
+    if vm.can_reset_camera() {
+        if ui.button("Reset Camera").clicked() {
+            ui_state.emit(UiAction::ResetAvatarCamera);
+        }
+    } else {
+        ui.add_enabled(false, bevy_egui::egui::Button::new("Reset Camera"));
+    }
+    ui.label("Left drag: Orbit · Right drag: Pan · Wheel: Dolly");
+    ui.separator();
+
     // Calibration section.
     ui.heading("Calibration");
     if vm.calibration.is_calibrating {

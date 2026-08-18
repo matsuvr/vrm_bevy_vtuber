@@ -604,6 +604,8 @@ pub fn process_ui_actions_system(
     mut arm_pose_overrides: Option<ResMut<ArmPoseOverrideStore>>,
     arm_pose_settings: Option<Res<ArmPoseSettings>>,
     mut arm_pose_changes: Option<MessageWriter<ArmPoseProfileChange>>,
+    lifecycle: Option<Res<vtuber_avatar::AvatarLifecycle>>,
+    mut reset_camera_requests: Option<MessageWriter<vtuber_avatar::ResetCameraRequest>>,
 ) {
     let actions = ui_state.take_actions();
     for action in &actions {
@@ -628,6 +630,16 @@ pub fn process_ui_actions_system(
                     arm_pose_settings.as_deref(),
                     &mut arm_pose_changes,
                 );
+            }
+            UiAction::ResetAvatarCamera => {
+                if let (Some(lifecycle), Some(requests)) =
+                    (lifecycle.as_deref(), reset_camera_requests.as_mut())
+                    && lifecycle.state() == vtuber_avatar::AvatarLifecycleState::Ready
+                {
+                    requests.write(vtuber_avatar::ResetCameraRequest {
+                        generation: lifecycle.current_generation(),
+                    });
+                }
             }
             _ => orchestrator.process_action(action),
         }
@@ -877,6 +889,42 @@ mod tests {
         assert!(!view_model.preview_visible);
         assert!(!view_model.mirror_preview);
         assert!(!view_model.mirror_avatar_motion);
+    }
+
+    #[test]
+    fn reset_camera_action_bridges_the_ready_generation_once() {
+        let mut app = App::new();
+        app.init_resource::<Orchestrator>()
+            .init_resource::<UiState>()
+            .init_resource::<UiViewModel>()
+            .init_resource::<PreviewState>()
+            .init_resource::<AvatarMotionMirror>()
+            .init_resource::<vtuber_avatar::AvatarLifecycle>()
+            .add_message::<vtuber_avatar::ResetCameraRequest>()
+            .add_systems(Update, process_ui_actions_system);
+
+        let root = app.world_mut().spawn_empty().id();
+        let generation = {
+            let mut lifecycle = app
+                .world_mut()
+                .resource_mut::<vtuber_avatar::AvatarLifecycle>();
+            lifecycle.request_load(root).expect("test load is valid");
+            lifecycle.start_binding(root);
+            lifecycle.finish_ready();
+            lifecycle.current_generation()
+        };
+        app.world_mut()
+            .resource_mut::<UiState>()
+            .emit(UiAction::ResetAvatarCamera);
+        app.update();
+
+        let messages = app
+            .world()
+            .resource::<Messages<vtuber_avatar::ResetCameraRequest>>();
+        let mut cursor = messages.get_cursor();
+        let requests = cursor.read(messages).collect::<Vec<_>>();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].generation, generation);
     }
 
     #[test]

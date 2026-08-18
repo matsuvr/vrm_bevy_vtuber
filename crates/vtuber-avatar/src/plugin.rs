@@ -20,6 +20,7 @@ use crate::framing::camera_control::CameraPointerInputGate;
 use crate::framing::camera_input::{
     CameraInputSet, CameraPointerGesture, apply_camera_pointer_input,
 };
+use crate::framing::camera_reset::{CameraResetSet, ResetCameraRequest, reset_avatar_camera};
 use crate::framing::fixed_fov_fit::FIXED_VERTICAL_FOV;
 use crate::framing::{AvatarViewportCamera, frame_avatar_camera};
 use crate::gaze::update_direct_look_at_input;
@@ -63,6 +64,7 @@ impl Plugin for VtuberAvatarPlugin {
             .add_message::<ReplaceAvatarResult>()
             .add_message::<LoadImportedAvatarRequest>()
             .add_message::<LoadImportedAvatarResult>()
+            .add_message::<ResetCameraRequest>()
             .add_systems(Startup, setup_scene)
             .add_systems(
                 Update,
@@ -82,10 +84,17 @@ impl Plugin for VtuberAvatarPlugin {
                 PostUpdate,
                 CameraInputSet.before(TransformSystems::Propagate),
             )
+            .configure_sets(
+                PostUpdate,
+                CameraResetSet
+                    .after(CameraInputSet)
+                    .before(TransformSystems::Propagate),
+            )
             .add_systems(
                 PostUpdate,
                 apply_camera_pointer_input.in_set(CameraInputSet),
             )
+            .add_systems(PostUpdate, reset_avatar_camera.in_set(CameraResetSet))
             .add_systems(
                 PostUpdate,
                 frame_avatar_camera.after(TransformSystems::Propagate),
