@@ -674,7 +674,7 @@ fn run_ndi_worker(
         .clock_video(true)
         .clock_audio(false)
         .build();
-    let mut sender = match Sender::new(&ndi, &options) {
+    let sender = match Sender::new(&ndi, &options) {
         Ok(sender) => sender,
         Err(_error) => {
             let mapped = NdiOutputError::new(
