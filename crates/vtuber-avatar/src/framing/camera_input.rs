@@ -124,12 +124,12 @@ pub(crate) fn apply_camera_pointer_input(
         } if captured == generation => {
             let sensitivity = camera_control.config().orbit_radians_per_pixel;
             if sensitivity.is_finite() && sensitivity > 0.0 && mouse_motion.delta.is_finite() {
-                // Positive screen Y is downward, so dragging upward raises the
-                // orbit camera and produces a positive pitch delta.
+                // Positive screen Y is downward, so dragging downward raises
+                // the orbit camera and produces a positive pitch delta.
                 if let Ok(candidate) = geometry::orbit(
                     next,
                     mouse_motion.delta.x * sensitivity,
-                    -mouse_motion.delta.y * sensitivity,
+                    mouse_motion.delta.y * sensitivity,
                 ) {
                     next = candidate;
                 }
@@ -196,6 +196,8 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, apply_camera_pointer_input);
 
+        let camera_transform = Transform::from_translation(Vec3::new(0.0, 1.0, 5.0))
+            .looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y);
         let camera = app
             .world_mut()
             .spawn((
@@ -207,9 +209,12 @@ mod tests {
                     }),
                     ..default()
                 },
-                super::super::AvatarViewportCamera,
-                Transform::from_translation(Vec3::new(0.0, 1.0, 5.0))
-                    .looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+                Projection::Perspective(PerspectiveProjection {
+                    fov: FIXED_VERTICAL_FOV,
+                    ..default()
+                }),
+                super::super::AvatarViewportCamera::from_default_transform(camera_transform),
+                camera_transform,
             ))
             .id();
         let root = app.world_mut().spawn_empty().id();
@@ -250,6 +255,19 @@ mod tests {
             .clear();
     }
 
+    fn pose_after_orbit_drag(delta: Vec2) -> CameraControlPose {
+        let (mut app, _, generation) = ready_app();
+        press(&mut app, MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<AccumulatedMouseMotion>()
+            .delta = delta;
+        app.update();
+        app.world()
+            .resource::<AvatarCameraControl>()
+            .current_for(generation)
+            .expect("orbit drag updates the current pose")
+    }
+
     #[test]
     fn line_and_pixel_scroll_normalize_to_the_same_physical_intent() {
         let line = normalized_vertical_scroll(Vec2::new(3.0, 2.0), MouseScrollUnit::Line)
@@ -288,6 +306,32 @@ mod tests {
             *app.world().resource::<CameraPointerGesture>(),
             CameraPointerGesture::None
         );
+    }
+
+    #[test]
+    fn orbit_mouse_deltas_follow_standard_grab_direction_and_preserve_fov() {
+        let canonical = CameraControlPose::new(
+            Transform::from_translation(Vec3::new(0.0, 1.0, 5.0))
+                .looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .expect("canonical pose is valid");
+        let right = pose_after_orbit_drag(Vec2::new(20.0, 0.0));
+        let left = pose_after_orbit_drag(Vec2::new(-20.0, 0.0));
+        let down = pose_after_orbit_drag(Vec2::new(0.0, 20.0));
+        let up = pose_after_orbit_drag(Vec2::new(0.0, -20.0));
+
+        assert!(right.transform().translation.x < 0.0);
+        assert!(left.transform().translation.x > 0.0);
+        assert!(down.transform().translation.y > canonical.transform().translation.y);
+        assert!(up.transform().translation.y < canonical.transform().translation.y);
+
+        for pose in [right, left, down, up] {
+            assert_eq!(pose.target(), canonical.target());
+            assert!((pose.distance() - canonical.distance()).abs() < 1e-5);
+            assert_eq!(pose.transform().scale, canonical.transform().scale);
+        }
+        assert!((FIXED_VERTICAL_FOV - 12.0_f32.to_radians()).abs() < f32::EPSILON);
     }
 
     #[test]
