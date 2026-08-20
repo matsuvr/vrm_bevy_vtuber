@@ -591,6 +591,7 @@ fn full_lifecycle_control_frame_generation_boundary() {
             head: vtuber_core::types::HeadPose::default(),
             gaze: vtuber_core::GazeSignal::UNAVAILABLE,
             expressions: vtuber_core::types::ExpressionCoefficients::default(),
+            detailed_face: None,
         }),
     };
     let result = apply_active_control_frame(

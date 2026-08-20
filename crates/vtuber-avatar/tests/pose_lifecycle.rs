@@ -25,6 +25,7 @@ fn control_frame(state: TrackingState) -> AvatarControlFrame {
         },
         gaze: vtuber_core::GazeSignal::UNAVAILABLE,
         expressions: ExpressionCoefficients::default(),
+        detailed_face: None,
     }
 }
 

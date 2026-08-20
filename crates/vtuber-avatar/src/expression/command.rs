@@ -7,8 +7,9 @@
 use std::collections::HashMap;
 
 use vtuber_core::types::AvatarControlFrame;
+use vtuber_core::{Arkit52Coefficients, ArkitBlendshape};
 
-use crate::capabilities::AvatarCapabilities;
+use crate::capabilities::{AvatarCapabilities, PerfectSyncCapabilities};
 
 /// A single expression command: name → weight.
 #[derive(Clone, Debug, PartialEq)]
@@ -162,6 +163,30 @@ pub fn build_frame_commands(
     builder.build(all_weights)
 }
 
+/// Builds detailed Perfect Sync commands for effective channels only.
+///
+/// The resolver is supplied by the avatar adapter so VRM-specific expression
+/// map lookup remains outside the engine-neutral ARKit52 contract. It must
+/// return the exact custom-expression name to send for a known channel.
+#[must_use]
+pub fn build_detailed_face_commands(
+    coefficients: &Arkit52Coefficients,
+    capabilities: &PerfectSyncCapabilities,
+    mut resolve_name: impl FnMut(ArkitBlendshape) -> Option<String>,
+) -> Vec<ExpressionCommand> {
+    let mut builder = ExpressionCommandBuilder::new();
+    let mut named = Vec::new();
+    for channel in ArkitBlendshape::ALL {
+        if !capabilities.is_effective(channel) {
+            continue;
+        }
+        if let Some(name) = resolve_name(channel) {
+            named.push((name, coefficients.get(channel)));
+        }
+    }
+    builder.build(named.iter().map(|(name, weight)| (name.as_str(), *weight)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +299,28 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "blink");
         assert_eq!(result[0].weight, 0.5);
+    }
+
+    #[test]
+    fn detailed_face_commands_use_only_effective_channels() {
+        let coefficients = Arkit52Coefficients::try_from_array({
+            let mut values = [0.0; vtuber_core::ARKIT52_CHANNEL_COUNT];
+            values[vtuber_core::ArkitBlendshape::TongueOut.index()] = 0.75;
+            values[vtuber_core::ArkitBlendshape::JawOpen.index()] = 0.4;
+            values
+        })
+        .unwrap();
+        let capabilities =
+            PerfectSyncCapabilities::from_named_statuses([("TongueOut", true), ("JawOpen", false)]);
+        let commands = build_detailed_face_commands(&coefficients, &capabilities, |channel| {
+            Some(channel.canonical_name().to_owned())
+        });
+        assert_eq!(
+            commands,
+            [ExpressionCommand {
+                name: "TongueOut".to_owned(),
+                weight: 0.75,
+            }]
+        );
     }
 }

@@ -235,6 +235,7 @@ mod tests {
             },
             gaze: vtuber_core::GazeSignal::UNAVAILABLE,
             expressions: ExpressionCoefficients::default(),
+            detailed_face: None,
         }
     }
 

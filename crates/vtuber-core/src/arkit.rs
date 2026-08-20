@@ -242,6 +242,12 @@ impl ArkitBlendshape {
         }
     }
 
+    /// Returns the explicitly supported lower-camel ecosystem alias.
+    #[must_use]
+    pub const fn lower_camel_alias(self) -> &'static str {
+        mediapipe_alias(self)
+    }
+
     /// Resolves the canonical name and the explicitly supported ecosystem aliases.
     ///
     /// Matching is intentionally exact.  In particular, arbitrary
@@ -249,17 +255,17 @@ impl ArkitBlendshape {
     /// accepted as ARKit semantics.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|&channel| {
-            channel.canonical_name() == name || mediapipe_alias(channel) == Some(name)
-        })
+        Self::ALL
+            .into_iter()
+            .find(|&channel| channel.canonical_name() == name || mediapipe_alias(channel) == name)
     }
 }
 
-fn mediapipe_alias(channel: ArkitBlendshape) -> Option<&'static str> {
+const fn mediapipe_alias(channel: ArkitBlendshape) -> &'static str {
     // All canonical names are ASCII and begin with one uppercase letter.
     // Keep the alias table explicit in source rather than accepting arbitrary
     // case variants.
-    Some(match channel {
+    match channel {
         ArkitBlendshape::BrowDownLeft => "browDownLeft",
         ArkitBlendshape::BrowDownRight => "browDownRight",
         ArkitBlendshape::BrowInnerUp => "browInnerUp",
@@ -312,7 +318,7 @@ fn mediapipe_alias(channel: ArkitBlendshape) -> Option<&'static str> {
         ArkitBlendshape::NoseSneerLeft => "noseSneerLeft",
         ArkitBlendshape::NoseSneerRight => "noseSneerRight",
         ArkitBlendshape::TongueOut => "tongueOut",
-    })
+    }
 }
 
 /// A validated fixed-size ARKit52 coefficient vector.

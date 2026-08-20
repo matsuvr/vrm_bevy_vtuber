@@ -349,6 +349,19 @@ impl PerfectSyncCapabilities {
     pub const fn tongue_out_available(&self) -> bool {
         self.is_effective(ArkitBlendshape::TongueOut)
     }
+
+    /// Returns whether at least one Perfect Sync eye-look channel is usable.
+    #[must_use]
+    pub const fn eye_look_available(&self) -> bool {
+        self.is_effective(ArkitBlendshape::EyeLookDownLeft)
+            || self.is_effective(ArkitBlendshape::EyeLookDownRight)
+            || self.is_effective(ArkitBlendshape::EyeLookInLeft)
+            || self.is_effective(ArkitBlendshape::EyeLookInRight)
+            || self.is_effective(ArkitBlendshape::EyeLookOutLeft)
+            || self.is_effective(ArkitBlendshape::EyeLookOutRight)
+            || self.is_effective(ArkitBlendshape::EyeLookUpLeft)
+            || self.is_effective(ArkitBlendshape::EyeLookUpRight)
+    }
 }
 
 /// Public, engine-neutral snapshot of avatar capabilities for UI consumption.

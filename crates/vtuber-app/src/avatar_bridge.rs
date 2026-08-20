@@ -111,6 +111,7 @@ mod tests {
                 head: vtuber_core::HeadPose::default(),
                 gaze: vtuber_core::GazeSignal::UNAVAILABLE,
                 expressions: vtuber_core::ExpressionCoefficients::default(),
+                detailed_face: None,
             });
 
         app.update();
@@ -150,6 +151,7 @@ mod tests {
             },
             gaze: vtuber_core::GazeSignal::UNAVAILABLE,
             expressions: vtuber_core::ExpressionCoefficients::default(),
+            detailed_face: None,
         };
         {
             let mut tracking = app.world_mut().resource_mut::<TrackingRuntime>();

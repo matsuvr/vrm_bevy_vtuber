@@ -28,6 +28,7 @@ fn dummy_frame() -> AvatarControlFrame {
         head: HeadPose::default(),
         gaze: vtuber_core::GazeSignal::UNAVAILABLE,
         expressions: ExpressionCoefficients::default(),
+        detailed_face: None,
     }
 }
 

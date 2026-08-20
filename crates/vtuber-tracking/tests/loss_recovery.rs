@@ -12,6 +12,7 @@ use vtuber_core::types::{
     AvatarControlFrame, ExpressionCoefficients, FrameSeq, GazeSignal, HeadPose, MonoTimeNs,
     TrackingState,
 };
+use vtuber_core::{ARKIT52_CHANNEL_COUNT, Arkit52Coefficients, ArkitBlendshape};
 use vtuber_tracking::loss_recovery::{
     LossRecovery, LossRecoveryConfigError, LossRecoveryParams, MAX_DECAY_DURATION,
     MAX_HOLD_DURATION, MAX_RECOVERY_DURATION, MIN_DECAY_DURATION, MIN_HOLD_DURATION,
@@ -44,11 +45,20 @@ fn frame(seq: u64, yaw: f32, pitch: f32, roll: f32, expression_value: f32) -> Av
             aa: expression_value,
             ..ExpressionCoefficients::default()
         },
+        detailed_face: None,
     }
 }
 
 fn rotation_angle_from_identity(pose: HeadPose) -> f32 {
     semantic_pose_to_quaternion(pose).angle()
+}
+
+fn detailed_frame(seq: u64, coefficient: f32) -> AvatarControlFrame {
+    let mut values = [0.0; ARKIT52_CHANNEL_COUNT];
+    values[ArkitBlendshape::TongueOut.index()] = coefficient;
+    let mut frame = frame(seq, 0.2, -0.1, 0.05, 0.4);
+    frame.detailed_face = Some(Arkit52Coefficients::try_from_array(values).unwrap());
+    frame
 }
 
 #[test]
@@ -222,6 +232,41 @@ fn loss_recovery_reacquire_limits_jump() {
         epsilon = 1e-4
     );
     assert!(!recovery.is_recovering());
+}
+
+#[test]
+fn loss_recovery_drops_detailed_face_when_returning_to_neutral() {
+    let mut recovery = LossRecovery::new(test_params()).unwrap();
+    let tracked = detailed_frame(11, 0.8);
+
+    let _ = recovery.update(
+        TrackingState::Tracking,
+        Duration::from_millis(16),
+        Some(tracked),
+        MonoTimeNs(16_000_000),
+    );
+    let held = recovery
+        .update(
+            TrackingState::LostHold,
+            Duration::from_millis(50),
+            None,
+            MonoTimeNs(66_000_000),
+        )
+        .expect("hold should preserve the last detailed face state");
+    assert!(held.detailed_face.is_some());
+
+    let neutral = recovery
+        .update(
+            TrackingState::ReturningNeutral,
+            Duration::from_millis(200),
+            None,
+            MonoTimeNs(266_000_000),
+        )
+        .expect("neutral transition should emit a frame");
+    assert!(
+        neutral.detailed_face.is_none(),
+        "tracking loss must not retain stale ARKit52 coefficients"
+    );
 }
 
 #[test]

@@ -10,11 +10,13 @@ use bevy::prelude::*;
 use bevy_vrm1::prelude::{
     ExpressionEntityMap, LookAtExpressionWeights, ModifyExpressions, VrmExpression,
 };
+use vtuber_core::ArkitBlendshape;
 
 use crate::capabilities::SelectedGazeBackend;
 use crate::expression::blink::{RawBlinkInput, map_blink_with_fallback};
-use crate::expression::command::ExpressionCommand;
-use crate::expression::command::build_frame_commands;
+use crate::expression::command::{
+    ExpressionCommand, build_detailed_face_commands, build_frame_commands,
+};
 use crate::expression::mouth::{RawMouthInput, map_mouth_with_fallback};
 use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
 use crate::mirror::AvatarMotionMirror;
@@ -192,23 +194,41 @@ pub fn apply_tracked_expressions(
         return;
     };
 
-    let blink = map_blink_with_fallback(
-        &blink_input(frame, mirror.is_none_or(|mirror| mirror.is_enabled())),
-        capabilities.blink,
-    );
-    let mouth = map_mouth_with_fallback(
-        &RawMouthInput {
-            openness: frame.expressions.aa,
-            aa: frame.expressions.aa,
-            ih: frame.expressions.ih,
-            ou: frame.expressions.ou,
-            ee: frame.expressions.ee,
-            oh: frame.expressions.oh,
-        },
-        capabilities.mouth,
-    );
     let gaze = look_at_expression_commands(capabilities.gaze_backend, look_at_weights.copied());
-    let built = build_frame_commands(frame, capabilities, &blink, &mouth, &gaze);
+    let detailed = frame.detailed_face.as_ref().and_then(|coefficients| {
+        let commands =
+            build_detailed_face_commands(coefficients, &capabilities.perfect_sync, |channel| {
+                resolve_detailed_expression_name(expression_map, channel)
+            });
+        (!commands.is_empty()).then_some(commands)
+    });
+    let built = if let Some(mut detailed) = detailed {
+        // Perfect Sync eye-look is authoritative when effective. If the
+        // avatar lacks eye-look channels, retain the existing VRM LookAt
+        // expression backend as the explicit fallback for this frame.
+        if !capabilities.perfect_sync.eye_look_available() {
+            let fallback_gaze = build_frame_commands(frame, capabilities, &[], &[], &gaze);
+            detailed.extend(fallback_gaze);
+        }
+        detailed
+    } else {
+        let blink = map_blink_with_fallback(
+            &blink_input(frame, mirror.is_none_or(|mirror| mirror.is_enabled())),
+            capabilities.blink,
+        );
+        let mouth = map_mouth_with_fallback(
+            &RawMouthInput {
+                openness: frame.expressions.aa,
+                aa: frame.expressions.aa,
+                ih: frame.expressions.ih,
+                ou: frame.expressions.ou,
+                ee: frame.expressions.ee,
+                oh: frame.expressions.oh,
+            },
+            capabilities.mouth,
+        );
+        build_frame_commands(frame, capabilities, &blink, &mouth, &gaze)
+    };
     let available = built.into_iter().filter(|command| {
         expression_map
             .0
@@ -225,6 +245,16 @@ pub fn apply_tracked_expressions(
             .into_iter()
             .map(|command| (VrmExpression::from(command.name.as_str()), command.weight)),
     ));
+}
+
+fn resolve_detailed_expression_name(
+    expression_map: &ExpressionEntityMap,
+    channel: ArkitBlendshape,
+) -> Option<String> {
+    [channel.canonical_name(), channel.lower_camel_alias()]
+        .into_iter()
+        .find(|name| expression_map.0.contains_key(&VrmExpression::from(*name)))
+        .map(str::to_owned)
 }
 
 fn blink_input(frame: &vtuber_core::AvatarControlFrame, mirrored: bool) -> RawBlinkInput {
@@ -288,6 +318,7 @@ mod tests {
                 blink_right: 0.8,
                 ..Default::default()
             },
+            detailed_face: None,
         };
 
         assert_eq!(
