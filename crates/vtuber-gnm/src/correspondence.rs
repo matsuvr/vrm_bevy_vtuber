@@ -455,7 +455,7 @@ pub fn fit_weak_perspective(
                     index: row.gnm_sparse_index,
                 },
             )?;
-            let predicted = project(*vertex, model);
+            let predicted = project_weak_perspective(*vertex, model);
             let residual = [
                 observation.normalized_xy[map_index][0] - predicted[0],
                 observation.normalized_xy[map_index][1] - predicted[1],
@@ -495,7 +495,7 @@ pub fn fit_weak_perspective(
                 index: row.gnm_sparse_index,
             },
         )?;
-        let predicted = project(*vertex, model);
+        let predicted = project_weak_perspective(*vertex, model);
         let dx = predicted[0] - observation.normalized_xy[map_index][0];
         let dy = predicted[1] - observation.normalized_xy[map_index][1];
         weighted_error += weight as f64 * (dx as f64 * dx as f64 + dy as f64 * dy as f64);
@@ -522,7 +522,13 @@ fn model_is_finite(model: GnmProjectionModel) -> bool {
     .all(|value| value.is_finite())
 }
 
-fn project(vertex: [f32; 3], model: GnmProjectionModel) -> [f32; 2] {
+/// Projects one GNM point with the fitted weak-perspective model.
+///
+/// This is public so later GNM fitting layers can build a linearized sparse
+/// objective without duplicating the coordinate, handedness, or image-Y
+/// convention owned by this module.
+#[must_use]
+pub fn project_weak_perspective(vertex: [f32; 3], model: GnmProjectionModel) -> [f32; 2] {
     let rotated = matrix_vector(rotation_matrix(model), vertex);
     [
         model.scale * rotated[0] + model.translation[0],
@@ -538,7 +544,8 @@ fn numerical_jacobian(vertex: [f32; 3], model: GnmProjectionModel, component: us
         let mut minus = model;
         set_parameter(&mut plus, parameter, step);
         set_parameter(&mut minus, parameter, -step);
-        *result_value = ((project(vertex, plus)[component] - project(vertex, minus)[component])
+        *result_value = ((project_weak_perspective(vertex, plus)[component]
+            - project_weak_perspective(vertex, minus)[component])
             / (2.0 * step)) as f64;
     }
     result
@@ -677,7 +684,7 @@ mod tests {
         };
         let points = DEFAULT_MEDIAPIPE_TO_GNM_MAP
             .iter()
-            .map(|row| project(vertices.values()[row.gnm_sparse_index], truth))
+            .map(|row| project_weak_perspective(vertices.values()[row.gnm_sparse_index], truth))
             .collect();
         let observation = GnmSparseObservation::new(points, vec![1.0; 68]).unwrap();
         let fit =
