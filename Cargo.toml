@@ -3,6 +3,7 @@ members = [
   "crates/vtuber-core",
   "crates/vtuber-camera",
   "crates/vtuber-inference",
+  "crates/vtuber-gnm",
   "crates/vtuber-tracking",
   "crates/vtuber-avatar",
   "crates/vtuber-ndi",
