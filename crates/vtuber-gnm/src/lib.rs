@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 mod correspondence;
+mod decoder;
 mod error;
 mod fitting;
 mod landmarks;
@@ -19,6 +20,13 @@ pub use correspondence::{
     GnmSparseObservation, MEDIAPIPE_LANDMARK_COUNT, MediaPipeToGnmSparseMap,
     SPARSE_FACE_LANDMARK_COUNT, SparseFaceLandmarkSemantic, fit_weak_perspective,
     project_weak_perspective, validate_map,
+};
+pub use decoder::{
+    ARKIT52_TEACHER_CHANNEL_COUNT, DEFAULT_DECODER_MAX_CONDITION_NUMBER,
+    DEFAULT_DECODER_REGULARIZATION, DEFAULT_MAX_TRAINING_RESIDUAL, DEFAULT_MIN_CHANNEL_VARIANCE,
+    DEFAULT_MIN_DECODER_SAMPLES, DEFAULT_MIN_TRAINING_CONFIDENCE, GnmDecoderConfig,
+    GnmDecoderDiagnostics, GnmDecoderError, GnmDecoderTrainer, GnmDecoderTrainingResult,
+    GnmDecoderTrainingSample, GnmToArkit52Decoder,
 };
 pub use error::GnmModelError;
 pub use fitting::{
