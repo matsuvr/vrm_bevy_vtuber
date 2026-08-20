@@ -6811,6 +6811,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vtuber-gnm"
+version = "0.1.0"
+dependencies = [
+ "zip",
+]
+
+[[package]]
 name = "vtuber-inference"
 version = "0.1.0"
 dependencies = [

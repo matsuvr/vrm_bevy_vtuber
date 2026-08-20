@@ -28,3 +28,12 @@ The Rust sender boundary uses
 [grafton-ndi v1.0.0](https://github.com/GrantSparks/grafton-ndi), licensed
 under Apache-2.0. Its source and license are obtained through Cargo; the NDI
 SDK runtime remains a separately governed distribution component.
+
+## Google Neural Mesh (GNM) sparse landmark data
+
+`crates/vtuber-gnm/assets/head_sparse_68.txt` is copied from the Google GNM
+repository at revision
+`970092e4b25be85adb1278ba015598342d43ef64` and is distributed under the
+upstream Apache-2.0 license. The GNM model NPZ is not included in this source
+tree; its release manifest must record the exact upstream asset hash and
+redistribution terms before packaging.
