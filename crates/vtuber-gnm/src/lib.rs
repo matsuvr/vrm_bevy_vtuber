@@ -7,11 +7,17 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod correspondence;
 mod error;
 mod landmarks;
 mod model;
 mod npz;
 
+pub use correspondence::{
+    DEFAULT_MEDIAPIPE_TO_GNM_MAP, GnmFitError, GnmProjectionFit, GnmProjectionModel,
+    GnmSparseObservation, MEDIAPIPE_LANDMARK_COUNT, MediaPipeToGnmSparseMap,
+    SPARSE_FACE_LANDMARK_COUNT, SparseFaceLandmarkSemantic, fit_weak_perspective, validate_map,
+};
 pub use error::GnmModelError;
 pub use landmarks::{SparseLandmark, SparseLandmarkSet, head_sparse_68};
 pub use model::{

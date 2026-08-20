@@ -692,6 +692,11 @@ impl GnmSparseVertices {
     pub fn values(&self) -> &[[f32; 3]] {
         &self.values
     }
+
+    /// Returns mutable evaluated points for a caller-owned reusable buffer.
+    pub fn values_mut(&mut self) -> &mut [[f32; 3]] {
+        &mut self.values
+    }
 }
 
 fn add(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
