@@ -20,6 +20,7 @@
 | ADR-017 | Accepted for Issue #50 / #56 | Perfect Sync 52 の VRM custom expression 適用境界 |
 | ADR-015 | Accepted for Issue #50 child #52 | Rust GNM Head v3 model boundary and sparse evaluator |
 | ADR-016 | Accepted for Issue #50 child #53 | MediaPipe-to-GNM sparse projection contract |
+| ADR-017 | Accepted for Issue #50 / #56 | Perfect Sync 52 の VRM custom expression 適用境界 |
 | ADR-018 | Accepted for Issue #50 / #54 | GNM neutral identity と bounded expression fitting |
 | ADR-019 | Accepted for Issue #50 / #55 | GNM expression から ARKit52 への regularized decoder |
 

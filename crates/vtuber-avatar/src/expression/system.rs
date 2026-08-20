@@ -194,21 +194,6 @@ pub fn apply_tracked_expressions(
         return;
     };
 
-    let blink = map_blink_with_fallback(
-        &blink_input(frame, mirror.is_none_or(|mirror| mirror.is_enabled())),
-        capabilities.blink,
-    );
-    let mouth = map_mouth_with_fallback(
-        &RawMouthInput {
-            openness: frame.expressions.aa,
-            aa: frame.expressions.aa,
-            ih: frame.expressions.ih,
-            ou: frame.expressions.ou,
-            ee: frame.expressions.ee,
-            oh: frame.expressions.oh,
-        },
-        capabilities.mouth,
-    );
     let gaze = look_at_expression_commands(capabilities.gaze_backend, look_at_weights.copied());
     let built = build_face_commands(
         frame.detailed_face.as_ref(),
