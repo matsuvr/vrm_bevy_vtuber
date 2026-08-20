@@ -19,5 +19,6 @@
 | ADR-014 | Accepted for Issue #51 | ARKit52 contract and effective Perfect Sync capability inspection |
 | ADR-017 | Accepted for Issue #50 / #56 | Perfect Sync 52 の VRM custom expression 適用境界 |
 | ADR-015 | Accepted for Issue #50 child #52 | Rust GNM Head v3 model boundary and sparse evaluator |
+| ADR-016 | Accepted for Issue #50 child #53 | MediaPipe-to-GNM sparse projection contract |
 
 番号は再利用しない。採用済み判断を変更するときは元ADRを削除せず、Statusを`Superseded`へ変更し、新しいADRから参照する。
