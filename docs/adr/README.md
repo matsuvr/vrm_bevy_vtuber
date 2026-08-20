@@ -18,5 +18,6 @@
 | ADR-013 | Accepted for Issue #49; release gate pending | Guarded application-local NDI runtime staging |
 | ADR-015 | Accepted for Issue #50 child #52 | Rust GNM Head v3 model boundary and sparse evaluator |
 | ADR-016 | Accepted for Issue #50 child #53 | MediaPipe-to-GNM sparse projection contract |
+| ADR-018 | Accepted for Issue #50 / #54 | GNM neutral identity と bounded expression fitting |
 
 番号は再利用しない。採用済み判断を変更するときは元ADRを削除せず、Statusを`Superseded`へ変更し、新しいADRから参照する。

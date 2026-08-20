@@ -9,6 +9,7 @@
 
 mod correspondence;
 mod error;
+mod fitting;
 mod landmarks;
 mod model;
 mod npz;
@@ -16,9 +17,18 @@ mod npz;
 pub use correspondence::{
     DEFAULT_MEDIAPIPE_TO_GNM_MAP, GnmFitError, GnmProjectionFit, GnmProjectionModel,
     GnmSparseObservation, MEDIAPIPE_LANDMARK_COUNT, MediaPipeToGnmSparseMap,
-    SPARSE_FACE_LANDMARK_COUNT, SparseFaceLandmarkSemantic, fit_weak_perspective, validate_map,
+    SPARSE_FACE_LANDMARK_COUNT, SparseFaceLandmarkSemantic, fit_weak_perspective,
+    project_weak_perspective, validate_map,
 };
 pub use error::GnmModelError;
+pub use fitting::{
+    DEFAULT_ACTIVE_EXPRESSION_DIMENSION, DEFAULT_ACTIVE_IDENTITY_DIMENSION,
+    DEFAULT_EXPRESSION_REGULARIZATION, DEFAULT_IDENTITY_COEFFICIENT_BOUND,
+    DEFAULT_IDENTITY_REGULARIZATION, DEFAULT_MAX_CONDITION_NUMBER, DEFAULT_MAX_ITERATIONS,
+    DEFAULT_MIN_CALIBRATION_SAMPLES, DEFAULT_RESIDUAL_THRESHOLD, DEFAULT_TEMPORAL_REGULARIZATION,
+    GnmFaceFitter, GnmFaceState, GnmFaceStatus, GnmFitterConfig, GnmFitterError, GnmFittingSample,
+    GnmIdentityCalibration,
+};
 pub use landmarks::{SparseLandmark, SparseLandmarkSet, head_sparse_68};
 pub use model::{
     DenseArray, GNM_HEAD_V3_EXPRESSION_DIM, GNM_HEAD_V3_IDENTITY_DIM, GnmExpressionState,
