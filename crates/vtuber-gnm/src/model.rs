@@ -736,6 +736,7 @@ impl GnmSparseVertices {
             self.joint_positions.capacity(),
             self.joint_transforms.capacity(),
         )
+    }
 
     /// Returns mutable evaluated points for a caller-owned reusable buffer.
     pub fn values_mut(&mut self) -> &mut [[f32; 3]] {
