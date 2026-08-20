@@ -99,6 +99,18 @@ pub(crate) struct ExpressionNode {
 #[derive(Component, Deref, Reflect)]
 pub struct ExpressionEntityMap(pub HashMap<VrmExpression, Entity>);
 
+/// Resolved morph-bind status for one expression entity.
+///
+/// A VRM expression preset can be present in metadata while resolving to no
+/// scene node. Avatar capability inspection uses this component to distinguish
+/// that present-but-no-op case from an effective expression.
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct ExpressionBindingStatus {
+    /// Number of morph binds that resolved to a scene node.
+    pub resolved_morph_bind_count: usize,
+}
+
 /// Override weight for a single expression entity.
 /// Inserted by [`SetExpressions`] or [`ModifyExpressions`], removed by [`ClearExpressions`].
 #[derive(Component, Reflect)]
@@ -362,6 +374,7 @@ impl Plugin for VrmExpressionPlugin {
             .register_type::<RetargetExpressionNodes>()
             .register_type::<VrmExpressionRegistry>()
             .register_type::<ExpressionEntityMap>()
+            .register_type::<ExpressionBindingStatus>()
             .register_type::<ExpressionOverride>()
             .register_type::<ExpressionOverrideSettings>()
             .register_type::<ExpressionCategoryTag>()
@@ -405,16 +418,17 @@ fn apply_initialize_expressions(
     };
     let mut entity_map = HashMap::default();
     for (expression, metadata) in registry.iter() {
+        let resolved_nodes = obtain_expression_nodes(vrm_entity, &searcher, &metadata.nodes);
+        let resolved_morph_bind_count = resolved_nodes.len();
         let mut entity_commands = commands.spawn((
             Name::new(expression.to_string()),
             RetargetSource,
             Transform::default(),
             AnimationPlayer::default(),
-            RetargetExpressionNodes(obtain_expression_nodes(
-                vrm_entity,
-                &searcher,
-                &metadata.nodes,
-            )),
+            RetargetExpressionNodes(resolved_nodes),
+            ExpressionBindingStatus {
+                resolved_morph_bind_count,
+            },
             ExpressionCategoryTag(metadata.category),
             metadata.override_settings.clone(),
         ));
@@ -629,11 +643,11 @@ mod tests {
     use crate::prelude::*;
     use crate::tests::{TestResult, test_app};
     use crate::vrm::expressions::{
-        BinaryExpression, BindExpressionNode, ClearExpressions, ExpressionCategory,
-        ExpressionCategoryTag, ExpressionEntityMap, ExpressionMetadata, ExpressionNode,
-        ExpressionOverride, ExpressionOverrideSettings, ExpressionOverrideType, ModifyExpressions,
-        RequestInitializeExpressions, RetargetExpressionNodes, SetExpressions, VrmExpressionPlugin,
-        VrmExpressionRegistry,
+        BinaryExpression, BindExpressionNode, ClearExpressions, ExpressionBindingStatus,
+        ExpressionCategory, ExpressionCategoryTag, ExpressionEntityMap, ExpressionMetadata,
+        ExpressionNode, ExpressionOverride, ExpressionOverrideSettings, ExpressionOverrideType,
+        ModifyExpressions, RequestInitializeExpressions, RetargetExpressionNodes,
+        SetExpressions, VrmExpressionPlugin, VrmExpressionRegistry,
     };
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
@@ -694,6 +708,70 @@ mod tests {
             .run_system_once(move |s: ChildSearcher| s.find_from_name(vrm_entity, "happy"))
             .expect("Failed to run system")
             .expect("Expression node not found");
+        Ok(())
+    }
+
+    #[test]
+    fn expression_binding_status_distinguishes_empty_and_resolved_binds() -> TestResult {
+        let mut app = test_app();
+        app.add_plugins(VrmExpressionPlugin);
+
+        let vrm_entity = app
+            .world_mut()
+            .spawn((VrmExpressionRegistry(
+                [
+                    (
+                        VrmExpression::from("effective"),
+                        simple_metadata("Test", 0),
+                    ),
+                    (
+                        VrmExpression::from("empty"),
+                        ExpressionMetadata {
+                            nodes: Vec::new(),
+                            ..simple_metadata("Test", 0)
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            ),))
+            .with_children(|c| {
+                c.spawn((Name::new("Test"), VrmNodeIndex(0)));
+            })
+            .id();
+
+        app.world_mut()
+            .commands()
+            .entity(vrm_entity)
+            .trigger(RequestInitializeExpressions);
+        app.update();
+
+        let map = app
+            .world()
+            .get::<ExpressionEntityMap>(vrm_entity)
+            .expect("expression map should be initialized");
+        let effective = *map
+            .0
+            .get(&VrmExpression::from("effective"))
+            .expect("effective expression should be present");
+        let empty = *map
+            .0
+            .get(&VrmExpression::from("empty"))
+            .expect("empty expression should be present");
+        assert_eq!(
+            app.world()
+                .get::<ExpressionBindingStatus>(effective)
+                .expect("status should be attached")
+                .resolved_morph_bind_count,
+            1
+        );
+        assert_eq!(
+            app.world()
+                .get::<ExpressionBindingStatus>(empty)
+                .expect("status should be attached")
+                .resolved_morph_bind_count,
+            0
+        );
         Ok(())
     }
 

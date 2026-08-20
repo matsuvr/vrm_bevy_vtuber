@@ -14,6 +14,8 @@ pub mod control;
 /// Fixed-size metrics collection for acceptance testing.
 pub mod metrics;
 
+/// Engine-neutral ARKit 52 blendshape contract.
+pub mod arkit;
 /// Canonical MediaPipe face-tracking contract.
 pub mod face_tracking;
 /// Raw observation contract between inference and tracking.
@@ -29,6 +31,7 @@ pub mod video_output;
 /// Deterministic worker supervision helpers.
 pub mod worker;
 
+pub use arkit::*;
 pub use control::{CalibrationError, CalibrationSettings};
 pub use face_tracking::*;
 pub use observation::RawExpressionObservation;

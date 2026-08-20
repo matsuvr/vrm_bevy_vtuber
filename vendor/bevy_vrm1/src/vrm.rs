@@ -45,8 +45,9 @@ pub mod prelude {
         },
         detach::RequestDetachVrm,
         expressions::{
-            BinaryExpression, ClearExpressions, ExpressionEntityMap, ExpressionOverride,
-            ExpressionOverrideSettings, ExpressionOverrideType, ModifyExpressions, SetExpressions,
+            BinaryExpression, ClearExpressions, ExpressionBindingStatus, ExpressionEntityMap,
+            ExpressionOverride, ExpressionOverrideSettings, ExpressionOverrideType,
+            ModifyExpressions, SetExpressions,
         },
         first_person::{
             FirstPersonCamera, FirstPersonLayers, FirstPersonRegistry, RequestDisableFirstPerson,

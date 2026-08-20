@@ -16,6 +16,7 @@
 | ADR-011 | Accepted | VRM 0.x/1.0 normalization into the existing `bevy_vrm1` runtime |
 | ADR-012 | Accepted | Optional NDI sender boundary and bounded latest-value transport |
 | ADR-013 | Accepted for Issue #49; release gate pending | Guarded application-local NDI runtime staging |
+| ADR-014 | Accepted for Issue #51 | ARKit52 contract and effective Perfect Sync capability inspection |
 | ADR-015 | Accepted for Issue #50 child #52 | Rust GNM Head v3 model boundary and sparse evaluator |
 | ADR-016 | Accepted for Issue #50 child #53 | MediaPipe-to-GNM sparse projection contract |
 | ADR-018 | Accepted for Issue #50 / #54 | GNM neutral identity と bounded expression fitting |
