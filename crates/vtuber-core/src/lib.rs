@@ -20,6 +20,8 @@ pub mod arkit;
 pub mod face_tracking;
 /// Raw observation contract between inference and tracking.
 pub mod observation;
+/// Experimental GNM/Direct face-retargeting mode and readiness contracts.
+pub mod retargeting;
 /// Latest-value slot for single-producer / single-consumer communication.
 pub mod slot;
 /// Worker stop token.
@@ -35,6 +37,7 @@ pub use arkit::*;
 pub use control::{CalibrationError, CalibrationSettings};
 pub use face_tracking::*;
 pub use observation::RawExpressionObservation;
+pub use retargeting::*;
 pub use slot::{LatestSlot, ReadResult};
 pub use stop::StopToken;
 pub use time::now as monotonic_now;
