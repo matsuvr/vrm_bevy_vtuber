@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod ab;
 mod correspondence;
 mod decoder;
 mod error;
@@ -15,6 +16,7 @@ mod landmarks;
 mod model;
 mod npz;
 
+pub use ab::{GnmAbError, GnmAbEvaluator, GnmAbReport, GnmAbSample};
 pub use correspondence::{
     DEFAULT_MEDIAPIPE_TO_GNM_MAP, GnmFitError, GnmProjectionFit, GnmProjectionModel,
     GnmSparseObservation, MEDIAPIPE_LANDMARK_COUNT, MediaPipeToGnmSparseMap,
