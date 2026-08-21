@@ -23,5 +23,6 @@
 | ADR-017 | Accepted for Issue #50 / #56 | Perfect Sync 52 の VRM custom expression 適用境界 |
 | ADR-018 | Accepted for Issue #50 / #54 | GNM neutral identity と bounded expression fitting |
 | ADR-019 | Accepted for Issue #50 / #55 | GNM expression から ARKit52 への regularized decoder |
+| ADR-020 | Accepted for Issue #50 / #57 | Direct MediaPipe と experimental GNM の frame-boundary 統合 |
 
 番号は再利用しない。採用済み判断を変更するときは元ADRを削除せず、Statusを`Superseded`へ変更し、新しいADRから参照する。
