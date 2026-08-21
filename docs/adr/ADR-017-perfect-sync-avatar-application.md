@@ -21,7 +21,7 @@ fuzzy matching、任意の大文字小文字変換、MediaPipe の `_neutral` �
 
 モデルの capability は `present` と `effective` を分離する。metadata に
 expression があっても resolved morph bind が 0 件なら送信対象にしない。
- 部分的な Perfect Sync は正常な状態として扱い、coarse writer を置き換えられる
+部分的な Perfect Sync は正常な状態として扱い、coarse writer を置き換えられる
 だけの coverage がある domain だけを detailed authority とする。
 
 `PerfectSyncFaceAuthority` は blink、jaw/lip の mouth/lower-face、eye-look を
