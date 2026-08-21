@@ -70,9 +70,11 @@ pub fn sync_avatar_diagnostics(
     mut diagnostics: ResMut<DiagnosticsSnapshot>,
     orchestrator: Option<ResMut<Orchestrator>>,
 ) {
-    if let Some(lifecycle) = lifecycle {
+    if let Some(lifecycle) = lifecycle.as_ref() {
         diagnostics.avatar_capabilities = lifecycle.capabilities().map(|caps| caps.summary());
-        if let Some(mut orchestrator) = orchestrator {
+    }
+    if let Some(mut orchestrator) = orchestrator {
+        if let Some(lifecycle) = lifecycle.as_ref() {
             if let Some(caps) = lifecycle.capabilities() {
                 orchestrator.set_perfect_sync_capability(
                     caps.perfect_sync.present_count(),
@@ -82,6 +84,7 @@ pub fn sync_avatar_diagnostics(
                 orchestrator.set_perfect_sync_capability(0, 0);
             }
         }
+        diagnostics.face_retargeting = Some(orchestrator.retargeting_status());
     }
     if let Some(metrics) = pose_metrics {
         diagnostics.avatar_frames_applied = metrics.frames_applied;

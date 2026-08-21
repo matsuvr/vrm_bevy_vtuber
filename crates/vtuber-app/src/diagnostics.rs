@@ -7,6 +7,7 @@ use bevy::diagnostic::{
     DiagnosticsStore, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
 };
 use bevy::prelude::*;
+use vtuber_core::FaceRetargetingStatus;
 
 /// Diagnostics snapshot resource.
 #[derive(Resource, Debug, Default, Clone)]
@@ -74,6 +75,8 @@ pub struct DiagnosticsSnapshot {
     pub camera_backend: Option<String>,
     /// Avatar capability summary.
     pub avatar_capabilities: Option<String>,
+    /// Requested/active face-retargeting status for export and diagnostics.
+    pub face_retargeting: Option<FaceRetargetingStatus>,
     /// Number of avatar pose frames successfully applied.
     pub avatar_frames_applied: u64,
     /// Number of avatar pose frames skipped because the lifecycle/binding was
