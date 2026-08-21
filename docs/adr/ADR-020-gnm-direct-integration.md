@@ -10,11 +10,11 @@ validated MediaPipe observation without allowing a partially prepared GNM
 model, stale detailed coefficients, or a missing Perfect Sync morph binding to
 change the default avatar behavior.
 
-The repository does not yet contain a redistributable GNM Head v3 model
-artifact. Therefore the application cannot claim runtime GNM readiness in this
-leaf. The GNM crate must still expose the complete numeric handoff so a later
-model-artifact task can supply the model and decoder without changing the UI or
-avatar authority contract.
+The repository now contains the provenance-tracked GNM Head v3 model artifact
+defined by ADR-021, so the crate can validate the real upstream archive. This
+does not make the application runtime GNM-ready in this leaf: startup model
+loading, calibration, decoder availability, and effective Perfect Sync binding
+remain separate readiness inputs.
 
 ## Decision
 
@@ -44,15 +44,17 @@ avatar authority contract.
 The Direct path remains safe and fully usable when GNM is unavailable,
 uncalibrated, learning, degraded, or in error. The UI can show the requested
 mode, active mode, readiness, fallback reason, and Perfect Sync present versus
-effective counts. A subsequent model-artifact/runtime task can publish
-readiness and feed the existing GNM handoff without introducing a second VRM
-runtime or a mixed per-channel authority.
+effective counts. The checked-in model artifact is now available to a
+subsequent runtime-loading task, which can publish readiness and feed the
+existing GNM handoff without introducing a second VRM runtime or a mixed
+per-channel authority.
 
 ## Verification
 
 - `cargo test -p vtuber-core --no-fail-fast`
 - `cargo test -p vtuber-app --no-fail-fast`
 - `cargo test -p vtuber-gnm --no-fail-fast`
+- `cargo test -p vtuber-gnm --test model_artifact -- --nocapture`
 - `cargo clippy -p vtuber-gnm --all-targets --all-features -- -D warnings`
 - `git diff --check`
 
