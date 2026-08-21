@@ -9,6 +9,9 @@ use std::path::PathBuf;
 use crate::import::VrmGeneration;
 use vtuber_avatar::ArmPoseProfile;
 
+/// Face-retargeting status shown by the UI.
+pub type FaceRetargetingViewModel = vtuber_core::FaceRetargetingStatus;
+
 /// Which screen the UI is currently showing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
@@ -214,6 +217,8 @@ pub struct UiViewModel {
     pub calibration: CalibrationViewModel,
     /// Tracking state.
     pub tracking: TrackingViewModel,
+    /// Requested/active face-retargeting mode and GNM readiness.
+    pub face_retargeting: FaceRetargetingViewModel,
     /// Optional NDI output state.
     pub ndi_output: NdiOutputViewModel,
     /// Whether preview mirroring is enabled.
@@ -286,6 +291,10 @@ mod tests {
         assert_eq!(vm.screen, Screen::Setup);
         assert!(!vm.can_start());
         assert!(!vm.can_stop());
+        assert_eq!(
+            vm.face_retargeting.requested_mode,
+            vtuber_core::FaceRetargetingMode::DirectMediaPipe
+        );
     }
 
     #[test]

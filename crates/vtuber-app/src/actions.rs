@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use vtuber_avatar::ArmPoseProfileOverride;
+use vtuber_core::FaceRetargetingMode;
 
 /// Actions that the UI can emit.
 ///
@@ -66,6 +67,13 @@ pub enum UiAction {
     TogglePreview,
     /// Toggle mirror-style avatar motion.
     ToggleAvatarMotionMirror,
+
+    // --- Face retargeting ---
+    /// Request Direct MediaPipe or experimental GNM Perfect Sync authority.
+    SelectFaceRetargetingMode {
+        /// User-requested face retargeting mode.
+        mode: FaceRetargetingMode,
+    },
 
     // --- Avatar pose settings ---
     /// Store a bounded per-model default-arm profile and re-resolve it.
@@ -184,5 +192,18 @@ mod tests {
         let debug = format!("{:?}", action);
         assert!(debug.contains("ImportAvatar"));
         assert!(debug.contains("model.vrm"));
+    }
+
+    #[test]
+    fn face_retargeting_mode_action_carries_the_requested_mode() {
+        let action = UiAction::SelectFaceRetargetingMode {
+            mode: FaceRetargetingMode::GnmPerfectSync,
+        };
+        assert_eq!(
+            action,
+            UiAction::SelectFaceRetargetingMode {
+                mode: FaceRetargetingMode::GnmPerfectSync,
+            }
+        );
     }
 }

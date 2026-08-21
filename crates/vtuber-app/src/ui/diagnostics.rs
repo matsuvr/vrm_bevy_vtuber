@@ -210,6 +210,20 @@ pub fn render_diagnostics_screen(ui: &mut Ui, vm: &UiViewModel, diagnostics: &Di
             .as_deref()
             .unwrap_or("(none)")
     ));
+    ui.label(format!(
+        "Face retargeting: {:?} (active {:?})",
+        vm.face_retargeting.requested_mode, vm.face_retargeting.active_mode
+    ));
+    ui.label(format!(
+        "GNM readiness: {:?}, fallback: {:?}",
+        vm.face_retargeting.gnm_readiness, vm.face_retargeting.fallback
+    ));
+    ui.label(format!(
+        "Perfect Sync effective/present: {}/{}; decoder reliable: {}",
+        vm.face_retargeting.perfect_sync_effective_channels,
+        vm.face_retargeting.perfect_sync_present_channels,
+        vm.face_retargeting.reliable_decoder_channels
+    ));
     ui.separator();
 
     // Last error.

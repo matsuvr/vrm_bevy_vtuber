@@ -27,6 +27,7 @@ use vtuber_avatar::{
     AvatarMotionMirror,
 };
 use vtuber_camera::device::CameraDescriptor;
+use vtuber_core::{FaceRetargetingStatus, GnmReadiness};
 
 /// A pending avatar load request waiting to be submitted to the lifecycle.
 ///
@@ -76,6 +77,8 @@ pub struct Orchestrator {
     calibration_request: Option<CalibrationRequest>,
     /// Whether inference should be restarted after a recoverable worker error.
     inference_retry_requested: bool,
+    /// Requested and frame-boundary face-retargeting authority.
+    retargeting_status: FaceRetargetingStatus,
 }
 
 /// Calibration intent passed from UI orchestration to the tracking domain.
@@ -180,6 +183,7 @@ impl Default for Orchestrator {
             camera_refresh_requested: true,
             calibration_request: None,
             inference_retry_requested: false,
+            retargeting_status: FaceRetargetingStatus::default(),
         }
     }
 }
@@ -242,6 +246,9 @@ impl Orchestrator {
                     }
                 }
                 self.retry_avatar_load();
+            }
+            UiAction::SelectFaceRetargetingMode { mode } => {
+                self.retargeting_status.request_mode(*mode);
             }
             UiAction::BeginCalibration => {
                 if self.pipeline_state == PipelineState::Running {
@@ -423,6 +430,7 @@ impl Orchestrator {
         vm.avatar.lifecycle = self.lifecycle_state;
         vm.avatar.is_ready = self.lifecycle_state == AvatarLifecycleState::Ready;
         vm.avatar.load_failed = self.lifecycle_state == AvatarLifecycleState::Failed;
+        vm.face_retargeting = self.retargeting_status;
     }
 
     /// Get the last error, if any.
@@ -507,6 +515,39 @@ impl Orchestrator {
     /// Set the last error (called by the capture bridge system).
     pub fn set_last_error(&mut self, error: Option<OrchestratorError>) {
         self.last_error = error;
+    }
+
+    /// Returns the current face-retargeting authority snapshot.
+    #[must_use]
+    pub const fn retargeting_status(&self) -> FaceRetargetingStatus {
+        self.retargeting_status
+    }
+
+    /// Publishes GNM runtime readiness without starting GNM work implicitly.
+    pub fn set_gnm_readiness(&mut self, readiness: GnmReadiness) {
+        self.retargeting_status.set_gnm_readiness(readiness);
+    }
+
+    /// Publishes active-avatar Perfect Sync capability counts.
+    pub fn set_perfect_sync_capability(
+        &mut self,
+        present_channels: usize,
+        effective_channels: usize,
+    ) {
+        self.retargeting_status
+            .set_perfect_sync_capability(present_channels, effective_channels);
+    }
+
+    /// Publishes decoder reliability for GNM readiness diagnostics.
+    pub fn set_reliable_decoder_channels(&mut self, reliable_channels: usize) {
+        self.retargeting_status
+            .set_reliable_decoder_channels(reliable_channels);
+    }
+
+    /// Marks one GNM frame invalid; the requested mode remains available for
+    /// recovery on the next valid ready frame.
+    pub fn mark_gnm_frame_invalid(&mut self) {
+        self.retargeting_status.mark_invalid_frame();
     }
 
     /// Moves an inference failure through the normal reverse-order shutdown.
@@ -1180,6 +1221,33 @@ mod tests {
 
         assert_eq!(vm.camera.available_cameras.len(), 2);
         assert_eq!(vm.camera.selected_index, Some(0));
+    }
+
+    #[test]
+    fn gnm_request_stays_direct_until_readiness_and_capability_are_ready() {
+        let mut orchestrator = Orchestrator::default();
+        orchestrator.process_action(&UiAction::SelectFaceRetargetingMode {
+            mode: vtuber_core::FaceRetargetingMode::GnmPerfectSync,
+        });
+        assert_eq!(
+            orchestrator.retargeting_status().active_mode,
+            vtuber_core::FaceRetargetingMode::DirectMediaPipe
+        );
+
+        orchestrator.set_perfect_sync_capability(52, 12);
+        orchestrator.set_gnm_readiness(vtuber_core::GnmReadiness::Ready);
+        assert_eq!(
+            orchestrator.retargeting_status().active_mode,
+            vtuber_core::FaceRetargetingMode::GnmPerfectSync
+        );
+
+        orchestrator.process_action(&UiAction::SelectFaceRetargetingMode {
+            mode: vtuber_core::FaceRetargetingMode::DirectMediaPipe,
+        });
+        assert_eq!(
+            orchestrator.retargeting_status().active_mode,
+            vtuber_core::FaceRetargetingMode::DirectMediaPipe
+        );
     }
 
     #[test]

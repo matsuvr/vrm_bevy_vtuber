@@ -7,6 +7,7 @@ use crate::preview::PreviewState;
 use crate::preview_landmarks::PreviewLandmarkState;
 use crate::ui_model::{NdiOutputUiState, UiViewModel};
 use vtuber_avatar::AvatarMotionMirror;
+use vtuber_core::FaceRetargetingMode;
 use vtuber_core::{FaceLandmark, MonoTimeNs, monotonic_now};
 
 fn preview_uv(mirrored: bool) -> bevy_egui::egui::Rect {
@@ -100,6 +101,41 @@ pub fn render_live_screen(
             "no"
         }
     ));
+    ui.separator();
+
+    // Retargeting authority is a user intent routed through the
+    // orchestrator. GNM remains visibly selected while it is preparing, but
+    // the active authority stays Direct until all readiness gates pass.
+    ui.heading("Face Retargeting");
+    let mut requested_mode = vm.face_retargeting.requested_mode;
+    ui.radio_value(
+        &mut requested_mode,
+        FaceRetargetingMode::DirectMediaPipe,
+        "Direct MediaPipe",
+    );
+    ui.radio_value(
+        &mut requested_mode,
+        FaceRetargetingMode::GnmPerfectSync,
+        "GNM Perfect Sync (Experimental)",
+    );
+    if requested_mode != vm.face_retargeting.requested_mode {
+        ui_state.emit(UiAction::SelectFaceRetargetingMode {
+            mode: requested_mode,
+        });
+    }
+    ui.label(format!(
+        "Active: {:?} · GNM: {:?}",
+        vm.face_retargeting.active_mode, vm.face_retargeting.gnm_readiness
+    ));
+    ui.label(format!(
+        "Perfect Sync: {}/{} effective · decoder reliable: {}",
+        vm.face_retargeting.perfect_sync_effective_channels,
+        vm.face_retargeting.perfect_sync_present_channels,
+        vm.face_retargeting.reliable_decoder_channels
+    ));
+    if let Some(reason) = vm.face_retargeting.fallback {
+        ui.small(format!("Fallback: {reason:?}"));
+    }
     ui.separator();
 
     // Main viewport camera controls. The renderer emits an intent only; the
