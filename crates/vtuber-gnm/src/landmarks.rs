@@ -40,6 +40,8 @@ impl SparseLandmark {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SparseLandmarkSet {
     points: Vec<SparseLandmark>,
+    unique_vertices: Vec<usize>,
+    point_vertex_slots: Vec<[usize; 3]>,
 }
 
 impl SparseLandmarkSet {
@@ -51,7 +53,30 @@ impl SparseLandmarkSet {
                 reason: "at least one point is required".to_owned(),
             });
         }
-        Ok(Self { points })
+        let mut unique_vertices = Vec::new();
+        let mut point_vertex_slots = Vec::with_capacity(points.len());
+        for point in &points {
+            let mut slots = [0; 3];
+            for (slot, vertex) in point.indices.iter().copied().enumerate() {
+                let unique_slot = match unique_vertices
+                    .iter()
+                    .position(|candidate| *candidate == vertex)
+                {
+                    Some(slot) => slot,
+                    None => {
+                        unique_vertices.push(vertex);
+                        unique_vertices.len() - 1
+                    }
+                };
+                slots[slot] = unique_slot;
+            }
+            point_vertex_slots.push(slots);
+        }
+        Ok(Self {
+            points,
+            unique_vertices,
+            point_vertex_slots,
+        })
     }
 
     /// Returns the number of points.
@@ -67,6 +92,19 @@ impl SparseLandmarkSet {
     /// Returns points in their stable source order.
     pub fn points(&self) -> &[SparseLandmark] {
         &self.points
+    }
+
+    /// Returns the number of unique template vertices referenced by this set.
+    pub fn unique_vertex_count(&self) -> usize {
+        self.unique_vertices.len()
+    }
+
+    pub(crate) fn unique_vertices(&self) -> &[usize] {
+        &self.unique_vertices
+    }
+
+    pub(crate) fn point_vertex_slots(&self) -> &[[usize; 3]] {
+        &self.point_vertex_slots
     }
 
     fn from_text(text: &str) -> Result<Self, GnmModelError> {

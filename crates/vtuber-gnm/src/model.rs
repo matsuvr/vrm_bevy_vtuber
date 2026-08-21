@@ -436,38 +436,49 @@ impl GnmModel {
                 actual: format!("[{}, 3]", joints.rotations.len()),
             });
         }
-        output.resize(landmarks.len());
-        let vertices = self.deformed_vertices(identity, expression, joints);
-        let transforms = self.joint_transforms(joints, identity)?;
-        for (point_index, (output_point, landmark)) in
-            output.values.iter_mut().zip(landmarks.points()).enumerate()
+        if let Some(vertex) = landmarks
+            .unique_vertices()
+            .iter()
+            .find(|vertex| **vertex >= self.vertex_count())
+        {
+            return Err(GnmModelError::InvalidValue {
+                field: "landmark vertex index".to_owned(),
+                reason: format!("references vertex {vertex}"),
+            });
+        }
+        output.resize_points(landmarks.len());
+        output.resize_vertex_scratch(landmarks.unique_vertices().len());
+        output.resize_joint_scratch(self.joint_count());
+        self.deformed_sparse_vertices(
+            identity,
+            expression,
+            joints,
+            landmarks,
+            &mut output.vertex_values,
+            &mut output.pose_coefficients,
+        );
+        self.joint_transforms(
+            joints,
+            identity,
+            &mut output.joint_positions,
+            &mut output.joint_transforms,
+        )?;
+        for (point_index, ((output_point, landmark), slots)) in output
+            .values
+            .iter_mut()
+            .zip(landmarks.points())
+            .zip(landmarks.point_vertex_slots())
+            .enumerate()
         {
             let mut point: [f32; 3] = [0.0; 3];
-            for (vertex, weight) in landmark.indices.iter().zip(landmark.weights) {
-                if *vertex >= self.vertex_count() {
-                    return Err(GnmModelError::InvalidValue {
-                        field: "landmark vertex index".to_owned(),
-                        reason: format!("point {point_index} references vertex {vertex}"),
-                    });
-                }
+            for (corner, (slot, weight)) in slots.iter().zip(landmark.weights).enumerate() {
                 let mut skinned = [0.0; 3];
-                for (joint, transform) in transforms.iter().enumerate() {
+                for (joint, transform) in output.joint_transforms.iter().enumerate() {
+                    let vertex = landmark.indices[corner];
                     let skin_weight =
-                        self.skinning_weights.values()[joint * self.vertex_count() + *vertex];
-                    let rest_joint = self.template_joints.values()[joint * 3..joint * 3 + 3]
-                        .try_into()
-                        .map_err(|_| GnmModelError::InvalidValue {
-                            field: "template_joint_positions".to_owned(),
-                            reason: "joint position must contain three components".to_owned(),
-                        })?;
-                    let transformed = transform.apply_skin(
-                        [
-                            vertex_value(&vertices, *vertex, 0),
-                            vertex_value(&vertices, *vertex, 1),
-                            vertex_value(&vertices, *vertex, 2),
-                        ],
-                        rest_joint,
-                    );
+                        self.skinning_weights.values()[joint * self.vertex_count() + vertex];
+                    let transformed = transform
+                        .apply_skin(output.vertex_values[*slot], output.joint_positions[joint]);
                     for component in 0..3 {
                         skinned[component] += skin_weight * transformed[component];
                     }
@@ -487,59 +498,65 @@ impl GnmModel {
         Ok(())
     }
 
-    fn deformed_vertices(
+    fn deformed_sparse_vertices(
         &self,
         identity: &GnmIdentityState,
         expression: &GnmExpressionState,
         joints: &GnmJointState,
-    ) -> Vec<f32> {
-        let mut vertices = self.template_vertices.values().to_vec();
-        let vertex_count = self.vertex_count();
-        for (basis, coefficient) in identity.values().iter().enumerate() {
-            for vertex in 0..vertex_count {
-                for component in 0..3 {
-                    vertices[vertex * 3 + component] +=
-                        coefficient * self.vertex_identity_basis.at3(basis, vertex, component);
-                }
-            }
-        }
-        for (basis, coefficient) in expression.values().iter().enumerate() {
-            for vertex in 0..vertex_count {
-                for component in 0..3 {
-                    vertices[vertex * 3 + component] +=
-                        coefficient * self.expression_basis.at3(basis, vertex, component);
-                }
-            }
-        }
-        if let Some(correctives) = &self.pose_correctives_regressor {
-            for joint in 0..self.joint_count() {
+        landmarks: &crate::SparseLandmarkSet,
+        vertices: &mut [[f32; 3]],
+        pose_coefficients: &mut [[f32; 9]],
+    ) {
+        if self.pose_correctives_regressor.is_some() {
+            for (joint, coefficients) in pose_coefficients.iter_mut().enumerate() {
                 let rotation = rotation_from_axis_angle(joints.rotations[joint]);
                 for (row, rotation_row) in rotation.iter().enumerate() {
                     for (column, rotation_value) in rotation_row.iter().enumerate() {
-                        let coefficient = *rotation_value - if row == column { 1.0 } else { 0.0 };
-                        let basis = joint * 9 + row * 3 + column;
-                        for vertex in 0..vertex_count {
-                            for component in 0..3 {
-                                vertices[vertex * 3 + component] +=
-                                    coefficient * correctives.at3(basis, vertex, component);
-                            }
-                        }
+                        coefficients[row * 3 + column] =
+                            *rotation_value - if row == column { 1.0 } else { 0.0 };
                     }
                 }
             }
         }
-        vertices
+        for (output_vertex, vertex) in vertices.iter_mut().zip(landmarks.unique_vertices()) {
+            let mut value = [0.0; 3];
+            for (component, value_component) in value.iter_mut().enumerate() {
+                *value_component = self.template_vertices.values()[vertex * 3 + component];
+            }
+            for (basis, coefficient) in identity.values().iter().enumerate() {
+                for (component, value_component) in value.iter_mut().enumerate() {
+                    *value_component +=
+                        coefficient * self.vertex_identity_basis.at3(basis, *vertex, component);
+                }
+            }
+            for (basis, coefficient) in expression.values().iter().enumerate() {
+                for (component, value_component) in value.iter_mut().enumerate() {
+                    *value_component +=
+                        coefficient * self.expression_basis.at3(basis, *vertex, component);
+                }
+            }
+            if let Some(correctives) = &self.pose_correctives_regressor {
+                for (joint, coefficients) in pose_coefficients.iter().enumerate() {
+                    for (basis, coefficient) in coefficients.iter().enumerate() {
+                        for (component, value_component) in value.iter_mut().enumerate() {
+                            *value_component += coefficient
+                                * correctives.at3(joint * 9 + basis, *vertex, component);
+                        }
+                    }
+                }
+            }
+            *output_vertex = value;
+        }
     }
 
     fn joint_transforms(
         &self,
         joints: &GnmJointState,
         identity: &GnmIdentityState,
-    ) -> Result<Vec<JointTransform>, GnmModelError> {
-        let joint_count = self.joint_count();
-        let mut local = vec![JointTransform::identity(); joint_count];
-        for (joint, local_transform) in local.iter_mut().enumerate() {
-            let mut position = [0.0; 3];
+        joint_positions: &mut [[f32; 3]],
+        world_transforms: &mut [JointTransform],
+    ) -> Result<(), GnmModelError> {
+        for (joint, position) in joint_positions.iter_mut().enumerate() {
             for (component, position_component) in position.iter_mut().enumerate() {
                 *position_component = self.template_joints.values()[joint * 3 + component];
                 for (basis, coefficient) in identity.values().iter().enumerate() {
@@ -547,44 +564,39 @@ impl GnmModel {
                         coefficient * self.joint_identity_basis.at3(basis, joint, component);
                 }
             }
+        }
+        for joint in 0..self.joint_count() {
             let parent = self.joint_parent_indices[joint];
             let local_position = if joint == 0 && (parent == -1 || parent == 0) {
-                add(position, joints.translation)
+                add(joint_positions[0], joints.translation)
             } else {
-                let parent = parent as usize;
-                let parent_position = [
-                    self.template_joints.values()[parent * 3],
-                    self.template_joints.values()[parent * 3 + 1],
-                    self.template_joints.values()[parent * 3 + 2],
-                ];
-                [
-                    position[0] - parent_position[0],
-                    position[1] - parent_position[1],
-                    position[2] - parent_position[2],
-                ]
-            };
-            *local_transform = JointTransform {
-                rotation: rotation_from_axis_angle(joints.rotations[joint]),
-                translation: local_position,
-            };
-        }
-        let mut world: Vec<JointTransform> = Vec::with_capacity(joint_count);
-        for (joint, local_transform) in local.iter().enumerate() {
-            let parent = self.joint_parent_indices[joint];
-            if joint == 0 && (parent == -1 || parent == 0) {
-                world.push(*local_transform);
-            } else {
-                let parent = parent as usize;
-                if parent >= world.len() {
+                let parent = usize::try_from(parent).map_err(|_| GnmModelError::InvalidValue {
+                    field: "joint_parent_indices".to_owned(),
+                    reason: "non-root joints must have a non-negative parent".to_owned(),
+                })?;
+                if parent >= joint {
                     return Err(GnmModelError::InvalidValue {
                         field: "joint_parent_indices".to_owned(),
                         reason: "parents must precede their children".to_owned(),
                     });
                 }
-                world.push(world[parent].compose(*local_transform));
-            }
+                subtract(joint_positions[joint], joint_positions[parent])
+            };
+            let local = JointTransform {
+                rotation: rotation_from_axis_angle(joints.rotations[joint]),
+                translation: local_position,
+            };
+            world_transforms[joint] = if joint == 0 && (parent == -1 || parent == 0) {
+                local
+            } else {
+                let parent = usize::try_from(parent).map_err(|_| GnmModelError::InvalidValue {
+                    field: "joint_parent_indices".to_owned(),
+                    reason: "non-root joints must have a non-negative parent".to_owned(),
+                })?;
+                world_transforms[parent].compose(local)
+            };
         }
-        Ok(world)
+        Ok(())
     }
 }
 
@@ -629,10 +641,6 @@ fn shape_error(field: &str, expected: &str, actual: &[usize]) -> GnmModelError {
     }
 }
 
-fn vertex_value(vertices: &[f32], vertex: usize, component: usize) -> f32 {
-    vertices[vertex * 3 + component]
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct JointTransform {
     rotation: [[f32; 3]; 3],
@@ -674,6 +682,10 @@ impl JointTransform {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GnmSparseVertices {
     values: Vec<[f32; 3]>,
+    vertex_values: Vec<[f32; 3]>,
+    pose_coefficients: Vec<[f32; 9]>,
+    joint_positions: Vec<[f32; 3]>,
+    joint_transforms: Vec<JointTransform>,
 }
 
 impl GnmSparseVertices {
@@ -681,21 +693,58 @@ impl GnmSparseVertices {
     pub fn with_len(length: usize) -> Self {
         Self {
             values: vec![[0.0; 3]; length],
+            ..Self::default()
         }
     }
 
-    fn resize(&mut self, length: usize) {
+    fn resize_points(&mut self, length: usize) {
         self.values.resize(length, [0.0; 3]);
+    }
+
+    fn resize_vertex_scratch(&mut self, length: usize) {
+        self.vertex_values.resize(length, [0.0; 3]);
+    }
+
+    fn resize_joint_scratch(&mut self, length: usize) {
+        self.pose_coefficients.resize(length, [0.0; 9]);
+        self.joint_positions.resize(length, [0.0; 3]);
+        self.joint_transforms
+            .resize(length, JointTransform::identity());
     }
 
     /// Returns the evaluated points.
     pub fn values(&self) -> &[[f32; 3]] {
         &self.values
     }
+
+    /// Returns the number of unique template vertices retained in the scratch buffer.
+    pub fn vertex_scratch_len(&self) -> usize {
+        self.vertex_values.len()
+    }
+
+    /// Returns the scratch capacity used for unique template vertices.
+    pub fn vertex_scratch_capacity(&self) -> usize {
+        self.vertex_values.capacity()
+    }
+
+    /// Returns the capacities of all reusable evaluation buffers.
+    pub fn reusable_capacities(&self) -> (usize, usize, usize, usize, usize) {
+        (
+            self.values.capacity(),
+            self.vertex_values.capacity(),
+            self.pose_coefficients.capacity(),
+            self.joint_positions.capacity(),
+            self.joint_transforms.capacity(),
+        )
+    }
 }
 
 fn add(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
     [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
+}
+
+fn subtract(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
 }
 
 fn matrix_vector(matrix: [[f32; 3]; 3], vector: [f32; 3]) -> [f32; 3] {
@@ -719,13 +768,10 @@ fn matrix_matrix(left: [[f32; 3]; 3], right: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
 }
 
 fn rotation_from_axis_angle(axis_angle: [f32; 3]) -> [[f32; 3]; 3] {
-    let theta = (axis_angle[0] * axis_angle[0]
+    let theta_squared = axis_angle[0] * axis_angle[0]
         + axis_angle[1] * axis_angle[1]
-        + axis_angle[2] * axis_angle[2])
-        .sqrt();
-    if theta <= f32::EPSILON {
-        return JointTransform::identity().rotation;
-    }
+        + axis_angle[2] * axis_angle[2];
+    let theta = theta_squared.max(1.0e-8).sqrt();
     let axis = [
         axis_angle[0] / theta,
         axis_angle[1] / theta,
@@ -814,6 +860,70 @@ mod tests {
             .evaluate_sparse(&identity, &expression, &joints, &landmarks, &mut output)
             .unwrap();
         assert_eq!(output.values.capacity(), capacity);
+    }
+
+    #[test]
+    fn identity_applied_joint_positions_drive_fk_and_skinning_offsets() {
+        let identity = GNM_HEAD_V3_IDENTITY_DIM;
+        let expression = GNM_HEAD_V3_EXPRESSION_DIM;
+        let mut joint_identity = vec![0.0; identity * 2 * 3];
+        joint_identity[0] = 0.5;
+        joint_identity[3] = 0.5;
+        let model = GnmModel::from_data(GnmModelData {
+            version: GnmVersion { major: 3, minor: 0 },
+            variant: GnmVariant::Head,
+            template_vertices: DenseArray::new("vertices", vec![1, 3], vec![2.0, 0.0, 0.0])
+                .unwrap(),
+            template_joints: DenseArray::new(
+                "joints",
+                vec![2, 3],
+                vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            )
+            .unwrap(),
+            vertex_identity_basis: DenseArray::new(
+                "identity",
+                vec![identity, 1, 3],
+                vec![0.0; identity * 3],
+            )
+            .unwrap(),
+            joint_identity_basis: DenseArray::new(
+                "joint_identity",
+                vec![identity, 2, 3],
+                joint_identity,
+            )
+            .unwrap(),
+            expression_basis: DenseArray::new(
+                "expression",
+                vec![expression, 1, 3],
+                vec![0.0; expression * 3],
+            )
+            .unwrap(),
+            joint_parent_indices: vec![-1, 0],
+            skinning_weights: DenseArray::new("weights", vec![2, 1], vec![0.0, 1.0]).unwrap(),
+            pose_correctives_regressor: None,
+        })
+        .unwrap();
+        let landmarks = crate::SparseLandmarkSet::new(vec![
+            crate::SparseLandmark::new([0, 0, 0], [1.0, 0.0, 0.0]).unwrap(),
+        ])
+        .unwrap();
+        let mut identity_values = vec![0.0; identity];
+        identity_values[0] = 1.0;
+        let identity = GnmIdentityState::new(identity_values, identity).unwrap();
+        let expression = model.neutral_expression();
+        let joints = GnmJointState::new(
+            vec![[0.0; 3], [0.0, 0.0, std::f32::consts::FRAC_PI_2]],
+            [0.0; 3],
+            2,
+        )
+        .unwrap();
+        let mut output = GnmSparseVertices::with_len(1);
+        model
+            .evaluate_sparse(&identity, &expression, &joints, &landmarks, &mut output)
+            .unwrap();
+        assert!((output.values()[0][0] - 1.5).abs() < 1e-5);
+        assert!((output.values()[0][1] - 0.5).abs() < 1e-5);
+        assert!(output.values()[0][2].abs() < 1e-5);
     }
 
     #[test]
