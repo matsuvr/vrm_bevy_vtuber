@@ -642,6 +642,7 @@ impl TrackingPipeline {
                 head,
                 gaze: filtered_gaze,
                 expressions,
+                detailed_face: None,
             }
         });
 

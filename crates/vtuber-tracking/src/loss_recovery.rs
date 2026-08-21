@@ -16,6 +16,7 @@ use std::time::Duration;
 use nalgebra::{Quaternion, UnitQuaternion};
 use thiserror::Error;
 
+use vtuber_core::Arkit52Coefficients;
 use vtuber_core::types::{
     AvatarControlFrame, ExpressionCoefficients, GazeSignal, GazeTrackingState, HeadPose,
     MonoTimeNs, TrackingState,
@@ -136,6 +137,9 @@ impl LossRecoveryParams {
 
 /// Current phase of the loss-recovery state machine.
 #[derive(Clone, Debug, PartialEq)]
+// The by-value control frame intentionally includes the fixed-size validated
+// ARKit52 payload; keeping it inline avoids a per-frame heap allocation.
+#[allow(clippy::large_enum_variant)]
 enum RecoveryState {
     /// No synthetic motion is in progress; pass tracked frames through.
     Idle,
@@ -453,6 +457,7 @@ fn neutral_frame(
         head: HeadPose::default(),
         gaze: GazeSignal::degraded(0.0, 0.0, 0.0),
         expressions: ExpressionCoefficients::default(),
+        detailed_face: None,
     }
 }
 
@@ -478,6 +483,7 @@ fn blend_frames(
         head: quaternion_to_semantic_pose(q),
         gaze: blend_gaze(from.gaze, to.gaze, t),
         expressions: blend_expressions(&from.expressions, &to.expressions, t),
+        detailed_face: blend_detailed_face(from.detailed_face, to.detailed_face, t),
     }
 }
 
@@ -502,6 +508,26 @@ fn blend_to_neutral(
         head: quaternion_to_semantic_pose(q),
         gaze: blend_gaze(from.gaze, GazeSignal::degraded(0.0, 0.0, 0.0), t),
         expressions: blend_expressions(&from.expressions, &ExpressionCoefficients::default(), t),
+        detailed_face: None,
+    }
+}
+
+fn blend_detailed_face(
+    from: Option<Arkit52Coefficients>,
+    to: Option<Arkit52Coefficients>,
+    t: f32,
+) -> Option<Arkit52Coefficients> {
+    match (from, to) {
+        (Some(from), Some(to)) => {
+            let t = t.clamp(0.0, 1.0);
+            let values = std::array::from_fn(|index| {
+                from.as_array()[index] + (to.as_array()[index] - from.as_array()[index]) * t
+            });
+            Arkit52Coefficients::try_from_array(values).ok()
+        }
+        (Some(value), None) if t < 1.0 => Some(value),
+        (None, Some(value)) if t >= 1.0 => Some(value),
+        (_, value) => value,
     }
 }
 
@@ -589,6 +615,7 @@ mod tests {
                 aa: expression_value,
                 ..ExpressionCoefficients::default()
             },
+            detailed_face: None,
         }
     }
 

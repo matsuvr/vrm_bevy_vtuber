@@ -9,12 +9,14 @@
 
 use vtuber_avatar::capabilities::{
     AvatarCapabilities, BlinkMode, BonePresence, DeclaredLookAtType, GazeFallbackReason,
-    LookDirectionSet, MouthMode, SelectedGazeBackend, select_gaze_backend,
+    LookDirectionSet, MouthMode, PerfectSyncCapabilities, SelectedGazeBackend, select_gaze_backend,
 };
 use vtuber_avatar::expression::{
     ExpressionCommand, ExpressionCommandBuilder, ExpressionStateTracker, RawBlinkInput,
-    RawMouthInput, map_blink_to_expressions, map_blink_with_fallback, map_mouth_with_fallback,
+    RawMouthInput, build_face_commands, map_blink_to_expressions, map_blink_with_fallback,
+    map_mouth_with_fallback,
 };
+use vtuber_core::{ARKIT52_CHANNEL_COUNT, Arkit52Coefficients, ArkitBlendshape};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -107,6 +109,28 @@ fn build_all_commands(
         .map(|(n, w)| (n.as_str(), *w))
         .collect();
     builder.build(all)
+}
+
+fn detailed_coefficients(values: &[(ArkitBlendshape, f32)]) -> Arkit52Coefficients {
+    let mut coefficients = [0.0; ARKIT52_CHANNEL_COUNT];
+    for &(channel, value) in values {
+        coefficients[channel.index()] = value;
+    }
+    Arkit52Coefficients::try_from_array(coefficients).expect("test coefficients are finite")
+}
+
+fn all_perfect_sync_caps() -> AvatarCapabilities {
+    let mut caps = full_caps();
+    caps.perfect_sync = PerfectSyncCapabilities::from_names(
+        ArkitBlendshape::ALL
+            .into_iter()
+            .map(ArkitBlendshape::canonical_name),
+    );
+    caps
+}
+
+fn detailed_name(channel: ArkitBlendshape) -> Option<String> {
+    Some(channel.canonical_name().to_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +286,123 @@ fn expression_integration_one_event_per_frame() {
 
     // All commands should be merged into a single list.
     assert_eq!(commands.len(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Per-domain Perfect Sync fallback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn expression_integration_full_52_owns_all_coarse_domains() {
+    let caps = all_perfect_sync_caps();
+    let coefficients = detailed_coefficients(&[(ArkitBlendshape::JawOpen, 0.4)]);
+    let commands = build_face_commands(
+        Some(&coefficients),
+        &caps,
+        &[("blinkLeft".to_owned(), 0.7)],
+        &[("aa".to_owned(), 0.8)],
+        &[("lookLeft".to_owned(), 0.9)],
+        detailed_name,
+    );
+
+    assert_eq!(commands.len(), ARKIT52_CHANNEL_COUNT);
+    assert!(commands.iter().any(|command| {
+        command.name == "JawOpen" && (command.weight - 0.4).abs() < f32::EPSILON
+    }));
+    assert!(!commands.iter().any(|command| command.name == "blinkLeft"));
+    assert!(!commands.iter().any(|command| command.name == "aa"));
+    assert!(!commands.iter().any(|command| command.name == "lookLeft"));
+}
+
+#[test]
+fn expression_integration_tongue_only_keeps_coarse_blink_and_mouth() {
+    let mut caps = full_caps();
+    caps.perfect_sync = PerfectSyncCapabilities::from_names(["TongueOut"]);
+    let coefficients = detailed_coefficients(&[(ArkitBlendshape::TongueOut, 1.0)]);
+    let commands = build_face_commands(
+        Some(&coefficients),
+        &caps,
+        &[("blinkLeft".to_owned(), 0.7)],
+        &[("aa".to_owned(), 0.8)],
+        &[],
+        detailed_name,
+    );
+
+    assert!(commands.iter().any(|command| command.name == "TongueOut"));
+    assert!(commands.iter().any(|command| command.name == "blinkLeft"));
+    assert!(commands.iter().any(|command| command.name == "aa"));
+}
+
+#[test]
+fn expression_integration_one_eye_look_channel_falls_back_to_existing_gaze() {
+    let mut caps = full_caps();
+    caps.perfect_sync = PerfectSyncCapabilities::from_names(["EyeLookUpLeft"]);
+    let coefficients = detailed_coefficients(&[(ArkitBlendshape::EyeLookUpLeft, 1.0)]);
+    let commands = build_face_commands(
+        Some(&coefficients),
+        &caps,
+        &[],
+        &[],
+        &[("lookLeft".to_owned(), 0.9)],
+        detailed_name,
+    );
+
+    assert!(commands.iter().any(|command| command.name == "lookLeft"));
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command.name == "EyeLookUpLeft")
+    );
+}
+
+#[test]
+fn expression_integration_complete_eye_look_coverage_replaces_existing_gaze() {
+    let mut caps = full_caps();
+    caps.perfect_sync = PerfectSyncCapabilities::from_names([
+        "EyeLookDownLeft",
+        "EyeLookDownRight",
+        "EyeLookInLeft",
+        "EyeLookInRight",
+        "EyeLookOutLeft",
+        "EyeLookOutRight",
+        "EyeLookUpLeft",
+        "EyeLookUpRight",
+    ]);
+    let coefficients = detailed_coefficients(&[(ArkitBlendshape::EyeLookUpLeft, 1.0)]);
+    let commands = build_face_commands(
+        Some(&coefficients),
+        &caps,
+        &[],
+        &[],
+        &[("lookLeft".to_owned(), 0.9)],
+        detailed_name,
+    );
+
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.name == "EyeLookUpLeft")
+    );
+    assert!(!commands.iter().any(|command| command.name == "lookLeft"));
+}
+
+#[test]
+fn expression_integration_detailed_one_to_zero_emits_explicit_reset() {
+    let mut tracker = ExpressionStateTracker::new();
+    let active = vec![ExpressionCommand {
+        name: "TongueOut".to_owned(),
+        weight: 1.0,
+    }];
+    let neutral = vec![ExpressionCommand {
+        name: "TongueOut".to_owned(),
+        weight: 0.0,
+    }];
+
+    assert!(tracker.compute_commands(&active, 1).is_some());
+    let reset = tracker
+        .compute_commands(&neutral, 1)
+        .expect("detailed 1.0 -> 0.0 must be sent");
+    assert_eq!(reset, neutral);
 }
 
 // ---------------------------------------------------------------------------

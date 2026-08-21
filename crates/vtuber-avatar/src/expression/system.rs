@@ -8,13 +8,14 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy_vrm1::prelude::{
-    ExpressionEntityMap, LookAtExpressionWeights, ModifyExpressions, VrmExpression,
+    ExpressionBindingStatus, ExpressionEntityMap, LookAtExpressionWeights, ModifyExpressions,
+    VrmExpression,
 };
+use vtuber_core::ArkitBlendshape;
 
 use crate::capabilities::SelectedGazeBackend;
 use crate::expression::blink::{RawBlinkInput, map_blink_with_fallback};
-use crate::expression::command::ExpressionCommand;
-use crate::expression::command::build_frame_commands;
+use crate::expression::command::{ExpressionCommand, build_face_commands};
 use crate::expression::mouth::{RawMouthInput, map_mouth_with_fallback};
 use crate::lifecycle::{AvatarLifecycle, AvatarLifecycleState};
 use crate::mirror::AvatarMotionMirror;
@@ -171,6 +172,7 @@ pub fn apply_tracked_expressions(
     control_frame: Res<ActiveControlFrame>,
     mirror: Option<Res<AvatarMotionMirror>>,
     expression_maps: Query<(&ExpressionEntityMap, Option<&LookAtExpressionWeights>)>,
+    expression_statuses: Query<&ExpressionBindingStatus>,
     mut tracker: Local<ExpressionStateTracker>,
 ) {
     if lifecycle.state() != AvatarLifecycleState::Ready {
@@ -208,7 +210,20 @@ pub fn apply_tracked_expressions(
         capabilities.mouth,
     );
     let gaze = look_at_expression_commands(capabilities.gaze_backend, look_at_weights.copied());
-    let built = build_frame_commands(frame, capabilities, &blink, &mouth, &gaze);
+    let built = build_face_commands(
+        frame.detailed_face.as_ref(),
+        capabilities,
+        &blink,
+        &mouth,
+        &gaze,
+        |channel| {
+            resolve_detailed_expression_name(expression_map, channel, |entity| {
+                expression_statuses
+                    .get(entity)
+                    .is_ok_and(|status| status.resolved_morph_bind_count > 0)
+            })
+        },
+    );
     let available = built.into_iter().filter(|command| {
         expression_map
             .0
@@ -225,6 +240,20 @@ pub fn apply_tracked_expressions(
             .into_iter()
             .map(|command| (VrmExpression::from(command.name.as_str()), command.weight)),
     ));
+}
+
+fn resolve_detailed_expression_name(
+    expression_map: &ExpressionEntityMap,
+    channel: ArkitBlendshape,
+    mut is_effective: impl FnMut(Entity) -> bool,
+) -> Option<String> {
+    [channel.canonical_name(), channel.lower_camel_alias()]
+        .into_iter()
+        .find_map(|name| {
+            let expression = VrmExpression::from(name);
+            let entity = expression_map.0.get(&expression)?;
+            is_effective(*entity).then(|| name.to_owned())
+        })
 }
 
 fn blink_input(frame: &vtuber_core::AvatarControlFrame, mirrored: bool) -> RawBlinkInput {
@@ -261,6 +290,7 @@ fn look_at_expression_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_vrm1::prelude::{ExpressionBindingStatus, VrmExpression};
     use vtuber_core::{
         AvatarControlFrame, ExpressionCoefficients, FrameSeq, GazeSignal, HeadPose, MonoTimeNs,
         TrackingState,
@@ -271,6 +301,65 @@ mod tests {
             name: name.to_string(),
             weight,
         }
+    }
+
+    fn resolve_jaw_open_alias(
+        canonical_bind_count: usize,
+        lower_camel_bind_count: usize,
+    ) -> Option<String> {
+        let mut world = World::new();
+        let canonical_entity = world
+            .spawn(ExpressionBindingStatus {
+                resolved_morph_bind_count: canonical_bind_count,
+            })
+            .id();
+        let lower_camel_entity = world
+            .spawn(ExpressionBindingStatus {
+                resolved_morph_bind_count: lower_camel_bind_count,
+            })
+            .id();
+        let expression_map = ExpressionEntityMap(
+            [
+                (VrmExpression::from("JawOpen"), canonical_entity),
+                (VrmExpression::from("jawOpen"), lower_camel_entity),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        resolve_detailed_expression_name(&expression_map, ArkitBlendshape::JawOpen, |entity| {
+            world
+                .get::<ExpressionBindingStatus>(entity)
+                .is_some_and(|status| status.resolved_morph_bind_count > 0)
+        })
+    }
+
+    #[test]
+    fn detailed_name_resolution_skips_noop_canonical_alias() {
+        assert_eq!(
+            resolve_jaw_open_alias(0, 1).as_deref(),
+            Some("jawOpen"),
+            "an effective lower-camel alias must win over a no-op canonical alias"
+        );
+    }
+
+    #[test]
+    fn detailed_name_resolution_skips_noop_lower_camel_alias() {
+        assert_eq!(
+            resolve_jaw_open_alias(1, 0).as_deref(),
+            Some("JawOpen"),
+            "an effective canonical alias must remain eligible"
+        );
+    }
+
+    #[test]
+    fn detailed_name_resolution_prefers_canonical_when_both_aliases_are_effective() {
+        assert_eq!(resolve_jaw_open_alias(1, 1).as_deref(), Some("JawOpen"));
+    }
+
+    #[test]
+    fn detailed_name_resolution_emits_no_command_when_both_aliases_are_noop() {
+        assert!(resolve_jaw_open_alias(0, 0).is_none());
     }
 
     #[test]
@@ -288,6 +377,7 @@ mod tests {
                 blink_right: 0.8,
                 ..Default::default()
             },
+            detailed_face: None,
         };
 
         assert_eq!(

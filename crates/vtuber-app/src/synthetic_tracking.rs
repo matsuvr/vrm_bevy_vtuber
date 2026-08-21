@@ -111,6 +111,7 @@ impl SyntheticTrackingSource {
             head,
             gaze,
             expressions,
+            detailed_face: None,
         }
     }
 }

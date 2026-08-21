@@ -290,6 +290,12 @@ pub struct AvatarControlFrame {
     pub gaze: GazeSignal,
     /// Expression coefficients.
     pub expressions: ExpressionCoefficients,
+    /// Optional validated detailed ARKit52 face state.
+    ///
+    /// The avatar adapter may use this only when the active model reports an
+    /// effective Perfect Sync capability. `None` preserves the existing
+    /// coarse-expression path.
+    pub detailed_face: Option<crate::Arkit52Coefficients>,
 }
 
 #[cfg(test)]

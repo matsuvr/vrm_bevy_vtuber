@@ -7,8 +7,9 @@
 use std::collections::HashMap;
 
 use vtuber_core::types::AvatarControlFrame;
+use vtuber_core::{Arkit52Coefficients, ArkitBlendshape};
 
-use crate::capabilities::AvatarCapabilities;
+use crate::capabilities::{AvatarCapabilities, PerfectSyncCapabilities, PerfectSyncFaceAuthority};
 
 /// A single expression command: name → weight.
 #[derive(Clone, Debug, PartialEq)]
@@ -162,6 +163,128 @@ pub fn build_frame_commands(
     builder.build(all_weights)
 }
 
+/// Builds detailed Perfect Sync commands for effective channels only.
+///
+/// The resolver is supplied by the avatar adapter so VRM-specific expression
+/// map lookup remains outside the engine-neutral ARKit52 contract. It must
+/// return the exact custom-expression name to send for a known channel.
+#[must_use]
+pub fn build_detailed_face_commands(
+    coefficients: &Arkit52Coefficients,
+    capabilities: &PerfectSyncCapabilities,
+    resolve_name: impl FnMut(ArkitBlendshape) -> Option<String>,
+) -> Vec<ExpressionCommand> {
+    build_detailed_face_commands_for_authority(
+        coefficients,
+        capabilities,
+        PerfectSyncFaceAuthority::all(),
+        resolve_name,
+    )
+}
+
+/// Builds detailed commands that belong to an authoritative face domain.
+///
+/// A partial coarse-replacement domain is deliberately omitted here so the
+/// caller can keep its existing coarse writer. Supplemental channels such as
+/// `TongueOut` remain eligible because they have no coarse counterpart.
+#[must_use]
+pub fn build_detailed_face_commands_for_authority(
+    coefficients: &Arkit52Coefficients,
+    capabilities: &PerfectSyncCapabilities,
+    authority: PerfectSyncFaceAuthority,
+    mut resolve_name: impl FnMut(ArkitBlendshape) -> Option<String>,
+) -> Vec<ExpressionCommand> {
+    let mut builder = ExpressionCommandBuilder::new();
+    let mut named = Vec::new();
+    for channel in ArkitBlendshape::ALL {
+        if !capabilities.is_effective(channel) || !authority.allows_detailed(channel) {
+            continue;
+        }
+        if let Some(name) = resolve_name(channel) {
+            named.push((name, coefficients.get(channel)));
+        }
+    }
+    builder.build(named.iter().map(|(name, weight)| (name.as_str(), *weight)))
+}
+
+/// Builds one pure face command list with per-domain Perfect Sync fallback.
+///
+/// When `detailed_face` is present, only domains with complete effective
+/// coverage suppress their coarse writer. Partial domains use the supplied
+/// coarse weights, while detailed supplemental channels are retained. This
+/// keeps one authoritative writer per domain and preserves the existing
+/// non-Perfect-Sync path when the detailed state is absent.
+#[must_use]
+pub fn build_face_commands(
+    detailed_face: Option<&Arkit52Coefficients>,
+    capabilities: &AvatarCapabilities,
+    blink_weights: &[(String, f32)],
+    mouth_weights: &[(String, f32)],
+    gaze_weights: &[(String, f32)],
+    mut resolve_name: impl FnMut(ArkitBlendshape) -> Option<String>,
+) -> Vec<ExpressionCommand> {
+    let authority = detailed_face.map_or_else(PerfectSyncFaceAuthority::default, |_| {
+        capabilities.perfect_sync.face_authority()
+    });
+    let detailed = detailed_face
+        .map(|coefficients| {
+            build_detailed_face_commands_for_authority(
+                coefficients,
+                &capabilities.perfect_sync,
+                authority,
+                &mut resolve_name,
+            )
+        })
+        .unwrap_or_default();
+
+    let coarse_capacity = detailed.len()
+        + if !authority.blink {
+            blink_weights.len()
+        } else {
+            0
+        }
+        + if !authority.mouth_lower_face {
+            mouth_weights.len()
+        } else {
+            0
+        }
+        + if !authority.eye_look {
+            gaze_weights.len()
+        } else {
+            0
+        };
+    let mut all_weights = Vec::with_capacity(coarse_capacity);
+    all_weights.extend(
+        detailed
+            .iter()
+            .map(|command| (command.name.as_str(), command.weight)),
+    );
+    if !authority.blink {
+        all_weights.extend(
+            blink_weights
+                .iter()
+                .map(|(name, weight)| (name.as_str(), *weight)),
+        );
+    }
+    if !authority.mouth_lower_face {
+        all_weights.extend(
+            mouth_weights
+                .iter()
+                .map(|(name, weight)| (name.as_str(), *weight)),
+        );
+    }
+    if !authority.eye_look {
+        all_weights.extend(
+            gaze_weights
+                .iter()
+                .map(|(name, weight)| (name.as_str(), *weight)),
+        );
+    }
+
+    let mut builder = ExpressionCommandBuilder::new();
+    builder.build(all_weights)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +397,28 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "blink");
         assert_eq!(result[0].weight, 0.5);
+    }
+
+    #[test]
+    fn detailed_face_commands_use_only_effective_channels() {
+        let coefficients = Arkit52Coefficients::try_from_array({
+            let mut values = [0.0; vtuber_core::ARKIT52_CHANNEL_COUNT];
+            values[vtuber_core::ArkitBlendshape::TongueOut.index()] = 0.75;
+            values[vtuber_core::ArkitBlendshape::JawOpen.index()] = 0.4;
+            values
+        })
+        .unwrap();
+        let capabilities =
+            PerfectSyncCapabilities::from_named_statuses([("TongueOut", true), ("JawOpen", false)]);
+        let commands = build_detailed_face_commands(&coefficients, &capabilities, |channel| {
+            Some(channel.canonical_name().to_owned())
+        });
+        assert_eq!(
+            commands,
+            [ExpressionCommand {
+                name: "TongueOut".to_owned(),
+                weight: 0.75,
+            }]
+        );
     }
 }
