@@ -33,7 +33,11 @@ SDK runtime remains a separately governed distribution component.
 
 `crates/vtuber-gnm/assets/head_sparse_68.txt` is copied from the Google GNM
 repository at revision
-`970092e4b25be85adb1278ba015598342d43ef64` and is distributed under the
-upstream Apache-2.0 license. The GNM model NPZ is not included in this source
-tree; its release manifest must record the exact upstream asset hash and
-redistribution terms before packaging.
+`f76519f4c0340e5333146c0a8f011c56879ae5e3`, matching the model and schema
+revision, and is distributed under the upstream Apache-2.0 license.
+`assets/models/gnm_head.npz` is the official GNM Head v3 archive from the same
+revision. It is 53,305,389 bytes with SHA-256
+`1DFF6A319C2FA28377D7669C30AA533CC0799B45E6049AF18E709B0CB8F122DB` and is
+redistributed under the upstream Apache-2.0 terms with this notice retained.
+The exact source URL, schema path, and redistribution record are maintained in
+`assets/models/manifest.toml`.
