@@ -15,6 +15,7 @@ mod fitting;
 mod landmarks;
 mod model;
 mod npz;
+mod pipeline;
 
 pub use ab::{GnmAbError, GnmAbEvaluator, GnmAbReport, GnmAbSample};
 pub use correspondence::{
@@ -46,3 +47,7 @@ pub use model::{
     GnmVersion,
 };
 pub use npz::{GNM_DATA_SCHEMA_KEYS, load_gnm_head_v3};
+pub use pipeline::{
+    GnmRetargetedFace, GnmRetargetingError, gnm_fitting_sample_from_mediapipe, retarget_mediapipe,
+    validate_runtime_assets,
+};
