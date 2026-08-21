@@ -17,6 +17,7 @@ fn repeated_sparse_evaluation_reuses_sparse_scratch_only() {
     model
         .evaluate_sparse(&identity, &expression, &joints, landmarks, &mut output)
         .unwrap();
+    let first_values = output.values().to_vec();
     let capacities = output.reusable_capacities();
     assert_eq!(output.vertex_scratch_len(), landmarks.unique_vertex_count());
     assert!(
@@ -30,6 +31,7 @@ fn repeated_sparse_evaluation_reuses_sparse_scratch_only() {
         model
             .evaluate_sparse(&identity, &expression, &joints, landmarks, &mut output)
             .unwrap();
+        assert_eq!(output.values(), first_values.as_slice());
         assert_eq!(output.reusable_capacities(), capacities);
         assert_eq!(output.vertex_scratch_len(), landmarks.unique_vertex_count());
     }

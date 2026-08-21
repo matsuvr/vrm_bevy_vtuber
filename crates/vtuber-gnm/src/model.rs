@@ -16,6 +16,9 @@ pub struct GnmVersion {
     pub minor: u16,
 }
 
+/// Exact GNM Head v3 version supported by the pinned official artifact.
+pub const GNM_HEAD_V3_VERSION: GnmVersion = GnmVersion { major: 3, minor: 0 };
+
 /// Supported GNM model variant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GnmVariant {
@@ -220,7 +223,7 @@ pub struct GnmModel {
 impl GnmModel {
     /// Validates a Head v3 model and takes ownership of its numeric arrays.
     pub fn from_data(data: GnmModelData) -> Result<Self, GnmModelError> {
-        if data.version.major != 3 {
+        if data.version != GNM_HEAD_V3_VERSION {
             return Err(GnmModelError::UnsupportedVersion(format!(
                 "{}.{}",
                 data.version.major, data.version.minor
@@ -860,6 +863,80 @@ mod tests {
             .evaluate_sparse(&identity, &expression, &joints, &landmarks, &mut output)
             .unwrap();
         assert_eq!(output.values.capacity(), capacity);
+    }
+
+    #[test]
+    fn same_input_evaluation_is_deterministic() {
+        let model = synthetic_model();
+        let landmarks = crate::SparseLandmarkSet::new(vec![
+            crate::SparseLandmark::new([0, 1, 2], [0.25, 0.25, 0.5]).unwrap(),
+        ])
+        .unwrap();
+        let identity = model.neutral_identity();
+        let expression = model.neutral_expression();
+        let joints = GnmJointState::neutral(model.joint_count());
+        let mut first = GnmSparseVertices::with_len(landmarks.len());
+        let mut second = GnmSparseVertices::with_len(landmarks.len());
+
+        model
+            .evaluate_sparse(&identity, &expression, &joints, &landmarks, &mut first)
+            .unwrap();
+        model
+            .evaluate_sparse(&identity, &expression, &joints, &landmarks, &mut second)
+            .unwrap();
+
+        assert_eq!(first.values(), second.values());
+    }
+
+    #[test]
+    fn state_non_finite_coefficients_are_typed_errors() {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(matches!(
+                GnmIdentityState::new(vec![value], 1),
+                Err(GnmModelError::NonFinite { field, .. }) if field == "identity"
+            ));
+            assert!(matches!(
+                GnmExpressionState::new(vec![value], 1),
+                Err(GnmModelError::NonFinite { field, .. }) if field == "expression"
+            ));
+            assert!(matches!(
+                GnmJointState::new(vec![[value, 0.0, 0.0]], [0.0; 3], 1),
+                Err(GnmModelError::NonFinite { field, .. }) if field == "joint_state"
+            ));
+            assert!(matches!(
+                GnmJointState::new(vec![[0.0; 3]], [value, 0.0, 0.0], 1),
+                Err(GnmModelError::NonFinite { field, .. }) if field == "joint_state"
+            ));
+        }
+    }
+
+    #[test]
+    fn exact_v3_0_is_supported_and_unknown_versions_are_rejected() {
+        let model = synthetic_model();
+        assert_eq!(model.version(), GNM_HEAD_V3_VERSION);
+
+        for version in [
+            GnmVersion { major: 3, minor: 1 },
+            GnmVersion { major: 4, minor: 0 },
+        ] {
+            let data = GnmModelData {
+                version,
+                variant: model.variant,
+                template_vertices: model.template_vertices.clone(),
+                template_joints: model.template_joints.clone(),
+                vertex_identity_basis: model.vertex_identity_basis.clone(),
+                joint_identity_basis: model.joint_identity_basis.clone(),
+                expression_basis: model.expression_basis.clone(),
+                joint_parent_indices: model.joint_parent_indices.clone(),
+                skinning_weights: model.skinning_weights.clone(),
+                pose_correctives_regressor: model.pose_correctives_regressor.clone(),
+            };
+            assert!(matches!(
+                GnmModel::from_data(data),
+                Err(GnmModelError::UnsupportedVersion(version_text))
+                    if version_text == format!("{}.{}", version.major, version.minor)
+            ));
+        }
     }
 
     #[test]

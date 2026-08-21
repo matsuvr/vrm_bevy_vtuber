@@ -289,7 +289,7 @@ fn normalize_pose_correctives(
 }
 
 fn parse_npy(bytes: &[u8]) -> Result<NpyArray, GnmModelError> {
-    if bytes.len() < 10 || bytes.get(0..6) != Some(b"\x93NUMPY") {
+    if bytes.len() < 8 || bytes.get(0..6) != Some(b"\x93NUMPY") {
         return Err(GnmModelError::Npy("missing NPY magic".to_owned()));
     }
     let major = bytes[6];
@@ -302,16 +302,24 @@ fn parse_npy(bytes: &[u8]) -> Result<NpyArray, GnmModelError> {
             )));
         }
     };
-    let header_start = 8;
+    let header_start = 8usize;
+    let header_length_end = header_start
+        .checked_add(header_length_size)
+        .ok_or_else(|| GnmModelError::Npy("NPY header length offset overflow".to_owned()))?;
+    if bytes.len() < header_length_end {
+        return Err(GnmModelError::Npy("truncated NPY header length".to_owned()));
+    }
     let header_length = match header_length_size {
         2 => u16::from_le_bytes([bytes[8], bytes[9]]) as usize,
         _ => u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize,
     };
-    let data_start = header_start + header_length_size + header_length;
+    let data_start = header_length_end
+        .checked_add(header_length)
+        .ok_or_else(|| GnmModelError::Npy("NPY data offset overflow".to_owned()))?;
     if data_start > bytes.len() {
         return Err(GnmModelError::Npy("truncated NPY header".to_owned()));
     }
-    let header = std::str::from_utf8(&bytes[header_start + header_length_size..data_start])
+    let header = std::str::from_utf8(&bytes[header_length_end..data_start])
         .map_err(|error| GnmModelError::Npy(error.to_string()))?;
     if header.contains("'fortran_order': True") || header.contains("\"fortran_order\": True") {
         return Err(GnmModelError::Npy(
@@ -437,14 +445,19 @@ impl NpyArray {
             NpyDType::I64 | NpyDType::U64 => 8,
             _ => return Err(GnmModelError::Npy(format!("`{field}` is not numeric"))),
         };
-        if self.data.len() != count * width {
+        let expected_bytes = count
+            .checked_mul(width)
+            .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload size overflow")))?;
+        if self.data.len() != expected_bytes {
             return Err(GnmModelError::Npy(format!(
                 "`{field}` payload length mismatch"
             )));
         }
         let mut values = Vec::with_capacity(count);
         for index in 0..count {
-            let offset = index * width;
+            let offset = index
+                .checked_mul(width)
+                .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload offset overflow")))?;
             let value = match self.dtype {
                 NpyDType::F32 => f32::from_le_bytes(read_chunk(&self.data, offset, field)?),
                 NpyDType::F64 => f64::from_le_bytes(read_chunk(&self.data, offset, field)?) as f32,
@@ -489,14 +502,19 @@ impl NpyArray {
                 )));
             }
         };
-        if self.data.len() != count * width {
+        let expected_bytes = count
+            .checked_mul(width)
+            .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload size overflow")))?;
+        if self.data.len() != expected_bytes {
             return Err(GnmModelError::Npy(format!(
                 "`{field}` payload length mismatch"
             )));
         }
         let mut values = Vec::with_capacity(count);
         for index in 0..count {
-            let offset = index * width;
+            let offset = index
+                .checked_mul(width)
+                .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload offset overflow")))?;
             let value = match self.dtype {
                 NpyDType::I8 => i8::from_le_bytes(read_chunk(&self.data, offset, field)?) as i32,
                 NpyDType::I16 => i16::from_le_bytes(read_chunk(&self.data, offset, field)?) as i32,
@@ -547,21 +565,34 @@ impl NpyArray {
         let count = self.item_count(field)?;
         let width = match self.dtype {
             NpyDType::Bytes(width) => width,
-            NpyDType::Unicode(width) => width * 4,
+            NpyDType::Unicode(width) => width
+                .checked_mul(4)
+                .ok_or_else(|| GnmModelError::Npy(format!("`{field}` string width overflow")))?,
             _ => {
                 return Err(GnmModelError::Npy(format!(
                     "`{field}` is not a string array"
                 )));
             }
         };
-        if self.data.len() != count * width {
+        let expected_bytes = count
+            .checked_mul(width)
+            .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload size overflow")))?;
+        if self.data.len() != expected_bytes {
             return Err(GnmModelError::Npy(format!(
                 "`{field}` payload length mismatch"
             )));
         }
         let mut values = Vec::with_capacity(count);
         for index in 0..count {
-            let bytes = &self.data[index * width..(index + 1) * width];
+            let start = index
+                .checked_mul(width)
+                .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload offset overflow")))?;
+            let end = start
+                .checked_add(width)
+                .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload range overflow")))?;
+            let bytes = self.data.get(start..end).ok_or_else(|| {
+                GnmModelError::Npy(format!("`{field}` payload ended unexpectedly"))
+            })?;
             let value = match self.dtype {
                 NpyDType::Bytes(_) => String::from_utf8(
                     bytes
@@ -599,7 +630,10 @@ fn read_chunk<const N: usize>(
     offset: usize,
     field: &str,
 ) -> Result<[u8; N], GnmModelError> {
-    data.get(offset..offset + N)
+    let end = offset
+        .checked_add(N)
+        .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload range overflow")))?;
+    data.get(offset..end)
         .and_then(|chunk| chunk.try_into().ok())
         .ok_or_else(|| GnmModelError::Npy(format!("`{field}` payload ended unexpectedly")))
 }
@@ -637,6 +671,30 @@ mod tests {
         assert!(
             matches!(dense(&array, "test"), Err(GnmModelError::NonFinite { field, .. }) if field == "test")
         );
+    }
+
+    #[test]
+    fn malformed_npy_headers_dtypes_and_payloads_are_typed_errors() {
+        for major in [2u8, 3u8] {
+            let bytes = [b'\x93', b'N', b'U', b'M', b'P', b'Y', major, 0];
+            assert!(matches!(
+                parse_npy(&bytes),
+                Err(GnmModelError::Npy(message)) if message.contains("header length")
+            ));
+        }
+
+        let wrong_dtype = npy(">f4", "(1,)", &0.0f32.to_le_bytes());
+        assert!(matches!(
+            parse_npy(&wrong_dtype),
+            Err(GnmModelError::Npy(message)) if message.contains("little-endian")
+        ));
+
+        let truncated_payload = npy("<f4", "(2,)", &0.0f32.to_le_bytes());
+        let array = parse_npy(&truncated_payload).unwrap();
+        assert!(matches!(
+            array.f32_values("truncated"),
+            Err(GnmModelError::Npy(message)) if message.contains("payload length")
+        ));
     }
 
     #[test]

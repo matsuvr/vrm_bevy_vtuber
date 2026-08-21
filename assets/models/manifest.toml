@@ -8,6 +8,9 @@ notes = [
     "MediaPipe Face Landmarker is the sole production face backend through the pinned native binding in ADR-009.",
     "The task bundle is consumed as a bundle; internal models are not extracted into an application pipeline.",
     "Google GNM Head v3 is an Issue #52 research asset and is loaded once through vtuber-gnm; it is not a MediaPipe runtime asset.",
+    "The evaluator supports exactly GNM version 3.0; unknown minor versions fail closed as UnsupportedVersion.",
+    "The loaded model retains validated dense arrays; each frame materializes only vertices referenced by the requested sparse landmark set.",
+    "Opt-in measurement: cargo run -p vtuber-gnm --example measure_sparse -- --iterations 1000; model load is excluded and evaluator scratch is reused.",
     "The legacy composite artifacts below are retained only for explicit research/evaluation commands.",
 ]
 
@@ -23,7 +26,7 @@ schema = "gnm/shape/gnm_data_schema.py at the same pinned revision"
 license = "Apache-2.0"
 license_url = "https://github.com/google/GNM/blob/f76519f4c0340e5333146c0a8f011c56879ae5e3/LICENSE"
 redistribution = "permitted under the upstream Apache-2.0 terms; retain the upstream license and this provenance record"
-notes = ["Validated by vtuber-gnm::load_gnm_head_v3; model is immutable after startup/selection load."]
+notes = ["Validated by vtuber-gnm::load_gnm_head_v3 at exact version 3.0; model arrays are immutable after startup/selection load, while per-frame evaluation materializes only the requested sparse vertex subset."]
 
 [[artifacts]]
 file = "crates/vtuber-gnm/assets/head_sparse_68.txt"

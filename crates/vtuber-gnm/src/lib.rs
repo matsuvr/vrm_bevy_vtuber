@@ -15,8 +15,8 @@ mod npz;
 pub use error::GnmModelError;
 pub use landmarks::{SparseLandmark, SparseLandmarkSet, head_sparse_68};
 pub use model::{
-    DenseArray, GNM_HEAD_V3_EXPRESSION_DIM, GNM_HEAD_V3_IDENTITY_DIM, GnmExpressionState,
-    GnmIdentityState, GnmJointState, GnmModel, GnmModelData, GnmSparseVertices, GnmVariant,
-    GnmVersion,
+    DenseArray, GNM_HEAD_V3_EXPRESSION_DIM, GNM_HEAD_V3_IDENTITY_DIM, GNM_HEAD_V3_VERSION,
+    GnmExpressionState, GnmIdentityState, GnmJointState, GnmModel, GnmModelData, GnmSparseVertices,
+    GnmVariant, GnmVersion,
 };
 pub use npz::{GNM_DATA_SCHEMA_KEYS, load_gnm_head_v3};

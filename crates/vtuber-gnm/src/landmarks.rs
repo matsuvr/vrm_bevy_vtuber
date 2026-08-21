@@ -176,6 +176,28 @@ mod tests {
     }
 
     #[test]
+    fn official_landmark_contract_order_and_values_have_stable_hash() {
+        let set = head_sparse_68();
+        let mut hash = 0xcbf29ce484222325u64;
+        for point in set.points() {
+            for index in point.indices {
+                for byte in (index as u64).to_le_bytes() {
+                    hash ^= u64::from(byte);
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+            }
+            for weight in point.weights {
+                for byte in weight.to_bits().to_le_bytes() {
+                    hash ^= u64::from(byte);
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+        assert_eq!(set.len(), 68);
+        assert_eq!(hash, 18_219_087_812_053_459_804);
+    }
+
+    #[test]
     fn invalid_weights_are_rejected() {
         assert!(SparseLandmark::new([0, 1, 2], [0.5, -0.1, 0.6]).is_err());
         assert!(SparseLandmark::new([0, 1, 2], [0.1, 0.1, 0.1]).is_err());

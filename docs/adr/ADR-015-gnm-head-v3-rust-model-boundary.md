@@ -15,7 +15,13 @@ The official sparse 68-point landmark table is embedded as source data. The
 model NPZ is checked in at `assets/models/gnm_head.npz` so the evaluator has a
 deterministic, repository-local artifact for numeric parity tests. The model is
 loaded once at startup or model selection and can then be shared immutably by
-callers through `&GnmModel` or `Arc<GnmModel>`.
+callers through `&GnmModel` or `Arc<GnmModel>`. The loaded representation retains
+the validated dense model arrays required by the evaluator; sparse memory and
+allocation claims apply to each evaluation frame, not to model loading.
+
+Only `GnmVersion { major: 3, minor: 0 }` is supported. Unknown major or minor
+versions, including `3.1`, return `GnmModelError::UnsupportedVersion` rather
+than being treated as probably compatible.
 
 ## Provenance and licensing
 
@@ -56,6 +62,22 @@ by `GnmSparseVertices`.
 
 The caller supplies the archive path to `load_gnm_head_v3`; missing or changed
 arrays fail before evaluation.
+
+Malformed NPY headers, header-length arithmetic, dtype payloads, item-count
+payload lengths, and byte ranges are checked before indexing. External archive
+corruption therefore returns `GnmModelError::Npy`, `Shape`, or another typed
+model error instead of panicking.
+
+The opt-in local measurement helper is
+`crates/vtuber-gnm/examples/measure_sparse.rs`:
+
+```text
+cargo run -p vtuber-gnm --example measure_sparse -- --iterations 1000
+```
+
+It loads the checked-in model before timing, warms up, reuses one model and one
+`GnmSparseVertices` output buffer, and prints total and per-iteration elapsed
+time without imposing a machine-dependent acceptance threshold.
 
 ## Dependency
 
