@@ -53,8 +53,8 @@ pub use breathing::{
 };
 pub use capabilities::{
     AvatarCapabilities, BlinkMode, BonePresence, DeclaredLookAtType, EmotionSet,
-    ExpressionCapabilities, GazeFallbackReason, LookDirectionSet, MouthMode, SelectedGazeBackend,
-    select_gaze_backend,
+    ExpressionCapabilities, GazeFallbackReason, LookDirectionSet, MouthMode,
+    PerfectSyncCapabilities, SelectedGazeBackend, select_gaze_backend,
 };
 pub use framing::camera_control::geometry as camera_control_geometry;
 pub use framing::camera_control::{

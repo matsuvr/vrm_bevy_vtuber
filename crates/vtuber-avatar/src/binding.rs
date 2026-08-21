@@ -25,7 +25,7 @@ use crate::breathing::{
 };
 use crate::capabilities::{
     AvatarCapabilities, BonePresence, DeclaredLookAtType, ExpressionCapabilities,
-    SelectedGazeBackend,
+    PerfectSyncCapabilities, SelectedGazeBackend,
 };
 use crate::gaze::fallback_look_at_properties;
 use crate::lifecycle::{
@@ -225,6 +225,7 @@ pub fn bind_humanoid_bones(
     )>,
     deadlines: Query<&BindingDeadline>,
     expression_maps: Query<Option<&ExpressionEntityMap>>,
+    expression_status: Query<Option<&ExpressionBindingStatus>>,
     spring_roots: Query<Entity, With<SpringRoot>>,
     parents: Query<&ChildOf>,
     arm_pose_overrides: Option<Res<ArmPoseOverrideStore>>,
@@ -345,6 +346,16 @@ pub fn bind_humanoid_bones(
 
             let expression_map = expression_maps.get(root_entity).ok().flatten();
             let expression_caps = ExpressionCapabilities::from_map(expression_map);
+            let perfect_sync = PerfectSyncCapabilities::from_map_with_effective(
+                expression_map,
+                |expression_entity| {
+                    expression_status
+                        .get(expression_entity)
+                        .is_ok_and(|status| {
+                            status.is_some_and(|status| status.resolved_morph_bind_count > 0)
+                        })
+                },
+            );
             let has_spring_bone = spring_roots
                 .iter()
                 .any(|entity| is_descendant(entity, root_entity, &parents));
@@ -364,11 +375,12 @@ pub fn bind_humanoid_bones(
                         LookAtType::Expression => DeclaredLookAtType::Expression,
                     }
                 });
-            let capabilities = AvatarCapabilities::from_model_capabilities(
+            let capabilities = AvatarCapabilities::from_model_capabilities_with_perfect_sync(
                 bones,
                 &expression_caps,
                 has_spring_bone,
                 declared_look_at,
+                perfect_sync,
             );
             if let Some(reason) = capabilities.gaze_fallback {
                 warn!(

@@ -8,6 +8,8 @@
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
 
+use crate::capabilities::PerfectSyncCapabilities;
+
 /// Plugin that installs compatibility-report systems.
 #[derive(Default)]
 pub struct VrmCompatibilityPlugin;
@@ -54,6 +56,8 @@ pub struct VrmCompatibilityReport {
     pub has_right_eye: bool,
     /// Expression preset names discovered on the model.
     pub expressions: Vec<String>,
+    /// ARKit52/Perfect Sync capability discovered on the model.
+    pub perfect_sync: PerfectSyncCapabilities,
     /// Whether a `LookAt` component is present on the root.
     pub has_look_at_component: bool,
     /// Whether a `BodyTracking` component is present on the root.
@@ -99,6 +103,7 @@ fn inspect_initialized_vrm(
     all_vrms: Query<Entity, With<Vrm>>,
     diagnostics: Query<&VrmCompatibilityDiagnostics>,
     spring_roots: Query<&SpringRoot>,
+    expression_status: Query<Option<&ExpressionBindingStatus>>,
 ) {
     if report.root.is_some_and(|root| !all_vrms.contains(root)) {
         *report = VrmCompatibilityReport::default();
@@ -129,6 +134,14 @@ fn inspect_initialized_vrm(
         report.has_look_at_component = look_at.is_some();
         report.has_body_tracking_component = body_tracking.is_some();
         report.spring_root_count = spring_roots.iter().count();
+        report.perfect_sync =
+            PerfectSyncCapabilities::from_map_with_effective(expression_map, |expression_entity| {
+                expression_status
+                    .get(expression_entity)
+                    .is_ok_and(|status| {
+                        status.is_some_and(|status| status.resolved_morph_bind_count > 0)
+                    })
+            });
         report.warnings = diagnostics
             .get(entity)
             .map(|diagnostics| diagnostics.warnings.clone())

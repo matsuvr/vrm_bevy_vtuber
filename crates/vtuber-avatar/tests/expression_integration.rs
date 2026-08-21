@@ -44,6 +44,7 @@ fn full_caps() -> AvatarCapabilities {
         },
         spring_bone: true,
         unknown_expressions: Vec::new(),
+        perfect_sync: Default::default(),
     }
 }
 

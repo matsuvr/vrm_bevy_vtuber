@@ -709,6 +709,7 @@ mod tests {
             look_directions: LookDirectionSet::default(),
             spring_bone: true,
             unknown_expressions: vec![],
+            perfect_sync: Default::default(),
         }
     }
 

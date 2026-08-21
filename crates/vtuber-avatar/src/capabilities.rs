@@ -13,6 +13,7 @@
 use bevy::prelude::*;
 use bevy_vrm1::prelude::ExpressionEntityMap;
 use std::collections::BTreeSet;
+use vtuber_core::{ARKIT52_CHANNEL_COUNT, ArkitBlendshape};
 
 const BLINK_LEFT: &str = "blinkLeft";
 const BLINK_RIGHT: &str = "blinkRight";
@@ -224,6 +225,132 @@ impl ExpressionCapabilities {
     }
 }
 
+/// Runtime capability snapshot for ARKit52/Perfect Sync-style custom
+/// expressions.
+///
+/// `present_channels` records names found in VRM metadata.  A channel is
+/// `effective` only when the runtime resolved at least one morph bind for its
+/// expression entity; a metadata-only empty preset therefore remains present
+/// but is not reported as usable.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PerfectSyncCapabilities {
+    /// ARKit52 channels whose known names are present in the model.
+    pub present_channels: [bool; ARKIT52_CHANNEL_COUNT],
+    /// ARKit52 channels with at least one resolved morph bind.
+    pub effective_channels: [bool; ARKIT52_CHANNEL_COUNT],
+    /// Unknown custom names retained for diagnostics.
+    pub unknown_names: Vec<String>,
+}
+
+impl Default for PerfectSyncCapabilities {
+    fn default() -> Self {
+        Self {
+            present_channels: [false; ARKIT52_CHANNEL_COUNT],
+            effective_channels: [false; ARKIT52_CHANNEL_COUNT],
+            unknown_names: Vec::new(),
+        }
+    }
+}
+
+impl PerfectSyncCapabilities {
+    /// Builds a synthetic capability snapshot where every known name is
+    /// treated as effective.  This is useful for pure contract tests.
+    #[must_use]
+    pub fn from_names<I, S>(names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::from_named_statuses(names.into_iter().map(|name| (name, true)))
+    }
+
+    /// Builds capabilities from known names and their resolved-bind status.
+    ///
+    /// Unknown extra expressions are retained but ignored by the 52-channel
+    /// bitsets. Duplicate aliases are deterministic: presence is retained and
+    /// effectiveness is true only when at least one occurrence is effective.
+    #[must_use]
+    pub fn from_named_statuses<I, S>(statuses: I) -> Self
+    where
+        I: IntoIterator<Item = (S, bool)>,
+        S: AsRef<str>,
+    {
+        let mut capabilities = Self::default();
+        for (name, effective) in statuses {
+            let name = name.as_ref();
+            let Some(channel) = ArkitBlendshape::from_name(name) else {
+                capabilities.unknown_names.push(name.to_owned());
+                continue;
+            };
+            let index = channel.index();
+            capabilities.present_channels[index] = true;
+            capabilities.effective_channels[index] |= effective;
+        }
+        capabilities.unknown_names.sort();
+        capabilities.unknown_names.dedup();
+        capabilities
+    }
+
+    /// Inspects a runtime expression map and resolves effectiveness from the
+    /// expression entity's binding status.
+    #[must_use]
+    pub fn from_map_with_effective<F>(
+        map: Option<&ExpressionEntityMap>,
+        mut is_effective: F,
+    ) -> Self
+    where
+        F: FnMut(Entity) -> bool,
+    {
+        let Some(map) = map else {
+            return Self::default();
+        };
+        Self::from_named_statuses(
+            map.0
+                .iter()
+                .map(|(name, &entity)| (name.0.as_str(), is_effective(entity))),
+        )
+    }
+
+    /// Returns whether a channel name is present.
+    #[must_use]
+    pub const fn is_present(&self, channel: ArkitBlendshape) -> bool {
+        self.present_channels[channel.index()]
+    }
+
+    /// Returns whether a channel has an effective morph binding.
+    #[must_use]
+    pub const fn is_effective(&self, channel: ArkitBlendshape) -> bool {
+        self.effective_channels[channel.index()]
+    }
+
+    /// Returns the number of effective ARKit52 channels.
+    #[must_use]
+    pub fn effective_count(&self) -> usize {
+        self.effective_channels
+            .iter()
+            .filter(|&&value| value)
+            .count()
+    }
+
+    /// Returns the number of present known ARKit52 names.
+    #[must_use]
+    pub fn present_count(&self) -> usize {
+        self.present_channels.iter().filter(|&&value| value).count()
+    }
+
+    /// Returns true only when all 52 canonical semantics are present.
+    #[must_use]
+    pub fn complete_names(&self) -> bool {
+        self.present_count() == ARKIT52_CHANNEL_COUNT
+    }
+
+    /// Returns true when the TongueOut channel has an effective binding.
+    #[must_use]
+    pub const fn tongue_out_available(&self) -> bool {
+        self.is_effective(ArkitBlendshape::TongueOut)
+    }
+}
+
 /// Public, engine-neutral snapshot of avatar capabilities for UI consumption.
 ///
 /// This struct contains no Bevy `Entity` IDs and no `bevy_vrm1` component
@@ -249,6 +376,8 @@ pub struct AvatarCapabilities {
     pub spring_bone: bool,
     /// Custom or unknown expression names not part of the MVP preset set.
     pub unknown_expressions: Vec<String>,
+    /// Perfect Sync/ARKit52 custom-expression capability snapshot.
+    pub perfect_sync: PerfectSyncCapabilities,
 }
 
 impl AvatarCapabilities {
@@ -264,21 +393,21 @@ impl AvatarCapabilities {
         expressions: &ExpressionCapabilities,
         has_spring_bone: bool,
     ) -> Self {
-        Self::from_model_capabilities(
+        Self::from_model_capabilities_with_perfect_sync(
             bones,
             expressions,
             has_spring_bone,
             DeclaredLookAtType::Missing,
+            PerfectSyncCapabilities::default(),
         )
     }
 
-    /// Builds capabilities while respecting the model-authored LookAt type.
-    #[must_use]
-    pub(crate) fn from_model_capabilities(
+    pub(crate) fn from_model_capabilities_with_perfect_sync(
         bones: BonePresence,
         expressions: &ExpressionCapabilities,
         has_spring_bone: bool,
         declared_look_at: DeclaredLookAtType,
+        perfect_sync: PerfectSyncCapabilities,
     ) -> Self {
         let (gaze_backend, gaze_fallback) =
             select_gaze_backend(declared_look_at, &expressions.look, &bones);
@@ -292,6 +421,7 @@ impl AvatarCapabilities {
             look_directions: expressions.look,
             spring_bone: has_spring_bone,
             unknown_expressions: expressions.unknown.clone(),
+            perfect_sync,
         }
     }
 
@@ -584,6 +714,50 @@ mod tests {
         let caps = ExpressionCapabilities::from_map(Some(&map));
         assert_eq!(caps.mouth, MouthMode::AaOnly);
         assert_eq!(caps.unknown, vec!["customExpression"]);
+    }
+
+    #[test]
+    fn perfect_sync_full_52_names_are_complete() {
+        let caps = PerfectSyncCapabilities::from_names(
+            ArkitBlendshape::ALL
+                .into_iter()
+                .map(ArkitBlendshape::canonical_name),
+        );
+        assert_eq!(caps.present_count(), 52);
+        assert_eq!(caps.effective_count(), 52);
+        assert!(caps.complete_names());
+        assert!(caps.tongue_out_available());
+        assert!(caps.unknown_names.is_empty());
+    }
+
+    #[test]
+    fn perfect_sync_aliases_and_unknown_names_are_deterministic() {
+        let caps = PerfectSyncCapabilities::from_named_statuses([
+            ("JawOpen", true),
+            ("jawOpen", false),
+            ("TongueOut", false),
+            ("customExtra", true),
+        ]);
+        assert_eq!(caps.present_count(), 2);
+        assert_eq!(caps.effective_count(), 1);
+        assert!(caps.is_effective(ArkitBlendshape::JawOpen));
+        assert!(!caps.tongue_out_available());
+        assert_eq!(caps.unknown_names, vec!["customExtra"]);
+    }
+
+    #[test]
+    fn perfect_sync_map_distinguishes_present_from_empty_binding() {
+        let map = make_map(&["JawOpen", "TongueOut"]);
+        let jaw = *map
+            .0
+            .get(&VrmExpression::from("JawOpen"))
+            .expect("jaw expression should be present");
+        let caps =
+            PerfectSyncCapabilities::from_map_with_effective(Some(&map), |entity| entity == jaw);
+        assert_eq!(caps.present_count(), 2);
+        assert_eq!(caps.effective_count(), 1);
+        assert!(caps.is_present(ArkitBlendshape::TongueOut));
+        assert!(!caps.is_effective(ArkitBlendshape::TongueOut));
     }
 
     #[test]
