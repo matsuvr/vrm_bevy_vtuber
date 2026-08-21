@@ -21,12 +21,16 @@ fuzzy matching、任意の大文字小文字変換、MediaPipe の `_neutral` �
 
 モデルの capability は `present` と `effective` を分離する。metadata に
 expression があっても resolved morph bind が 0 件なら送信対象にしない。
-部分的な Perfect Sync は正常な状態として扱い、effective channel だけを送る。
+部分的な Perfect Sync は正常な状態として扱い、coarse writer を置き換えられる
+だけの coverage がある domain だけを detailed authority とする。
 
-詳細係数が有効なフレームでは、詳細経路を blink、mouth、brow などの coarse
-expression より優先する。Perfect Sync の eye-look channel が有効なら既存の
-VRM LookAt expression を抑制する。eye-look が利用できないモデルでは、既存の
-gaze backend をそのフレームの明示的な fallback として維持する。
+`PerfectSyncFaceAuthority` は blink、jaw/lip の mouth/lower-face、eye-look を
+別々に判定する。blink は左右2 channel、eye-look は左右8方向すべて、
+mouth/lower-face は jaw/lip 27 channel すべてが effective のときだけ authority
+を持つ。TongueOut、brow、cheek、eyelid、nose のように既存 coarse writer が
+ない supplemental channel は、partial model でも有効 channel を適用する。
+authority のない coarse domain は既存 blink/mouth/VRM LookAt pathへ fallback
+し、同一 domain の detailed と coarse を同時に駆動しない。
 
 既存の expression coalescing tracker が detailed/coarse 経路の切り替え、明示的
 な 0 への遷移、avatar generation の変更を処理する。tracking lost/neutral と
