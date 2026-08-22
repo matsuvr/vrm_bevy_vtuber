@@ -1,17 +1,25 @@
-//! Rust-side GNM Head v3 model boundary for sparse face-state evaluation.
+//! Rust-side GNM Head v3 model boundary for sparse and selected-surface face-state evaluation.
 //!
-//! This crate deliberately stops at a validated, engine-neutral sparse point
-//! evaluator. It does not contain a renderer, a Bevy system, or a retargeting
-//! policy; those belong to later Issue #50 leaves.
+//! This crate deliberately stops at validated, engine-neutral GNM geometry and
+//! observation contracts. It does not contain a renderer, a Bevy system, or an
+//! avatar retargeting policy; those belong to later Issue #50 leaves.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod dense;
 mod error;
 mod landmarks;
 mod model;
 mod npz;
 
+pub use dense::{
+    AnatomicalSide, CorrespondenceProvenance, CorrespondenceReliability, DenseCorrespondenceSet,
+    DenseCoveragePolicy, DenseCoverageSummary, DenseMappingVersion, DenseObservationStatus,
+    FaceRegion, GnmDenseError, GnmDenseObservation, GnmDenseObservationPoint, GnmSurfacePointRef,
+    MEDIAPIPE_FACE_LANDMARK_COUNT, MediaPipeGnmDenseCorrespondence, SPARSE_BOOTSTRAP_POINT_COUNT,
+    canonicalize_mediapipe_xy,
+};
 pub use error::GnmModelError;
 pub use landmarks::{SparseLandmark, SparseLandmarkSet, head_sparse_68};
 pub use model::{
