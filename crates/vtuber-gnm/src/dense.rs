@@ -210,12 +210,14 @@ impl DenseCorrespondenceSet {
                 });
             }
             seen_source[row.mediapipe_index] = true;
-            landmarks.push(row.target.to_sparse_landmark(model.vertex_count()).map_err(
-                |error| GnmDenseError::InvalidMapping {
-                    row: Some(row_index),
-                    reason: error.to_string(),
-                },
-            )?);
+            landmarks.push(
+                row.target
+                    .to_sparse_landmark(model.vertex_count())
+                    .map_err(|error| GnmDenseError::InvalidMapping {
+                        row: Some(row_index),
+                        reason: error.to_string(),
+                    })?,
+            );
         }
 
         Ok(Self {
@@ -319,9 +321,7 @@ impl DenseCoveragePolicy {
                 "min_valid_points must be positive",
             ));
         }
-        if !degraded_below_fraction.is_finite()
-            || !(0.0..=1.0).contains(&degraded_below_fraction)
-        {
+        if !degraded_below_fraction.is_finite() || !(0.0..=1.0).contains(&degraded_below_fraction) {
             return Err(GnmDenseError::InvalidCoveragePolicy(
                 "degraded_below_fraction must be finite and within [0, 1]",
             ));
@@ -605,7 +605,8 @@ mod tests {
         GnmModel::from_data(GnmModelData {
             version: GNM_HEAD_V3_VERSION,
             variant: GnmVariant::Head,
-            template_vertices: DenseArray::new("vertices", vec![vertex_count, 3], vertices).unwrap(),
+            template_vertices: DenseArray::new("vertices", vec![vertex_count, 3], vertices)
+                .unwrap(),
             template_joints: DenseArray::new("joints", vec![1, 3], vec![0.0; 3]).unwrap(),
             vertex_identity_basis: DenseArray::new(
                 "identity",
@@ -672,8 +673,8 @@ mod tests {
             Err(GnmDenseError::InsufficientDensity { mapped: 68, .. })
         ));
 
-        let dense = DenseCorrespondenceSet::new(version(), (0..69).map(row).collect(), &model)
-            .unwrap();
+        let dense =
+            DenseCorrespondenceSet::new(version(), (0..69).map(row).collect(), &model).unwrap();
         assert!(dense.validate_as_primary_observation().is_ok());
     }
 
@@ -734,8 +735,8 @@ mod tests {
     #[test]
     fn invalid_mediapipe_points_are_excluded_with_typed_coverage() {
         let model = synthetic_model(4);
-        let mapping = DenseCorrespondenceSet::new(version(), (0..4).map(row).collect(), &model)
-            .unwrap();
+        let mapping =
+            DenseCorrespondenceSet::new(version(), (0..4).map(row).collect(), &model).unwrap();
         let mut landmarks = vec![[0.5, 0.5]; MEDIAPIPE_FACE_LANDMARK_COUNT];
         landmarks[1] = [f32::NAN, 0.5];
         landmarks[2] = [1.2, 0.5];
