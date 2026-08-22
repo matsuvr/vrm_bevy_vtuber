@@ -26,9 +26,9 @@ pub use error::GnmModelError;
 pub use identity_calibration::{
     FixedGnmIdentity, GnmIdentityCalibration, GnmIdentityCalibrationError, IdentityFitDiagnostics,
     NeutralCalibrationCandidate, NeutralCalibrationReadiness, NeutralCalibrationRejection,
-    NeutralCalibrationRejectionReason, NeutralCalibrationSelection, NeutralCalibrationSelectionConfig,
-    NeutralCalibrationWindowDiagnostics, NeutralNormalizationScales, NeutralPoseDiversity,
-    select_neutral_calibration_candidates,
+    NeutralCalibrationRejectionReason, NeutralCalibrationSelection,
+    NeutralCalibrationSelectionConfig, NeutralCalibrationWindowDiagnostics,
+    NeutralNormalizationScales, NeutralPoseDiversity, select_neutral_calibration_candidates,
 };
 pub use landmarks::{SparseLandmark, SparseLandmarkSet, head_sparse_68};
 pub use model::{

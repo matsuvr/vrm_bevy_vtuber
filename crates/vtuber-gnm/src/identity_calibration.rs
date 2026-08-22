@@ -148,14 +148,10 @@ impl NeutralCalibrationSelectionConfig {
             ),
         ] {
             if !value.is_finite() || value < 0.0 {
-                return Err(GnmIdentityCalibrationError::InvalidSelectionConfig(
-                    field,
-                ));
+                return Err(GnmIdentityCalibrationError::InvalidSelectionConfig(field));
             }
         }
-        if !max_expression_activity.is_finite()
-            || !(0.0..=1.0).contains(&max_expression_activity)
-        {
+        if !max_expression_activity.is_finite() || !(0.0..=1.0).contains(&max_expression_activity) {
             return Err(GnmIdentityCalibrationError::InvalidSelectionConfig(
                 "max_expression_activity must be within [0, 1]",
             ));
@@ -205,7 +201,9 @@ pub fn select_neutral_calibration_candidates(
     let pose_diversity = pose_diversity(candidates, &accepted_indices, config);
     let readiness = if accepted_indices.len() < config.min_accepted_samples {
         NeutralCalibrationReadiness::InsufficientSamples
-    } else if pose_diversity.yaw_span_radians.max(pose_diversity.pitch_span_radians)
+    } else if pose_diversity
+        .yaw_span_radians
+        .max(pose_diversity.pitch_span_radians)
         < config.min_pose_span_radians
         || pose_diversity.near_duplicate_fraction > config.max_near_duplicate_fraction
     {
@@ -231,9 +229,7 @@ fn sequence_rejection(
     previous: Option<(u64, u64)>,
     candidate: NeutralCalibrationCandidate,
 ) -> Option<NeutralCalibrationRejectionReason> {
-    let Some((previous_seq, previous_timestamp)) = previous else {
-        return None;
-    };
+    let (previous_seq, previous_timestamp) = previous?;
     if candidate.source_seq == previous_seq {
         Some(NeutralCalibrationRejectionReason::DuplicateSourceSequence)
     } else if candidate.source_seq < previous_seq {
@@ -485,10 +481,7 @@ impl GnmIdentityCalibration {
             });
         }
         for (field, value) in [
-            (
-                "pose yaw span",
-                diagnostics.pose_diversity.yaw_span_radians,
-            ),
+            ("pose yaw span", diagnostics.pose_diversity.yaw_span_radians),
             (
                 "pose pitch span",
                 diagnostics.pose_diversity.pitch_span_radians,
@@ -619,7 +612,10 @@ impl std::fmt::Display for GnmIdentityCalibrationError {
                 runtime_model.minor
             ),
             Self::InvalidOutput { field, reason } => {
-                write!(formatter, "invalid GNM identity calibration {field}: {reason}")
+                write!(
+                    formatter,
+                    "invalid GNM identity calibration {field}: {reason}"
+                )
             }
         }
     }
@@ -715,7 +711,9 @@ mod tests {
         let good2 = candidate(5, 1_050, 0.05, 0.0);
         let good3 = candidate(6, 1_060, 0.15, 0.05);
         let selection = select_neutral_calibration_candidates(
-            &[good1, duplicate, residual, expressive, degraded, good2, good3],
+            &[
+                good1, duplicate, residual, expressive, degraded, good2, good3,
+            ],
             selection_config(),
         );
         assert_eq!(selection.accepted_indices, vec![0, 5, 6]);
