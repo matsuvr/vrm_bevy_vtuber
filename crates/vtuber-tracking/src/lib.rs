@@ -5,6 +5,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Pure motion/confidence-adaptive temporal-weight policy.
+pub mod adaptive_temporal;
 /// Optional MediaPipe semantic observations used only as an auxiliary fitting term.
 pub mod auxiliary_expression;
 /// Calibration: neutral reference collection and session state.
@@ -28,6 +30,11 @@ pub mod state_machine;
 /// Timestamp-aware pure metrics for temporal tracking quality.
 pub mod temporal_metrics;
 
+pub use adaptive_temporal::{
+    AdaptiveTemporalConfig, AdaptiveTemporalError, AdaptiveTemporalInput, AdaptiveTemporalRegime,
+    AdaptiveTemporalState, TemporalGroupWeights, TemporalObservationHealth,
+    advance_adaptive_temporal_policy,
+};
 pub use auxiliary_expression::{
     AuxChannelReliability, AuxiliaryChannelConfig, AuxiliaryExpressionChannel,
     AuxiliaryExpressionError, AuxiliaryExpressionGroup, AuxiliaryExpressionObservation,
