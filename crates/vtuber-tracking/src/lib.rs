@@ -23,6 +23,8 @@ pub mod placeholder;
 pub mod pose;
 /// Explicit tracking state machine and transition table.
 pub mod state_machine;
+/// Timestamp-aware pure metrics for temporal tracking quality.
+pub mod temporal_metrics;
 
 pub use calibration::{
     AUTO_NEUTRAL_MIN_SAMPLES, AUTO_NEUTRAL_WINDOW, AutoNeutralCollector, AutoNeutralError,
@@ -66,4 +68,9 @@ pub use pose::{LandmarkSet, PoseAlignment, PoseError, WeightedPoint, solve_relat
 pub use state_machine::{
     StateMachineConfigError, StateMachineParams, StateTransitionResult, TrackingAction,
     TrackingStateMachine, TransitionInput,
+};
+pub use temporal_metrics::{
+    PulseResponseMetrics, PulseResponseSpec, StepResponseMetrics, StepResponseSpec,
+    TemporalMetricError, TemporalNoiseMetrics, TemporalSample, TemporalTrace,
+    pulse_response_metrics, step_response_metrics, temporal_noise_metrics,
 };
