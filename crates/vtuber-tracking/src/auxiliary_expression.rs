@@ -299,7 +299,9 @@ impl AuxiliaryExpressionObservation {
             let raw_source_score = scores.get(channel_config.semantic.mediapipe_source());
             let observed_value = channel_config
                 .neutral_calibration
-                .map_or(raw_source_score, |neutral| neutral.normalize(raw_source_score));
+                .map_or(raw_source_score, |neutral| {
+                    neutral.normalize(raw_source_score)
+                });
             if !observed_value.is_finite() {
                 return Err(AuxiliaryExpressionError::NonFiniteObservedValue {
                     semantic: channel_config.semantic,
@@ -536,7 +538,9 @@ pub fn evaluate_auxiliary_expression_loss(
     })
 }
 
-fn validate_channel_config(config: &[AuxiliaryChannelConfig]) -> Result<(), AuxiliaryExpressionError> {
+fn validate_channel_config(
+    config: &[AuxiliaryChannelConfig],
+) -> Result<(), AuxiliaryExpressionError> {
     let mut seen = [false; AuxiliaryExpressionSemantic::ALL.len()];
     for channel in config {
         let index = AuxiliaryExpressionSemantic::ALL
@@ -544,7 +548,9 @@ fn validate_channel_config(config: &[AuxiliaryChannelConfig]) -> Result<(), Auxi
             .position(|candidate| *candidate == channel.semantic)
             .expect("ALL contains every semantic variant");
         if seen[index] {
-            return Err(AuxiliaryExpressionError::DuplicateSemantic(channel.semantic));
+            return Err(AuxiliaryExpressionError::DuplicateSemantic(
+                channel.semantic,
+            ));
         }
         seen[index] = true;
         AuxiliaryChannelConfig::new(
@@ -557,7 +563,9 @@ fn validate_channel_config(config: &[AuxiliaryChannelConfig]) -> Result<(), Auxi
     Ok(())
 }
 
-fn validate_predictions(predictions: &[PredictedAuxiliaryFeature]) -> Result<(), AuxiliaryExpressionError> {
+fn validate_predictions(
+    predictions: &[PredictedAuxiliaryFeature],
+) -> Result<(), AuxiliaryExpressionError> {
     for (index, prediction) in predictions.iter().enumerate() {
         if !prediction.value.is_finite() {
             return Err(AuxiliaryExpressionError::NonFinitePrediction {
@@ -569,7 +577,9 @@ fn validate_predictions(predictions: &[PredictedAuxiliaryFeature]) -> Result<(),
             .iter()
             .any(|previous| previous.semantic == prediction.semantic)
         {
-            return Err(AuxiliaryExpressionError::DuplicatePrediction(prediction.semantic));
+            return Err(AuxiliaryExpressionError::DuplicatePrediction(
+                prediction.semantic,
+            ));
         }
     }
     Ok(())
@@ -640,12 +650,17 @@ pub enum AuxiliaryExpressionError {
 impl std::fmt::Display for AuxiliaryExpressionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidConfig(reason) => write!(formatter, "invalid auxiliary expression config: {reason}"),
+            Self::InvalidConfig(reason) => {
+                write!(formatter, "invalid auxiliary expression config: {reason}")
+            }
             Self::DuplicateSemantic(semantic) => {
                 write!(formatter, "duplicate auxiliary semantic {semantic:?}")
             }
             Self::NonFiniteObservedValue { semantic } => {
-                write!(formatter, "non-finite auxiliary observed value for {semantic:?}")
+                write!(
+                    formatter,
+                    "non-finite auxiliary observed value for {semantic:?}"
+                )
             }
             Self::SourceSequenceMismatch { dense, auxiliary } => write!(
                 formatter,
@@ -702,9 +717,11 @@ mod tests {
 
     #[test]
     fn neutral_category_and_tongue_cannot_enter_the_auxiliary_semantic_set() {
-        assert!(AuxiliaryExpressionSemantic::ALL
-            .iter()
-            .all(|semantic| semantic.mediapipe_source() != MediaPipeBlendshape::Neutral));
+        assert!(
+            AuxiliaryExpressionSemantic::ALL
+                .iter()
+                .all(|semantic| semantic.mediapipe_source() != MediaPipeBlendshape::Neutral)
+        );
         assert_eq!(AuxiliaryExpressionSemantic::ALL.len(), 21);
     }
 
@@ -883,12 +900,7 @@ mod tests {
         let scores = media_pipe_set(&[]);
         let duplicate = enabled(AuxiliaryExpressionSemantic::JawOpen, 1.0);
         assert!(matches!(
-            AuxiliaryExpressionObservation::from_mediapipe(
-                1,
-                10,
-                &scores,
-                &[duplicate, duplicate],
-            ),
+            AuxiliaryExpressionObservation::from_mediapipe(1, 10, &scores, &[duplicate, duplicate],),
             Err(AuxiliaryExpressionError::DuplicateSemantic(
                 AuxiliaryExpressionSemantic::JawOpen
             ))
