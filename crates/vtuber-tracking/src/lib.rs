@@ -5,6 +5,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Source-aligned A/B backend contract and fallback arbitration.
+pub mod ab_backend;
 /// Pure motion/confidence-adaptive temporal-weight policy.
 pub mod adaptive_temporal;
 /// Optional MediaPipe semantic observations used only as an auxiliary fitting term.
@@ -30,6 +32,13 @@ pub mod state_machine;
 /// Timestamp-aware pure metrics for temporal tracking quality.
 pub mod temporal_metrics;
 
+pub use ab_backend::{
+    AbBackendError, AlignedBackendOutputs, AlignedLatencyComparison, BackendLatencyMetrics,
+    BackendOutputTiming, BackendSelectionConfig, BackendSelectionDecision, BackendSelectionState,
+    FaceTrackingBackend, FaceTrackingMode, GnmFallbackReason, GnmRuntimeHealth, GnmTransientIssue,
+    GnmUnavailableReason, SourceFrameStamp, StampedBackendOutput, advance_backend_selection,
+    backend_latency_metrics,
+};
 pub use adaptive_temporal::{
     AdaptiveTemporalConfig, AdaptiveTemporalError, AdaptiveTemporalInput, AdaptiveTemporalRegime,
     AdaptiveTemporalState, TemporalGroupWeights, TemporalObservationHealth,
