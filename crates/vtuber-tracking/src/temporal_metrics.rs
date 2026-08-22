@@ -338,9 +338,9 @@ pub fn pulse_response_metrics(
         .max_by(|left, right| left.1.total_cmp(&right.1))
         .ok_or(TemporalMetricError::EmptyTrace)?;
 
-    let peak_timing_error_ms = spec.expected_peak_micros.map(|expected| {
-        signed_duration_ms(expected, observed_peak_micros)
-    });
+    let peak_timing_error_ms = spec
+        .expected_peak_micros
+        .map(|expected| signed_duration_ms(expected, observed_peak_micros));
 
     Ok(PulseResponseMetrics {
         peak_response_ratio,
@@ -358,8 +358,8 @@ fn progress_crossing_micros(
 ) -> Result<Option<u64>, TemporalMetricError> {
     let amplitude = spec.target - spec.baseline;
     let threshold = spec.baseline + amplitude * fraction;
-    let start_value = value_at(trace, spec.command_micros)
-        .ok_or(TemporalMetricError::CommandOutsideTrace {
+    let start_value =
+        value_at(trace, spec.command_micros).ok_or(TemporalMetricError::CommandOutsideTrace {
             command: spec.command_micros,
             start: trace.start_micros(),
             end: trace.end_micros(),
@@ -380,9 +380,7 @@ fn progress_crossing_micros(
     {
         if reached(current.value, threshold, amplitude) {
             return Ok(Some(interpolate_crossing_micros(
-                previous,
-                current,
-                threshold,
+                previous, current, threshold,
             )));
         }
         previous = current;
@@ -398,11 +396,7 @@ fn reached(value: f64, threshold: f64, amplitude: f64) -> bool {
     }
 }
 
-fn interpolate_crossing_micros(
-    left: TemporalSample,
-    right: TemporalSample,
-    threshold: f64,
-) -> u64 {
+fn interpolate_crossing_micros(left: TemporalSample, right: TemporalSample, threshold: f64) -> u64 {
     let value_delta = right.value - left.value;
     if value_delta.abs() <= f64::EPSILON {
         return right.timestamp_micros;
@@ -565,10 +559,7 @@ mod tests {
         ]));
         assert_close(metrics.stationary_rms, 0.0);
         assert_close(metrics.first_difference_rms_per_second.unwrap(), 0.0);
-        assert_close(
-            metrics.second_difference_rms_per_second2.unwrap(),
-            0.0,
-        );
+        assert_close(metrics.second_difference_rms_per_second2.unwrap(), 0.0);
     }
 
     #[test]
@@ -580,10 +571,7 @@ mod tests {
             (1_000_000, 1.0),
         ]));
         assert_close(metrics.first_difference_rms_per_second.unwrap(), 1.0);
-        assert_close(
-            metrics.second_difference_rms_per_second2.unwrap(),
-            0.0,
-        );
+        assert_close(metrics.second_difference_rms_per_second2.unwrap(), 0.0);
     }
 
     #[test]
