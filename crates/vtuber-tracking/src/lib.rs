@@ -5,6 +5,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Optional MediaPipe semantic observations used only as an auxiliary fitting term.
+pub mod auxiliary_expression;
 /// Calibration: neutral reference collection and session state.
 pub mod calibration;
 /// Confidence synthesis and hysteresis gating.
@@ -26,6 +28,14 @@ pub mod state_machine;
 /// Timestamp-aware pure metrics for temporal tracking quality.
 pub mod temporal_metrics;
 
+pub use auxiliary_expression::{
+    AuxChannelReliability, AuxiliaryChannelConfig, AuxiliaryExpressionChannel,
+    AuxiliaryExpressionError, AuxiliaryExpressionGroup, AuxiliaryExpressionObservation,
+    AuxiliaryExpressionSemantic, AuxiliaryExpressionStatus, AuxiliaryGroupResiduals,
+    AuxiliaryLossConfig, AuxiliaryLossDiagnostics, AuxiliaryNeutralCalibration,
+    PredictedAuxiliaryFeature, evaluate_auxiliary_expression_loss,
+    validate_auxiliary_source_alignment,
+};
 pub use calibration::{
     AUTO_NEUTRAL_MIN_SAMPLES, AUTO_NEUTRAL_WINDOW, AutoNeutralCollector, AutoNeutralError,
     AutoNeutralState, AutoNeutralUpdate, CalibrationCollector, CalibrationInput,
