@@ -1,12 +1,12 @@
 //! Engine-neutral dense face observation and GNM surface correspondence core.
 //!
-//! This module deliberately owns no camera, MediaPipe, Bevy, or renderer state.
-//! It turns normalized 2D observations into a validated correspondence contract
-//! and reuses the existing selected-surface GNM evaluator.
+//! This module deliberately owns no camera, MediaPipe runtime, Bevy, or renderer
+//! state. It turns normalized 2D observations into a validated correspondence
+//! contract and reuses the existing selected-surface GNM evaluator.
 
 use crate::{
-    GNM_HEAD_V3_VERSION, GnmExpressionState, GnmIdentityState, GnmJointState, GnmModel,
-    GnmModelError, GnmSparseVertices, GnmVersion, SparseLandmark, SparseLandmarkSet,
+    GnmExpressionState, GnmIdentityState, GnmJointState, GnmModel, GnmModelError,
+    GnmSparseVertices, GnmVersion, SparseLandmark, SparseLandmarkSet,
 };
 
 /// Number of normalized landmarks emitted by MediaPipe Face Landmarker.
@@ -161,6 +161,12 @@ impl DenseCorrespondenceSet {
             return Err(GnmDenseError::ModelVersionMismatch {
                 mapping: version.model_version,
                 model: model.version(),
+            });
+        }
+        if version.schema_revision == 0 {
+            return Err(GnmDenseError::InvalidMapping {
+                row: None,
+                reason: "mapping schema revision must be non-zero".to_owned(),
             });
         }
         if rows.is_empty() {
@@ -488,7 +494,10 @@ impl GnmDenseObservation {
 /// rightward and y grows downward. Preview mirroring is presentation-only and is
 /// therefore absent from this function and from correspondence lookup.
 pub fn canonicalize_mediapipe_xy(point: [f32; 2]) -> Option<[f32; 2]> {
-    if point.iter().all(|value| value.is_finite() && (0.0..=1.0).contains(value)) {
+    if point
+        .iter()
+        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+    {
         Some(point)
     } else {
         None
@@ -564,7 +573,7 @@ impl std::fmt::Display for GnmDenseError {
             Self::InvalidCoveragePolicy(reason) => {
                 write!(formatter, "invalid dense coverage policy: {reason}")
             }
-            Self::Model(error) => error.fmt(formatter),
+            Self::Model(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -581,11 +590,14 @@ impl std::error::Error for GnmDenseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DenseArray, GnmModelData, GnmVariant};
+    use crate::{
+        DenseArray, GNM_HEAD_V3_EXPRESSION_DIM, GNM_HEAD_V3_IDENTITY_DIM, GNM_HEAD_V3_VERSION,
+        GnmModelData, GnmVariant,
+    };
 
     fn synthetic_model(vertex_count: usize) -> GnmModel {
-        let identity = crate::GNM_HEAD_V3_IDENTITY_DIM;
-        let expression = crate::GNM_HEAD_V3_EXPRESSION_DIM;
+        let identity = GNM_HEAD_V3_IDENTITY_DIM;
+        let expression = GNM_HEAD_V3_EXPRESSION_DIM;
         let mut vertices = Vec::with_capacity(vertex_count * 3);
         for index in 0..vertex_count {
             vertices.extend_from_slice(&[index as f32, (index % 3) as f32, 0.0]);
@@ -713,7 +725,10 @@ mod tests {
                 &mut output,
             )
             .unwrap();
-        assert_eq!(output.values(), &[[1.25, 0.75, 0.0]]);
+        let value = output.values()[0];
+        assert!((value[0] - 1.25).abs() < 1.0e-6);
+        assert!((value[1] - 1.25).abs() < 1.0e-6);
+        assert!(value[2].abs() < 1.0e-6);
     }
 
     #[test]
@@ -736,7 +751,12 @@ mod tests {
         assert_eq!(degraded.source_seq(), 42);
         assert_eq!(degraded.points().len(), 2);
         assert_eq!(degraded.coverage().status, DenseObservationStatus::Degraded);
-        assert!(degraded.points().iter().all(|point| point.source_confidence.is_none()));
+        assert!(
+            degraded
+                .points()
+                .iter()
+                .all(|point| point.source_confidence.is_none())
+        );
 
         let insufficient = GnmDenseObservation::from_mediapipe_xy(
             43,
