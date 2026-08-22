@@ -1,14 +1,16 @@
 //! Rust-side GNM Head v3 model boundary for sparse and selected-surface face-state evaluation.
 //!
-//! This crate deliberately stops at validated, engine-neutral GNM geometry and
-//! observation contracts. It does not contain a renderer, a Bevy system, or an
-//! avatar retargeting policy; those belong to later Issue #50 leaves.
+//! This crate deliberately stops at validated, engine-neutral GNM geometry,
+//! observation, and calibration contracts. It does not contain a renderer, a
+//! Bevy system, or an avatar retargeting policy; those belong to later Issue #50
+//! leaves.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 mod dense;
 mod error;
+mod identity_calibration;
 mod landmarks;
 mod model;
 mod npz;
@@ -21,6 +23,13 @@ pub use dense::{
     canonicalize_mediapipe_xy,
 };
 pub use error::GnmModelError;
+pub use identity_calibration::{
+    FixedGnmIdentity, GnmIdentityCalibration, GnmIdentityCalibrationError, IdentityFitDiagnostics,
+    NeutralCalibrationCandidate, NeutralCalibrationReadiness, NeutralCalibrationRejection,
+    NeutralCalibrationRejectionReason, NeutralCalibrationSelection,
+    NeutralCalibrationSelectionConfig, NeutralCalibrationWindowDiagnostics,
+    NeutralNormalizationScales, NeutralPoseDiversity, select_neutral_calibration_candidates,
+};
 pub use landmarks::{SparseLandmark, SparseLandmarkSet, head_sparse_68};
 pub use model::{
     DenseArray, GNM_HEAD_V3_EXPRESSION_DIM, GNM_HEAD_V3_IDENTITY_DIM, GNM_HEAD_V3_VERSION,
