@@ -1,9 +1,9 @@
 //! Rust-side GNM Head v3 model boundary for sparse and selected-surface face-state evaluation.
 //!
 //! This crate deliberately stops at validated, engine-neutral GNM geometry,
-//! observation, calibration, and dynamic-state lifecycle contracts. It does not
-//! contain a renderer, a Bevy system, or an avatar retargeting policy; those
-//! belong to later Issue #50 leaves.
+//! observation, calibration, dynamic-state lifecycle, and temporal-energy
+//! contracts. It does not contain a renderer, a Bevy system, or an avatar
+//! retargeting policy; those belong to later Issue #50 leaves.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -15,6 +15,7 @@ mod landmarks;
 mod lifecycle;
 mod model;
 mod npz;
+mod temporal_regularization;
 
 pub use dense::{
     AnatomicalSide, CorrespondenceProvenance, CorrespondenceReliability, DenseCorrespondenceSet,
@@ -43,3 +44,9 @@ pub use model::{
     GnmVariant, GnmVersion,
 };
 pub use npz::{GNM_DATA_SCHEMA_KEYS, load_gnm_head_v3};
+pub use temporal_regularization::{
+    GnmTemporalNormalization, GnmTemporalStateView, TemporalGroupPenaltyMetrics,
+    TemporalGroupPenaltyWeights, TemporalHistoryTiming, TemporalRegularizationConfig,
+    TemporalRegularizationError, TemporalRegularizationInput, TemporalRegularizationMetrics,
+    evaluate_temporal_regularization,
+};
